@@ -1,5 +1,5 @@
 import { NoiseEngine } from '../core/NoiseEngine';
-import { WorldData, BiomeType } from './WorldData';
+import { WorldData } from './WorldData';
 
 export type Preset = 'Heavy Landmass' | 'Realistic Continents' | 'Mediterranean Archipelago' | 'Pangea';
 
@@ -20,6 +20,13 @@ export class MapGenerator {
         this.world = new WorldData(width, height);
     }
 
+    public getWidth() { return this.width; }
+    public getHeight() { return this.height; }
+    public setSize(width: number, height: number) {
+        this.width = width;
+        this.height = height;
+    }
+
     public generate() {
         this.noise = new NoiseEngine(this.currentSeed);
         this.world = new WorldData(this.width, this.height);
@@ -38,18 +45,21 @@ export class MapGenerator {
         let numPlates = 40;
         let baseScale = 0.005;
 
+        const invResScale = 800 / this.width;
+        const resScale = this.width / 800;
+
         if (this.currentPreset === 'Heavy Landmass') {
             numPlates = 30;
-            baseScale = 0.0035;
+            baseScale = 0.0035 * invResScale;
         } else if (this.currentPreset === 'Realistic Continents') {
             numPlates = 40;
-            baseScale = 0.005;
+            baseScale = 0.005 * invResScale;
         } else if (this.currentPreset === 'Mediterranean Archipelago') {
             numPlates = 50;
-            baseScale = 0.0075;
+            baseScale = 0.0075 * invResScale;
         } else { // Pangea
             numPlates = 25;
-            baseScale = 0.0025;
+            baseScale = 0.0025 * invResScale;
         }
 
         // 1. Generate Base Elevation using purely fBM (for natural organic coastlines)
@@ -109,8 +119,10 @@ export class MapGenerator {
                 let minDist = Infinity;
 
                 // Warp space strongly for fractal faults
-                const distortX = this.noise.fbmCylinder(x, y, this.width, 5, 0.5, 2.0, 0.02) * 50;
-                const distortY = this.noise.fbmCylinder(x + 5000, y + 5000, this.width, 5, 0.5, 2.0, 0.02) * 50;
+                const distortScale = 0.02 * invResScale;
+                const distortStrength = 50 * resScale;
+                const distortX = this.noise.fbmCylinder(x, y, this.width, 5, 0.5, 2.0, distortScale) * distortStrength;
+                const distortY = this.noise.fbmCylinder(x + 5000, y + 5000, this.width, 5, 0.5, 2.0, distortScale) * distortStrength;
 
                 for (let i = 0; i < numPlates; i++) {
                     const p = plates[i];
@@ -141,7 +153,7 @@ export class MapGenerator {
                 let minBoundDist = 999;
                 let neighborPlate: Plate | null = null;
 
-                const searchRadius = 4;
+                const searchRadius = Math.min(8, Math.max(4, Math.round(4 * resScale)));
                 for (let dx = -searchRadius; dx <= searchRadius; dx++) {
                     for (let dy = -searchRadius; dy <= searchRadius; dy++) {
                         const ny = y + dy;
@@ -193,8 +205,9 @@ export class MapGenerator {
     }
 
     private generateMoisture() {
+        const invResScale = 800 / this.width;
         // Reduced frequency to ensure giant sweeping forests/deserts like real geography
-        const scale = 0.005;
+        const scale = 0.005 * invResScale;
         for (let x = 0; x < this.width; x++) {
             for (let y = 0; y < this.height; y++) {
                 // Different random offset for moisture
@@ -244,6 +257,8 @@ export class MapGenerator {
         const numRivers = Math.floor((this.width * this.height) / 5000);
         this.world.rivers = []; // Clear rivers
 
+        const maxRiverLen = Math.floor(100 * (this.width / 800));
+
         for (let r = 0; r < numRivers; r++) {
             let x = Math.floor(this.noise.random() * this.width);
             let y = Math.floor(this.noise.random() * this.height);
@@ -255,7 +270,7 @@ export class MapGenerator {
             let len = 0;
             let currentRiver: { x: number, y: number }[] = [];
 
-            while (len < 100) {
+            while (len < maxRiverLen) {
                 cell.hasRiver = true;
                 currentRiver.push({ x, y });
 

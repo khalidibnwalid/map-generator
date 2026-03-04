@@ -1,15 +1,21 @@
+@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap');
+
 :root {
-  font-family: 'Inter', system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-family: 'Share Tech Mono', monospace;
   line-height: 1.5;
   font-weight: 400;
 
   color-scheme: light dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #242424;
+  color: #a0d8e4;
+  background-color: #050a0f;
 
-  --panel-bg: #1a1a1a;
-  --accent: #646cff;
-  --accent-hover: #535bf2;
+  --panel-bg: rgba(5, 12, 18, 0.75);
+  --border-neon: rgba(30, 200, 150, 0.4);
+  --border-neon-bright: rgba(30, 230, 160, 0.9);
+  --accent-gold: rgba(220, 180, 50, 0.8);
+  --accent-bright: rgba(0, 255, 170, 1);
+  --text-dim: #5a8e9e;
+  --text-active: #cffff3;
 }
 
 body {
@@ -18,7 +24,7 @@ body {
   min-width: 320px;
   min-height: 100vh;
   overflow: hidden;
-  background-color: #111;
+  background-color: #03060a;
 }
 
 #app {
@@ -30,51 +36,178 @@ body {
 #mapCanvas {
   flex-grow: 1;
   cursor: grab;
-  /* Make sure canvas stays behind panel and covers the area */
   position: absolute;
   top: 0;
   left: 0;
   width: 100%;
   height: 100%;
   z-index: 0;
+  filter: saturate(0.85) contrast(1.1) brightness(0.9);
+  /* Subtly shift map colors to fit theme */
 }
 
 #mapCanvas:active {
   cursor: grabbing;
 }
 
-#ui-panel {
+/* === Panel Base === */
+.tech-panel {
   position: absolute;
-  top: 20px;
-  left: 20px;
-  width: 300px;
-  background-color: rgba(26, 26, 26, 0.9);
-  backdrop-filter: blur(10px);
-  padding: 20px;
-  border-radius: 12px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  top: 30px;
+  left: 30px;
+  width: 340px;
+  background-color: var(--panel-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  padding: 25px;
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5), inset 0 0 20px rgba(0, 255, 170, 0.05);
+  border: 1px solid var(--border-neon);
   z-index: 10;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 0;
+  /* Changed from 25px, let panel-content handle gaps */
   pointer-events: auto;
+  clip-path: polygon(0 4px, 4px 0,
+      100% 0, 100% calc(100% - 15px),
+      calc(100% - 15px) 100%, 0 100%);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.tech-panel.collapsed {
+  background-color: rgba(5, 12, 18, 0.9);
+  padding-bottom: 25px;
+  /* Keep bottom padding even when collapsed for the header to sit nicely */
+}
+
+.panel-content {
+  display: flex;
+  flex-direction: column;
+  gap: 25px;
+  margin-top: 25px;
+  max-height: 500px;
+  opacity: 1;
+  overflow: hidden;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.tech-panel.collapsed .panel-content {
+  max-height: 0;
+  margin-top: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Decorative Sci-Fi Corners */
+.tech-corner {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border: 1px solid var(--accent-bright);
+}
+
+.top-left {
+  top: 3px;
+  left: 3px;
+  border-right: none;
+  border-bottom: none;
+}
+
+.top-right {
+  top: 3px;
+  right: 3px;
+  border-left: none;
+  border-bottom: none;
+}
+
+.bottom-left {
+  bottom: 3px;
+  left: 3px;
+  border-right: none;
+  border-top: none;
+}
+
+.bottom-right {
+  bottom: 3px;
+  right: 3px;
+  border-left: none;
+  border-top: none;
+  /* Account for clip-path */
+  border-width: 0;
+  background: linear-gradient(135deg, transparent 50%, var(--accent-bright) 50%);
+  width: 15px;
+  height: 15px;
+  bottom: 0px;
+  right: 0px;
+}
+
+/* === Header === */
+.panel-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 5px;
+}
+
+.header-icon {
+  color: var(--accent-bright);
+  font-size: 1.4rem;
+  animation: pulse 3s infinite alternate;
 }
 
 h1 {
-  font-size: 1.5em;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 1.6rem;
+  font-weight: 600;
   margin: 0;
-  text-align: center;
-  border-bottom: 1px solid #333;
-  padding-bottom: 10px;
+  color: var(--text-active);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  text-shadow: 0 0 8px rgba(0, 255, 170, 0.4);
 }
 
-h3 {
-  margin: 0 0 10px 0;
-  font-size: 1.1em;
-  color: #ccc;
+.header-line {
+  flex-grow: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--border-neon) 0%, transparent 100%);
 }
 
+.toggle-btn {
+  background: transparent;
+  border: none;
+  color: var(--accent-bright);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 1.2rem;
+  padding: 0 5px;
+  cursor: pointer;
+  box-shadow: none;
+  transition: transform 0.3s ease, color 0.3s ease;
+}
+
+.toggle-btn:hover {
+  background: transparent;
+  box-shadow: none;
+  color: #fff;
+  text-shadow: 0 0 10px var(--accent-bright);
+}
+
+.tech-panel.collapsed .toggle-btn {
+  transform: rotate(-180deg);
+}
+
+@keyframes pulse {
+  0% {
+    opacity: 0.6;
+    text-shadow: 0 0 2px var(--accent-bright);
+  }
+
+  100% {
+    opacity: 1;
+    text-shadow: 0 0 10px var(--accent-bright);
+  }
+}
+
+/* === Controls === */
 .control-group {
   display: flex;
   flex-direction: column;
@@ -82,50 +215,127 @@ h3 {
 }
 
 label {
-  font-size: 0.9rem;
-  color: #aaa;
+  font-size: 0.8rem;
+  color: var(--text-dim);
+  letter-spacing: 1.5px;
+  margin-bottom: 2px;
+  display: flex;
+  align-items: center;
 }
 
-input, select {
-  padding: 8px 12px;
-  border-radius: 6px;
-  border: 1px solid #444;
-  background: #2a2a2a;
-  color: white;
+label::before {
+  content: '';
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  background-color: var(--accent-gold);
+  margin-right: 8px;
+}
+
+/* Input Row Layout */
+.input-row {
+  display: flex;
+  gap: 10px;
+}
+
+.input-row input {
+  flex: 1;
+}
+
+/* Common Form Elements */
+input,
+select {
+  padding: 10px 14px;
+  background: rgba(0, 10, 15, 0.5);
+  border: 1px solid var(--border-neon);
+  color: var(--text-active);
   font-family: inherit;
   font-size: 1rem;
+  letter-spacing: 1px;
+  transition: all 0.3s ease;
+  outline: none;
 }
 
-button {
-  border-radius: 6px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  background-color: #333;
-  color: white;
+input:focus,
+select:focus {
+  border-color: var(--accent-bright);
+  box-shadow: 0 0 10px rgba(0, 255, 170, 0.2) inset, 0 0 5px rgba(0, 255, 170, 0.3);
+  background: rgba(0, 20, 30, 0.6);
+}
+
+/* Select wrapper for custom arrow */
+.select-wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.select-wrapper select {
+  width: 100%;
+  appearance: none;
   cursor: pointer;
-  transition: all 0.25s;
+}
+
+.select-wrapper::after {
+  content: '▼';
+  font-size: 0.7em;
+  color: var(--border-neon-bright);
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+select option {
+  background: #050a0f;
+  color: var(--text-active);
+}
+
+/* === Buttons === */
+button {
+  padding: 10px 16px;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 2px;
+  background: rgba(0, 15, 20, 0.6);
+  border: 1px solid var(--border-neon);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+  overflow: hidden;
 }
 
 button:hover {
-  background-color: #444;
+  background: rgba(0, 255, 170, 0.1);
+  color: var(--text-active);
+  border-color: var(--accent-bright);
+  box-shadow: 0 0 8px rgba(0, 255, 170, 0.3);
 }
 
-button.active {
-  background-color: var(--accent);
-  color: white;
+button:active {
+  background: rgba(0, 255, 170, 0.2);
 }
 
 .btn-primary {
-  background-color: var(--accent);
-  margin-top: 5px;
-  font-weight: 600;
+  color: var(--accent-gold);
+  border-color: var(--accent-gold);
+  background: rgba(220, 180, 50, 0.05);
 }
 
 .btn-primary:hover {
-  background-color: var(--accent-hover);
+  background: rgba(220, 180, 50, 0.15);
+  color: #fff;
+  border-color: #ffe66d;
+  box-shadow: 0 0 10px rgba(220, 180, 50, 0.4);
+}
+
+/* Layer Buttons */
+.layers-group {
+  margin-top: 5px;
+  border-top: 1px dashed rgba(30, 200, 150, 0.2);
+  padding-top: 15px;
 }
 
 .layers {
@@ -135,6 +345,24 @@ button.active {
 }
 
 .layer-btn {
-  font-size: 0.85em;
+  font-size: 0.9rem;
   padding: 8px;
+}
+
+.layer-btn.active {
+  background: rgba(0, 255, 170, 0.15);
+  color: var(--text-active);
+  border-color: var(--accent-bright);
+  box-shadow: inset 0 0 8px rgba(0, 255, 170, 0.2);
+}
+
+.layer-btn.active::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 3px;
+  height: 100%;
+  background-color: var(--accent-bright);
+  box-shadow: 0 0 6px var(--accent-bright);
 }

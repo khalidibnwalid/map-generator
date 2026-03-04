@@ -4,28 +4,60 @@ import { MapGenerator } from './game/MapGenerator';
 import { Interface } from './ui/Interface';
 
 document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <div id="ui-panel">
-    <h1>World Generator</h1>
-    <div class="control-group">
-      <label for="preset">Preset:</label>
-      <select id="preset">
-        <option value="Heavy Landmass">Heavy Landmass</option>
-        <option value="Realistic Continents">Realistic Continents</option>
-        <option value="Mediterranean Archipelago">Mediterranean Archipelago</option>
-        <option value="Pangea">Pangea</option>
-      </select>
+  <div id="ui-panel" class="tech-panel">
+    <div class="tech-corner top-left"></div>
+    <div class="tech-corner top-right"></div>
+    <div class="tech-corner bottom-left"></div>
+    <div class="tech-corner bottom-right"></div>
+    <div class="panel-header">
+      <span class="header-icon">⬡</span>
+      <h1>SYSTEM CONFIG</h1>
+      <span class="header-line"></span>
+      <button id="toggle-panel" class="toggle-btn" title="Toggle Panel">[-]</button>
     </div>
-    <div class="control-group">
-      <label>Seed:</label>
-      <input type="number" id="seed" value="123456" />
-      <button id="generate" class="btn-primary">Generate</button>
+    
+    <div id="panel-content" class="panel-content">
+      <div class="control-group">
+      <label for="preset">[PARAM] PRESET</label>
+      <div class="select-wrapper">
+        <select id="preset">
+          <option value="Heavy Landmass">Heavy Landmass</option>
+          <option value="Realistic Continents">Realistic Continents</option>
+          <option value="Mediterranean Archipelago">Mediterranean Archipelago</option>
+          <option value="Pangea">Pangea</option>
+        </select>
+      </div>
     </div>
-    <div class="control-group layers">
-      <h3>Layers</h3>
-      <button id="layer-biomes" class="layer-btn active">Biomes</button>
-      <button id="layer-elevation" class="layer-btn">Elevation</button>
-      <button id="layer-heatmap" class="layer-btn">Heatmap</button>
-      <button id="layer-moisture" class="layer-btn">Moisture</button>
+    
+    <div class="control-group">
+      <label for="size">[PARAM] SIZE</label>
+      <div class="select-wrapper">
+        <select id="size">
+          <option value="400x225">Small (400x225)</option>
+          <option value="800x450" selected>Medium (800x450)</option>
+          <option value="1600x900">Large (1600x900)</option>
+          <option value="3200x1800">Epic (3200x1800)</option>
+        </select>
+      </div>
+    </div>
+    
+    <div class="control-group">
+      <label>[PARAM] SEED</label>
+      <div class="input-row">
+        <input type="number" id="seed" value="123456" />
+        <button id="generate" class="btn-primary">INITIATE //></button>
+      </div>
+    </div>
+    
+    <div class="control-group layers-group">
+      <label>[VIEW] LAYERS [■■■■]</label>
+      <div class="layers">
+        <button id="layer-biomes" class="layer-btn active">BIOMES</button>
+        <button id="layer-elevation" class="layer-btn">ELEVATION</button>
+        <button id="layer-heatmap" class="layer-btn">HEATMAP</button>
+        <button id="layer-moisture" class="layer-btn">MOISTURE</button>
+      </div>
+    </div>
     </div>
   </div>
   <canvas id="mapCanvas"></canvas>

@@ -22,6 +22,15 @@ export class Interface {
         const seedInput = document.getElementById('seed') as HTMLInputElement;
         const generateBtn = document.getElementById('generate') as HTMLButtonElement;
         const presetSelect = document.getElementById('preset') as HTMLSelectElement;
+        const toggleBtn = document.getElementById('toggle-panel') as HTMLButtonElement;
+        const uiPanel = document.getElementById('ui-panel') as HTMLDivElement;
+
+        if (toggleBtn && uiPanel) {
+            toggleBtn.addEventListener('click', () => {
+                uiPanel.classList.toggle('collapsed');
+                toggleBtn.textContent = uiPanel.classList.contains('collapsed') ? '[+]' : '[-]';
+            });
+        }
 
         // Layers
         const layers = ['Biomes', 'Elevation', 'Heatmap', 'Moisture'] as ViewLayer[];
@@ -45,8 +54,30 @@ export class Interface {
             const seedVal = parseInt(seedInput.value) || Math.floor(Math.random() * 999999);
             seedInput.value = seedVal.toString();
 
+            let sizeChanged = false;
+            let newW = this.generator.getWidth();
+            let newH = this.generator.getHeight();
+            const sizeSelect = document.getElementById('size') as HTMLSelectElement;
+            if (sizeSelect) {
+                const [w, h] = sizeSelect.value.split('x').map(Number);
+                if (w !== newW || h !== newH) {
+                    sizeChanged = true;
+                    newW = w;
+                    newH = h;
+                }
+            }
+
             this.generator.currentPreset = p;
             this.generator.currentSeed = seedVal;
+
+            if (sizeChanged) {
+                this.generator.setSize(newW, newH);
+                // Reset pan/zoom to fit height
+                const fitScale = window.innerHeight / newH;
+                this.canvasManager.scale = fitScale;
+                this.canvasManager.offsetX = (window.innerWidth - (newW * fitScale)) / 2;
+                this.canvasManager.offsetY = 0;
+            }
 
             this.generator.generate();
             this.canvasManager.scheduleRender();
