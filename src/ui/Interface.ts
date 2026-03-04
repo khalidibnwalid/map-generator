@@ -317,7 +317,7 @@ export class Interface {
 
         ctx.restore();
 
-        // Render capital markers for the Nations layer
+        // Render city markers for the Nations layer
         if (this.currentLayer === 'Nations' && !isInteracting) {
             ctx.save();
             ctx.translate(offsetX, offsetY);
@@ -327,35 +327,71 @@ export class Interface {
             const startCopy = Math.floor(-offsetX / mapPixelWidth);
             const endCopy = Math.ceil((width - offsetX) / mapPixelWidth);
 
-            for (const nation of world.nations) {
-                const isHovered = nation.id === this.hoveredNationIndex;
-                const nationColor = this.hexToRgb(nation.color);
-                const colorStr = `rgb(${nationColor[0]}, ${nationColor[1]}, ${nationColor[2]})`;
+            // Draw smaller cities first (villages -> towns -> capitals) so capitals render on top
+            const sortedCities = [...world.cities].sort((a, b) => a.size - b.size);
+
+            for (const city of sortedCities) {
+                const isHovered = city.nationIndex === this.hoveredNationIndex;
+                const nation = world.nations[city.nationIndex];
+                if (!nation) continue;
+                const nc = this.hexToRgb(nation.color);
+                const colorStr = `rgb(${nc[0]}, ${nc[1]}, ${nc[2]})`;
+                ctx.globalAlpha = isHovered ? 1.0 : (city.isCapital ? 0.85 : 0.65);
 
                 for (let copy = startCopy; copy <= endCopy; copy++) {
-                    const cx = nation.capitalX + copy * world.width;
-                    const cy = nation.capitalY;
+                    const cx = city.x + copy * world.width;
+                    const cy = city.y;
 
-                    // Outer glow ring
-                    ctx.beginPath();
-                    ctx.arc(cx, cy, isHovered ? 5 : 3.5, 0, Math.PI * 2);
-                    ctx.strokeStyle = colorStr;
-                    ctx.lineWidth = isHovered ? 1.5 / scale : 1 / scale;
-                    ctx.globalAlpha = isHovered ? 1.0 : 0.8;
-                    ctx.stroke();
+                    if (city.isCapital) {
+                        // Capital: diamond shape + outer glow ring
+                        const s = isHovered ? 4.5 : 3.2;
+                        ctx.save();
+                        ctx.translate(cx, cy);
+                        ctx.rotate(Math.PI / 4);
+                        ctx.strokeStyle = colorStr;
+                        ctx.lineWidth = (isHovered ? 1.2 : 0.8) / scale;
+                        ctx.strokeRect(-s / 2, -s / 2, s, s);
+                        ctx.fillStyle = colorStr;
+                        ctx.globalAlpha = isHovered ? 0.6 : 0.35;
+                        ctx.fillRect(-s / 2, -s / 2, s, s);
+                        ctx.globalAlpha = isHovered ? 1.0 : 0.85;
+                        ctx.restore();
 
-                    // Capital dot
-                    ctx.beginPath();
-                    ctx.arc(cx, cy, isHovered ? 2.5 : 1.5, 0, Math.PI * 2);
-                    ctx.fillStyle = colorStr;
-                    ctx.globalAlpha = 1.0;
-                    ctx.fill();
+                        // Outer ring
+                        ctx.beginPath();
+                        ctx.arc(cx, cy, isHovered ? 6 : 4.5, 0, Math.PI * 2);
+                        ctx.strokeStyle = colorStr;
+                        ctx.lineWidth = (isHovered ? 1 : 0.6) / scale;
+                        ctx.globalAlpha = isHovered ? 0.7 : 0.45;
+                        ctx.stroke();
+                        ctx.globalAlpha = isHovered ? 1.0 : 0.85;
+
+                    } else if (city.size === 1) {
+                        // Town: circle with fill
+                        ctx.beginPath();
+                        ctx.arc(cx, cy, isHovered ? 2.8 : 2, 0, Math.PI * 2);
+                        ctx.strokeStyle = colorStr;
+                        ctx.lineWidth = (isHovered ? 1 : 0.7) / scale;
+                        ctx.stroke();
+                        ctx.fillStyle = colorStr;
+                        ctx.globalAlpha = isHovered ? 0.5 : 0.25;
+                        ctx.fill();
+                        ctx.globalAlpha = isHovered ? 1.0 : 0.65;
+
+                    } else {
+                        // Village: small dot
+                        ctx.beginPath();
+                        ctx.arc(cx, cy, isHovered ? 1.8 : 1.2, 0, Math.PI * 2);
+                        ctx.fillStyle = colorStr;
+                        ctx.fill();
+                    }
                 }
             }
 
             ctx.globalAlpha = 1.0;
             ctx.restore();
         }
+
     }
 
     private updateHover(clientX: number, clientY: number) {
@@ -389,10 +425,28 @@ export class Interface {
 
         if (newHovered >= 0 && newHovered < world.nations.length) {
             const nation = world.nations[newHovered];
-            this.showTooltip(clientX, clientY, nation.name, `Capital (${nation.capitalX}, ${nation.capitalY})`);
+            // Find nearest city of this nation to cursor (in world space)
+            let nearestCity = null;
+            let nearestDist = Infinity;
+            for (const city of world.cities) {
+                if (city.nationIndex !== newHovered) continue;
+                let dx = Math.abs(wx - city.x);
+                if (dx > world.width / 2) dx = world.width - dx;
+                const dist = Math.hypot(dx, wy - city.y);
+                if (dist < nearestDist) { nearestDist = dist; nearestCity = city; }
+            }
+            const cityThreshold = 10 / cm.scale; // ~10 screen pixels
+            if (nearestCity && nearestDist < cityThreshold) {
+                const typeLabel = nearestCity.isCapital ? '♦ Capital' : nearestCity.size === 1 ? '● Town' : '· Village';
+                this.showTooltip(clientX, clientY, nearestCity.name, `${typeLabel} · ${nation.name}`);
+            } else {
+                const cityCount = world.cities.filter(c => c.nationIndex === newHovered && !c.isCapital).length;
+                this.showTooltip(clientX, clientY, nation.name, `${cityCount} cities`);
+            }
         } else {
             this.hideTooltip();
         }
+
     }
 
     private buildNationsCache() {

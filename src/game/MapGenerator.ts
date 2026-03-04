@@ -37,6 +37,7 @@ export class MapGenerator {
         this.determineBiomes();
         this.generateRivers();
         this.generateNations();
+        this.generateCities();
 
         return this.world;
     }
@@ -454,6 +455,86 @@ export class MapGenerator {
                     }
                 }
                 cell.isNationBorder = border;
+            }
+        }
+    }
+
+    private generateCities() {
+        this.world.cities = [];
+
+        const cityPrefixes = ['Al', 'El', 'Fort', 'New', 'Port', 'San', 'Vel', 'Mar', 'Dun', 'Kas', 'Ark', 'Tor'];
+        const citySuffixes = ['haven', 'holm', 'ford', 'burg', 'ton', 'gate', 'deep', 'reach', 'fell', 'moor', 'vale', 'mere', 'cross', 'bay', 'point'];
+        const makeName = () => {
+            const p = cityPrefixes[Math.floor(this.noise.random() * cityPrefixes.length)];
+            const s = citySuffixes[Math.floor(this.noise.random() * citySuffixes.length)];
+            return `${p}${s}`;
+        };
+
+        // First: add capitals as cities
+        for (const nation of this.world.nations) {
+            this.world.cities.push({
+                id: this.world.cities.length,
+                name: nation.name, // capital shares nation name
+                x: nation.capitalX,
+                y: nation.capitalY,
+                nationIndex: nation.id,
+                isCapital: true,
+                size: 2
+            });
+        }
+
+        // Then: place additional towns / villages
+        const resScale = this.width / 800;
+        const citiesPerNation = Math.max(2, Math.floor(3 * resScale));
+        const minCityDist = 30 * resScale;
+
+        for (const nation of this.world.nations) {
+            let placed = 0;
+            let attempts = 0;
+
+            while (placed < citiesPerNation && attempts < 800) {
+                attempts++;
+                const x = Math.floor(this.noise.random() * this.width);
+                const y = Math.floor(this.noise.random() * this.height);
+                const cell = this.world.grid[x][y];
+
+                // Must be land, in this nation, moderate elevation
+                if (cell.isWater || (cell.nationIndex ?? -1) !== nation.id || cell.elevation > 0.75) continue;
+
+                // Prefer coastal or river cells (score)
+                let coastBonus = 0;
+                for (let dx = -3; dx <= 3; dx++) {
+                    for (let dy = -3; dy <= 3; dy++) {
+                        const nx = ((x + dx) % this.width + this.width) % this.width;
+                        const ny = y + dy;
+                        if (ny >= 0 && ny < this.height) {
+                            if (this.world.grid[nx][ny].isWater) coastBonus++;
+                            if (this.world.grid[nx][ny].hasRiver) coastBonus++;
+                        }
+                    }
+                }
+                // Coastal/river cells are preferred but not required
+                if (coastBonus === 0 && this.noise.random() < 0.6) continue;
+
+                // Check minimum distance from all existing cities
+                let tooClose = false;
+                for (const c of this.world.cities) {
+                    let dx = Math.abs(x - c.x);
+                    if (dx > this.width / 2) dx = this.width - dx;
+                    if (Math.hypot(dx, y - c.y) < minCityDist) { tooClose = true; break; }
+                }
+                if (tooClose) continue;
+
+                const size = coastBonus >= 4 ? 1 : 0; // town or village
+                this.world.cities.push({
+                    id: this.world.cities.length,
+                    name: makeName(),
+                    x, y,
+                    nationIndex: nation.id,
+                    isCapital: false,
+                    size
+                });
+                placed++;
             }
         }
     }

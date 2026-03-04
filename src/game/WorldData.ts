@@ -26,6 +26,15 @@ export interface Nation {
     capitalY: number;
 }
 
+export interface City {
+    id: number;
+    name: string;
+    x: number;
+    y: number;
+    nationIndex: number;
+    isCapital: boolean;
+    size: number; // 0=village, 1=town, 2=city
+}
 
 export interface CellData {
     elevation: number;
@@ -46,6 +55,7 @@ export class WorldData {
     public grid: CellData[][];
     public rivers: { x: number, y: number }[][] = [];
     public nations: Nation[] = [];
+    public cities: City[] = [];
 
     constructor(width: number, height: number) {
         this.width = width;
