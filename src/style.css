@@ -60,7 +60,7 @@ body {
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   padding: 25px;
-  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5), inset 0 0 20px rgba(0, 255, 170, 0.05);
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
   border: 1px solid var(--border-neon);
   z-index: 10;
   display: flex;
@@ -139,6 +139,152 @@ body {
   height: 15px;
   bottom: 0px;
   right: 0px;
+}
+
+/* === Tabs === */
+.panel-tabs {
+  display: flex;
+  gap: 2px;
+  margin-top: 15px;
+  border-bottom: 1px solid var(--border-neon);
+}
+
+.tab-btn {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 16px;
+  font-size: 0.85rem;
+  letter-spacing: 1.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.tab-btn:hover {
+  color: var(--text-active);
+  background: rgba(0, 255, 170, 0.05);
+}
+
+.tab-btn.active {
+  color: var(--accent-bright);
+  border-bottom-color: var(--accent-bright);
+  background: rgba(0, 255, 170, 0.1);
+}
+
+.tab-content {
+  display: none;
+  flex-direction: column;
+  gap: 25px;
+}
+
+.tab-content.active {
+  display: flex;
+}
+
+/* === Nations List === */
+.nations-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 400px;
+  overflow-y: auto;
+  padding-right: 8px;
+}
+
+.nations-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.nations-list::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.nations-list::-webkit-scrollbar-thumb {
+  background: var(--border-neon);
+}
+
+.nation-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  background: rgba(0, 15, 25, 0.4);
+  border: 1px solid rgba(30, 200, 150, 0.15);
+  transition: all 0.2s ease;
+  cursor: pointer;
+}
+
+.nation-item:hover,
+.nation-item.hovered {
+  background: rgba(0, 25, 40, 0.6);
+  border-color: rgba(30, 200, 150, 0.3);
+}
+
+.nation-item.selected {
+  border-color: var(--accent-bright);
+  background: rgba(0, 40, 50, 0.5);
+  box-shadow: inset 0 0 10px rgba(0, 255, 170, 0.1);
+}
+
+.nation-color-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.nation-name-input {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid transparent;
+  padding: 2px 4px;
+  color: var(--text-active);
+  font-family: inherit;
+  font-size: 0.9rem;
+  width: 100%;
+  transition: all 0.2s ease;
+}
+
+.nation-name-input:focus {
+  background: rgba(255, 255, 255, 0.05);
+  border-bottom-color: var(--border-neon);
+  box-shadow: none;
+}
+
+.nation-territory-count {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* === Edit Mode === */
+.edit-mode-toggle {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.btn-toggle {
+  width: 100%;
+  padding: 8px;
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.edit-mode-active .btn-toggle {
+  background: rgba(255, 50, 80, 0.1);
+  color: #ff4d6d;
+  border-color: #ff4d6d;
+  box-shadow: 0 0 10px rgba(255, 50, 80, 0.2);
+}
+
+.edit-hint {
+  font-size: 0.7rem;
+  color: var(--accent-gold);
+  text-align: center;
+  opacity: 0.8;
+  letter-spacing: 0.5px;
 }
 
 /* === Header === */
@@ -232,7 +378,95 @@ label::before {
   margin-right: 8px;
 }
 
-/* Input Row Layout */
+/* === Minimalist Nations Toolbar === */
+.edit-mode-controls {
+  padding: 0;
+  margin-bottom: 15px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.btn-icon {
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 15, 20, 0.6);
+  border: 1px solid var(--border-neon);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.edit-mode-active .btn-icon {
+  background: rgba(0, 255, 170, 0.15);
+  color: var(--accent-bright);
+  border-color: var(--accent-bright);
+  box-shadow: none;
+}
+
+.brush-size-control {
+  flex: 1;
+  position: relative;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  background: rgba(0, 10, 15, 0.5);
+  border: 1px solid var(--border-neon);
+  padding: 0 10px;
+  box-shadow: none;
+}
+
+.brush-label-overlay {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-51%);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 2px;
+  color: rgba(255, 255, 255, 0.2);
+  pointer-events: none;
+  font-family: 'Rajdhani', sans-serif;
+}
+
+.brush-value-overlay {
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.9rem;
+  color: var(--accent-bright);
+  pointer-events: none;
+  min-width: 15px;
+  text-align: right;
+}
+
+.brush-size-control input[type="range"] {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  appearance: none;
+  outline: none;
+  border: none;
+  margin: 0;
+  cursor: pointer;
+}
+
+.brush-size-control input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 4px;
+  height: 24px;
+  background: var(--accent-bright);
+  border-radius: 0;
+  box-shadow: none !important;
+}
+
 .input-row {
   display: flex;
   gap: 10px;
@@ -259,7 +493,7 @@ select {
 input:focus,
 select:focus {
   border-color: var(--accent-bright);
-  box-shadow: 0 0 10px rgba(0, 255, 170, 0.2) inset, 0 0 5px rgba(0, 255, 170, 0.3);
+  /* box-shadow: 0 0 10px rgba(0, 255, 170, 0.2) inset, 0 0 5px rgba(0, 255, 170, 0.3); */
   background: rgba(0, 20, 30, 0.6);
 }
 

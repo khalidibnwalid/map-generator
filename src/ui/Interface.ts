@@ -19,6 +19,13 @@ export class Interface {
     private nationCentroids: { x: number, y: number }[] = [];
     private nationSizes: number[] = []; // Relative size (0 to 1) 
     private nationsStateDirty: boolean = true; // rebuilt on next Nations render
+    private activeTab: 'generate' | 'nations' = 'generate';
+    private isEditingNations: boolean = false;
+    private selectedNationIndex: number = -1;
+    private isPainting: boolean = false;
+    private lastPaintedX: number | null = null;
+    private lastPaintedY: number | null = null;
+    private brushSize: number = 2;
 
     // GPU rendering
     private gpuRenderer!: GPURenderer;
@@ -52,11 +59,101 @@ export class Interface {
         this.setupUI();
         this.canvasManager.onRender = this.renderMap.bind(this);
 
+        // Track mouse for interaction differentiation
+        let mousedownX = 0;
+        let mousedownY = 0;
+        let isAttemptingPaint = false;
+
         // Track mouse for hover
         const canvas = this.canvasManager.canvas;
         canvas.addEventListener('mousemove', (e) => {
-            if (this.currentLayer === 'Nations') {
+            if (this.currentLayer === 'Nations' && !this.isEditingNations) {
                 this.updateHover(e.clientX, e.clientY);
+            } else if (this.activeTab === 'nations' && this.isEditingNations) {
+                if (isAttemptingPaint && !this.isPainting) {
+                    // Check if moved enough to be a drag
+                    const dist = Math.hypot(e.clientX - mousedownX, e.clientY - mousedownY);
+                    if (dist > 3) {
+                        this.isPainting = true;
+                        this.lastPaintedX = null;
+                        this.lastPaintedY = null;
+                    }
+                }
+                if (this.isPainting) {
+                    this.handlePainting(e.clientX, e.clientY);
+                }
+            }
+        });
+        canvas.addEventListener('mousedown', (e) => {
+            if (this.activeTab === 'nations' && this.isEditingNations && e.button === 0) {
+                const world = this.generator.getWorld();
+                const cm = this.canvasManager;
+                const rect = cm.canvas.getBoundingClientRect();
+                const sx = e.clientX - rect.left;
+                const sy = e.clientY - rect.top;
+                const wx = Math.floor((sx - cm.offsetX) / cm.scale);
+                const wy = Math.floor((sy - cm.offsetY) / cm.scale);
+                const x = ((wx % world.width) + world.width) % world.width;
+
+                if (wy >= 0 && wy < world.height) {
+                    const cell = world.grid[x][wy];
+                    if (cell.isWater) {
+                        // Quick exit: click on water turns off edit mode
+                        this.isEditingNations = false;
+                        const btn = document.getElementById('btn-edit-nations');
+                        btn?.parentElement?.classList.remove('edit-mode-active');
+                        this.canvasManager.panningLocked = false;
+                        this.canvasManager.canvas.style.cursor = 'grab';
+                        this.canvasManager.scheduleRender();
+                        return;
+                    }
+                }
+
+                if (this.selectedNationIndex !== -1) {
+                    // Flag that we want to paint, but wait for movement to distinguish from dblclick
+                    isAttemptingPaint = true;
+                    mousedownX = e.clientX;
+                    mousedownY = e.clientY;
+                }
+            }
+        });
+
+        canvas.addEventListener('dblclick', (e) => {
+            if (this.activeTab === 'nations' && this.isEditingNations && e.button === 0) {
+                isAttemptingPaint = false; // Cancel any pending paint
+                this.isPainting = false;
+                const world = this.generator.getWorld();
+                const cm = this.canvasManager;
+                const rect = cm.canvas.getBoundingClientRect();
+                const sx = e.clientX - rect.left;
+                const sy = e.clientY - rect.top;
+                const wx = Math.floor((sx - cm.offsetX) / cm.scale);
+                const wy = Math.floor((sy - cm.offsetY) / cm.scale);
+                const x = ((wx % world.width) + world.width) % world.width;
+
+                if (wy >= 0 && wy < world.height) {
+                    const cell = world.grid[x][wy];
+
+                    // Nation selection on double click
+                    if (!cell.isWater && cell.nationIndex !== undefined && cell.nationIndex !== -1 && cell.nationIndex !== this.selectedNationIndex) {
+                        this.selectedNationIndex = cell.nationIndex;
+                        this.isPainting = false; // Stop any accidental painting start
+                        this.renderNationsList();
+
+                        const target = document.querySelector(`.nation-item[data-index="${this.selectedNationIndex}"]`);
+                        target?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                    }
+                }
+            }
+        });
+        window.addEventListener('mouseup', () => {
+            isAttemptingPaint = false;
+            if (this.isPainting) {
+                this.isPainting = false;
+                this.lastPaintedX = null;
+                this.lastPaintedY = null;
+                this.updateNationStatistics();
+                this.canvasManager.scheduleRender();
             }
         });
         canvas.addEventListener('mouseleave', () => {
@@ -98,6 +195,61 @@ export class Interface {
             }
         });
 
+        // Tabs
+        const tabGenerate = document.getElementById('tab-generate');
+        const tabNations = document.getElementById('tab-nations');
+        const contentGenerate = document.getElementById('content-generate');
+        const contentNations = document.getElementById('content-nations');
+
+        if (tabGenerate && tabNations && contentGenerate && contentNations) {
+            tabGenerate.addEventListener('click', () => {
+                this.activeTab = 'generate';
+                tabGenerate.classList.add('active');
+                tabNations.classList.remove('active');
+                contentGenerate.classList.add('active');
+                contentNations.classList.remove('active');
+            });
+
+            tabNations.addEventListener('click', () => {
+                this.activeTab = 'nations';
+                tabNations.classList.add('active');
+                tabGenerate.classList.remove('active');
+                contentNations.classList.add('active');
+                contentGenerate.classList.remove('active');
+                this.renderNationsList();
+            });
+        }
+
+        // Nation Editing
+        const btnEditNations = document.getElementById('btn-edit-nations') as HTMLButtonElement;
+        if (btnEditNations) {
+            btnEditNations.addEventListener('click', () => {
+                this.isEditingNations = !this.isEditingNations;
+                btnEditNations.parentElement?.classList.toggle('edit-mode-active', this.isEditingNations);
+
+                if (this.isEditingNations) {
+                    this.canvasManager.panningLocked = true;
+                    this.canvasManager.canvas.style.cursor = 'default';
+                    this.currentLayer = 'Nations';
+                    document.querySelectorAll('.layer-btn').forEach(b => b.classList.remove('active'));
+                    document.getElementById('layer-nations')?.classList.add('active');
+                    this.canvasManager.scheduleRender();
+                } else {
+                    this.canvasManager.panningLocked = false;
+                    this.canvasManager.canvas.style.cursor = 'grab';
+                }
+            });
+        }
+
+        const brushSlider = document.getElementById('brush-size') as HTMLInputElement;
+        const brushValueDisp = document.getElementById('brush-size-value');
+        if (brushSlider && brushValueDisp) {
+            brushSlider.addEventListener('input', () => {
+                this.brushSize = parseInt(brushSlider.value);
+                brushValueDisp.textContent = this.brushSize.toString();
+            });
+        }
+
         seedInput.value = this.generator.currentSeed.toString();
 
         generateBtn.addEventListener('click', async () => {
@@ -125,14 +277,12 @@ export class Interface {
 
             if (sizeChanged) {
                 this.generator.setSize(newW, newH);
-                // Reset pan/zoom to fit height
                 const fitScale = window.innerHeight / newH;
                 this.canvasManager.scale = fitScale;
                 this.canvasManager.offsetX = (window.innerWidth - (newW * fitScale)) / 2;
                 this.canvasManager.offsetY = 0;
             }
 
-            // Update UI to loading state
             generateBtn.classList.add('loading');
             generateBtn.style.setProperty('--progress', '0%');
             const originalText = generateBtn.textContent;
@@ -159,10 +309,235 @@ export class Interface {
         });
     }
 
+    private renderNationsList() {
+        // Prevent clearing the list if the user is currently typing
+        if (document.activeElement?.classList.contains('nation-name-input')) return;
+
+        const listContainer = document.getElementById('nations-list');
+        if (!listContainer) return;
+
+        const world = this.generator.getWorld();
+        listContainer.innerHTML = '';
+
+        world.nations.forEach((nation, idx) => {
+            const item = document.createElement('div');
+            item.className = `nation-item ${this.selectedNationIndex === idx ? 'selected' : ''}`;
+            item.dataset.index = idx.toString();
+
+            const swatch = document.createElement('div');
+            swatch.className = 'nation-color-swatch';
+            swatch.style.backgroundColor = nation.color;
+
+            const nameInput = document.createElement('input');
+            nameInput.type = 'text';
+            nameInput.className = 'nation-name-input';
+            nameInput.value = nation.name;
+            nameInput.addEventListener('change', (e) => {
+                nation.name = (e.target as HTMLInputElement).value;
+                this.canvasManager.scheduleRender();
+            });
+            nameInput.addEventListener('mousedown', (e) => e.stopPropagation());
+            nameInput.addEventListener('click', (e) => e.stopPropagation());
+
+            const territoryCount = document.createElement('span');
+            territoryCount.className = 'nation-territory-count';
+            const area = this.nationCellsList[idx]?.length || 0;
+            territoryCount.textContent = `${area} px²`;
+
+            item.appendChild(swatch);
+            item.appendChild(nameInput);
+            item.appendChild(territoryCount);
+
+            item.addEventListener('click', () => {
+                this.selectedNationIndex = idx;
+                this.renderNationsList();
+            });
+
+            item.addEventListener('mouseenter', () => {
+                if (this.isPainting) return;
+                const oldIdx = this.hoveredNationIndex;
+                this.hoveredNationIndex = idx;
+                this.applyHoverToCache(idx, oldIdx);
+                this.canvasManager.scheduleRender();
+            });
+
+            item.addEventListener('mouseleave', () => {
+                if (this.isPainting) return;
+                const oldIdx = this.hoveredNationIndex;
+                this.hoveredNationIndex = -1;
+                this.applyHoverToCache(-1, oldIdx);
+                this.canvasManager.scheduleRender();
+            });
+
+            listContainer.appendChild(item);
+        });
+    }
+
+    private handlePainting(clientX: number, clientY: number) {
+        if (!this.isPainting || this.selectedNationIndex === -1) return;
+
+        const cm = this.canvasManager;
+        const rect = cm.canvas.getBoundingClientRect();
+        const sx = clientX - rect.left;
+        const sy = clientY - rect.top;
+
+        // Using floor for more consistent mapping
+        const wx = Math.floor((sx - cm.offsetX) / cm.scale);
+        const wy = Math.floor((sy - cm.offsetY) / cm.scale);
+
+        let minX = wx, minY = wy, maxX = wx, maxY = wy;
+
+        if (this.lastPaintedX === null || this.lastPaintedY === null) {
+            this.paintAt(wx, wy);
+        } else {
+            const dx = wx - this.lastPaintedX;
+            const dy = wy - this.lastPaintedY;
+            const steps = Math.max(Math.abs(dx), Math.abs(dy), 1);
+            for (let i = 0; i <= steps; i++) {
+                const px = Math.floor(this.lastPaintedX + (dx * i) / steps);
+                const py = Math.floor(this.lastPaintedY + (dy * i) / steps);
+                this.paintAt(px, py);
+                minX = Math.min(minX, px); minY = Math.min(minY, py);
+                maxX = Math.max(maxX, px); maxY = Math.max(maxY, py);
+            }
+        }
+
+        this.lastPaintedX = wx;
+        this.lastPaintedY = wy;
+
+        // Perform a single batched cache update for the affected area
+        const brushHalf = Math.floor(this.brushSize / 2);
+        this.updateNationsCacheInRect(
+            minX - brushHalf - 2,
+            minY - brushHalf - 2,
+            maxX + brushHalf + 2,
+            maxY + brushHalf + 2
+        );
+        this.canvasManager.scheduleRender();
+        this.renderNationsList();
+    }
+
+    private paintAt(wx: number, wy: number) {
+        const world = this.generator.getWorld();
+        const brushSize = this.brushSize;
+        const radiusSq = (brushSize / 2) * (brushSize / 2);
+        const offset = Math.floor(brushSize / 2);
+
+        for (let dx = 0; dx < brushSize; dx++) {
+            for (let dy = 0; dy < brushSize; dy++) {
+                const lx = dx - offset;
+                const ly = dy - offset;
+
+                // Circular check (using squared distance for performance)
+                if (lx * lx + ly * ly > radiusSq + 0.25) continue;
+
+                const tx = ((wx + lx % world.width) + world.width) % world.width;
+                const ty = wy + ly;
+
+                if (ty >= 0 && ty < world.height) {
+                    const cell = world.grid[tx][ty];
+                    if (!cell.isWater && cell.nationIndex !== this.selectedNationIndex) {
+                        const oldIdx = cell.nationIndex ?? -1;
+                        cell.nationIndex = this.selectedNationIndex;
+
+                        if (oldIdx !== -1) {
+                            const oldList = this.nationCellsList[oldIdx];
+                            const flatIdx = ty * world.width + tx;
+                            const listIdx = oldList.indexOf(flatIdx);
+                            if (listIdx > -1) oldList.splice(listIdx, 1);
+                        }
+                        this.nationCellsList[this.selectedNationIndex].push(ty * world.width + tx);
+
+                        this.updateLocalBorders(tx, ty);
+                    }
+                }
+            }
+        }
+    }
+
+    private updateLocalBorders(x: number, y: number) {
+        const world = this.generator.getWorld();
+        for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+                const tx = ((x + dx) % world.width + world.width) % world.width;
+                const ty = y + dy;
+
+                if (ty >= 0 && ty < world.height) {
+                    const cell = world.grid[tx][ty];
+                    if (cell.isWater) continue;
+
+                    let isBorder = false;
+                    const nid = cell.nationIndex;
+                    neighborLoop:
+                    for (let nxd = -1; nxd <= 1; nxd++) {
+                        for (let nyd = -1; nyd <= 1; nyd++) {
+                            if (nxd === 0 && nyd === 0) continue;
+                            const nx = ((tx + nxd) % world.width + world.width) % world.width;
+                            const ny = ty + nyd;
+                            if (ny >= 0 && ny < world.height) {
+                                const nb = world.grid[nx][ny];
+                                if (nb.isWater || (nb.nationIndex ?? -1) !== nid) {
+                                    isBorder = true;
+                                    break neighborLoop;
+                                }
+                            }
+                        }
+                    }
+                    cell.isNationBorder = isBorder;
+                }
+            }
+        }
+    }
+
+    private updateNationsCacheInRect(x1: number, y1: number, x2: number, y2: number) {
+        if (!this.nationsCanvas || !this.nationsBaseData || !this.nationsActiveData) return;
+        const world = this.generator.getWorld();
+        const W = world.width;
+        const ctx = this.nationsCanvas.getContext('2d')!;
+        const active = this.nationsActiveData;
+        const base = this.nationsBaseData;
+
+        // Normlize coords and clamp Y
+        const startY = Math.max(0, Math.min(y1, y2));
+        const endY = Math.min(world.height - 1, Math.max(y1, y2));
+        const startX = Math.min(x1, x2);
+        const endX = Math.max(x1, x2);
+
+        for (let ty = startY; ty <= endY; ty++) {
+            for (let txRaw = startX; txRaw <= endX; txRaw++) {
+                const tx = (txRaw % W + W) % W;
+                const cell = world.grid[tx][ty];
+                const flatIdx = ty * W + tx;
+                const i = flatIdx * 4;
+
+                const baseRGB = this.hexToRgb(BIOME_COLORS[cell.biome]);
+                // Default desaturated biome color
+                let r = Math.floor(baseRGB[0] * 0.45);
+                let g = Math.floor(baseRGB[1] * 0.45);
+                let b = Math.floor(baseRGB[2] * 0.45);
+
+                const nIdx = cell.nationIndex ?? -1;
+                if (nIdx >= 0 && nIdx < world.nations.length) {
+                    const nc = this.hexToRgb(world.nations[nIdx].color);
+                    if (cell.isNationBorder) {
+                        r = Math.floor(nc[0] * 0.75);
+                        g = Math.floor(nc[1] * 0.75);
+                        b = Math.floor(nc[2] * 0.75);
+                    } else {
+                        r = Math.floor(r * 0.86 + nc[0] * 0.14);
+                        g = Math.floor(g * 0.86 + nc[1] * 0.14);
+                        b = Math.floor(b * 0.86 + nc[2] * 0.14);
+                    }
+                }
+                active[i] = r; active[i + 1] = g; active[i + 2] = b;
+                base[i] = r; base[i + 1] = g; base[i + 2] = b;
+            }
+        }
+        ctx.putImageData(new ImageData(new Uint8ClampedArray(active), W, world.height), 0, 0);
+    }
+
     private renderMap(ctx: CanvasRenderingContext2D, width: number, height: number, scale: number, offsetX: number, offsetY: number, isInteracting: boolean) {
         const world = this.generator.getWorld();
-
-        // Enforce zoom and pan limits
         const minScale = height / world.height;
         if (this.canvasManager.scale < minScale) {
             this.canvasManager.scale = minScale;
@@ -178,46 +553,24 @@ export class Interface {
             offsetY = height - mapPixelHeight;
         }
 
-        // --- GPU RENDER PHASE ---
         const layerMap: Record<ViewLayer, number> = {
-            'Biomes': 0,
-            'Elevation': 1,
-            'Heatmap': 2,
-            'Moisture': 3,
-            'Nations': 0 // Nations handled by cached canvas blit below
+            'Biomes': 0, 'Elevation': 1, 'Heatmap': 2, 'Moisture': 3, 'Nations': 0
         };
 
         if (this.currentLayer !== 'Nations') {
-            // Resize GPU canvas to match viewport if needed
             if (this.gpuCanvas.width !== width || this.gpuCanvas.height !== height) {
                 this.gpuCanvas.width = width;
                 this.gpuCanvas.height = height;
             }
-
-            this.gpuRenderer.render(
-                width, height,
-                world.width, world.height,
-                scale, offsetX, offsetY,
-                layerMap[this.currentLayer]
-            );
-
-            // Draw GPU output to main 2D context
+            this.gpuRenderer.render(width, height, world.width, world.height, scale, offsetX, offsetY, layerMap[this.currentLayer]);
             ctx.setTransform(1, 0, 0, 1, 0, 0);
             ctx.drawImage(this.gpuCanvas, 0, 0);
         } else {
-            // Pre-fill everything with ambient Ocean color for Nations layer
             ctx.fillStyle = '#1C3E5A';
             ctx.fillRect(0, 0, width, height);
         }
 
-        // --- OVERLAY PHASE (Nations, Rivers, Cities, Labels) ---
-
-
-        // End Overlay Phase 
-
-        // For Nations layer: blit the pre-rendered cached canvas on top
         if (this.currentLayer === 'Nations') {
-            // Lazy build / rebuild after generation
             if (!this.nationsCanvas || this.nationsStateDirty) {
                 this.buildNationsCache();
                 this.nationsStateDirty = false;
@@ -235,7 +588,6 @@ export class Interface {
             }
         }
 
-        // Render Vector lines (Rivers) over the map
         ctx.save();
         ctx.translate(offsetX, offsetY);
         ctx.scale(scale, scale);
@@ -245,18 +597,15 @@ export class Interface {
             ctx.strokeStyle = `rgb(${riverColor[0]}, ${riverColor[1]}, ${riverColor[2]})`;
             ctx.lineJoin = 'round';
             ctx.lineCap = 'round';
-            // Line width adjusts with scale so it looks like a real river on map
             ctx.lineWidth = 1.5;
 
-            // To support infinite continuous panning, draw multiple copies of the rivers
             const mapPixelWidth = world.width * scale;
             const startCopy = Math.floor(-offsetX / mapPixelWidth);
             const endCopy = Math.ceil((width - offsetX) / mapPixelWidth);
 
             for (let copy = startCopy; copy <= endCopy; copy++) {
                 ctx.save();
-                ctx.translate(copy * world.width, 0); // Translate in world coordinates space
-
+                ctx.translate(copy * world.width, 0);
                 ctx.beginPath();
                 if (world.rivers) {
                     for (const river of world.rivers) {
@@ -265,7 +614,6 @@ export class Interface {
                         for (let i = 1; i < river.length; i++) {
                             let rx = river[i].x;
                             let prevRx = river[i - 1].x;
-                            // If river jumps across map East/West seam, pick up pen
                             if (Math.abs(rx - prevRx) > world.width / 2) {
                                 ctx.moveTo(rx, river[i].y);
                             } else {
@@ -281,7 +629,6 @@ export class Interface {
 
         ctx.restore();
 
-        // Render city markers for the Nations layer
         if (this.currentLayer === 'Nations' && !isInteracting) {
             ctx.save();
             ctx.translate(offsetX, offsetY);
@@ -290,8 +637,6 @@ export class Interface {
             const mapPixelWidth = world.width * scale;
             const startCopy = Math.floor(-offsetX / mapPixelWidth);
             const endCopy = Math.ceil((width - offsetX) / mapPixelWidth);
-
-            // Draw smaller cities first (villages -> towns -> capitals) so capitals render on top
             const sortedCities = [...world.cities].sort((a, b) => a.size - b.size);
 
             for (const city of sortedCities) {
@@ -305,27 +650,22 @@ export class Interface {
                 for (let copy = startCopy; copy <= endCopy; copy++) {
                     const cx = city.x + copy * world.width;
                     const cy = city.y;
-
-                    // Base dots: Dark gray/black with a white halo for high contrast
                     const isCapital = city.isCapital;
                     const radius = isCapital ? 3.8 : (city.size === 1 ? 2.5 : 1.5);
                     const dotColor = '#1a1a1c';
                     const haloColor = 'rgba(255, 255, 255, 0.9)';
                     const highlightColor = colorStr;
 
-                    // 1. Draw Halo (White outline for visibility on any background)
                     ctx.beginPath();
                     ctx.arc(cx, cy, radius + 0.6 / scale, 0, Math.PI * 2);
                     ctx.fillStyle = haloColor;
                     ctx.fill();
 
-                    // 2. Draw Main Dot
                     ctx.beginPath();
                     ctx.arc(cx, cy, radius, 0, Math.PI * 2);
                     ctx.fillStyle = isHovered ? highlightColor : dotColor;
                     ctx.fill();
 
-                    // 3. Optional inner detail for Capital
                     if (isCapital) {
                         ctx.beginPath();
                         ctx.arc(cx, cy, radius * 0.45, 0, Math.PI * 2);
@@ -334,12 +674,10 @@ export class Interface {
                     }
                 }
             }
-
             ctx.globalAlpha = 1.0;
             ctx.restore();
         }
 
-        // Render Labels (Nations, Cities)
         this.renderLabels(ctx, width, height, scale, offsetX, offsetY, isInteracting);
     }
 
@@ -348,20 +686,17 @@ export class Interface {
         const mapPixelWidth = world.width * scale;
         const startCopy = Math.floor(-offsetX / mapPixelWidth);
         const endCopy = Math.ceil((width - offsetX) / mapPixelWidth);
-
-        // Simple collision detection: track occupied regions
         const occupiedRects: { x: number, y: number, w: number, h: number }[] = [];
+
         const checkCollision = (x: number, y: number, w: number, h: number) => {
-            const pad = 6; // Padding between labels
+            const pad = 6;
             for (const r of occupiedRects) {
-                if (x < r.x + r.w + pad && x + w + pad > r.x &&
-                    y < r.y + r.h + pad && y + h + pad > r.y) return true;
+                if (x < r.x + r.w + pad && x + w + pad > r.x && y < r.y + r.h + pad && y + h + pad > r.y) return true;
             }
             return false;
         };
 
         ctx.save();
-        // Reset transform to screen space for easier collision and sharp text
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -371,93 +706,57 @@ export class Interface {
             const metrics = ctx.measureText(text);
             const textW = metrics.width;
             const textH = parseInt(font) || 12;
-
             const lx = sx - textW / 2;
             const ly = sy - textH / 2;
-
             if (checkCollision(lx, ly, textW, textH)) return false;
-
-            // Very subtle halo (soft glow)
             ctx.strokeStyle = haloColor;
             ctx.lineWidth = haloWidth;
             ctx.lineJoin = 'round';
             ctx.strokeText(text, sx, sy);
-
-            // Draw text
             ctx.fillStyle = color;
             ctx.fillText(text, sx, sy);
-
             occupiedRects.push({ x: lx, y: ly, w: textW, h: textH });
             return true;
         };
 
-        // 1. Render Nation Names (Area-based scaling)
         if (scale > 0.3) {
             const nationAlpha = Math.min(1.0, (scale - 0.25) * 4);
-
-            // Sort nations by size to prioritize larger ones in collision detection
-            const sortedNations = [...world.nations].sort((a, b) =>
-                (this.nationSizes[b.id] || 0) - (this.nationSizes[a.id] || 0)
-            );
+            const sortedNations = [...world.nations].sort((a, b) => (this.nationSizes[b.id] || 0) - (this.nationSizes[a.id] || 0));
 
             for (const nation of sortedNations) {
                 const sizeFactor = this.nationSizes[nation.id] || 0.5;
-                // Area-based font size: nations with more territory get larger labels
                 const baseSize = 9 + sizeFactor * 10;
                 const fontSize = Math.max(9, Math.floor(baseSize * Math.sqrt(scale)));
                 const font = `bold ${fontSize}px system-ui, -apple-system, sans-serif`;
                 const labelColor = `rgba(35, 35, 40, ${nationAlpha * 0.9})`;
-
                 const centroid = this.nationCentroids[nation.id] || { x: nation.capitalX, y: nation.capitalY };
-
                 for (let copy = startCopy; copy <= endCopy; copy++) {
                     const sx = (centroid.x + copy * world.width) * scale + offsetX;
                     const sy = centroid.y * scale + offsetY;
-
                     if (sx < -200 || sx > width + 200 || sy < -100 || sy > height + 100) continue;
-
-                    // Subtle tracking for medium/large nations
-                    const tracking = sizeFactor > 0.5 ? ' ' : '';
-                    const spacedName = nation.name.toUpperCase().split('').join(tracking);
+                    const spacedName = nation.name.toUpperCase().split('').join(sizeFactor > 0.5 ? ' ' : '');
                     drawLabelWithHalo(spacedName, sx, sy, font, labelColor, `rgba(255, 255, 255, ${0.4 * nationAlpha})`, 4);
                 }
             }
         }
 
-        // 2. Render City Names (Higher priority for larger cities)
         if (scale > 0.8 && !isInteracting) {
             const cityAlpha = Math.min(1.0, (scale - 0.8) * 2.5);
-            const capitalFont = `bold 12px system-ui, sans-serif`;
-            const cityFont = `500 11px system-ui, sans-serif`;
-
-            const sortedCities = [...world.cities].sort((a, b) => {
-                if (a.isCapital && !b.isCapital) return -1;
-                if (!a.isCapital && b.isCapital) return 1;
-                return b.size - a.size;
-            });
+            const sortedCities = [...world.cities].sort((a, b) => (a.isCapital === b.isCapital) ? (b.size - a.size) : (a.isCapital ? -1 : 1));
 
             for (const city of sortedCities) {
-                let visible = false;
-                if (city.isCapital) visible = true;
-                if (city.size >= 1 && scale > 1.4) visible = true;
-                if (city.size === 0 && scale > 2.5) visible = true;
-
+                let visible = city.isCapital || (city.size >= 1 && scale > 1.4) || (city.size === 0 && scale > 2.5);
                 if (!visible) continue;
-
-                const font = city.isCapital ? capitalFont : cityFont;
+                const font = city.isCapital ? `bold 12px system-ui, sans-serif` : `500 11px system-ui, sans-serif`;
                 const labelColor = `rgba(45, 45, 50, ${cityAlpha * 0.85})`;
-
                 for (let copy = startCopy; copy <= endCopy; copy++) {
                     const sx = (city.x + copy * world.width) * scale + offsetX;
                     const sy = city.y * scale + offsetY + (city.isCapital ? 12 : 9);
-
                     if (sx < -100 || sx > width + 100 || sy < -50 || sy > height + 50) continue;
-
                     drawLabelWithHalo(city.name, sx, sy, font, labelColor, `rgba(255, 255, 255, ${0.3 * cityAlpha})`, 2.5);
                 }
             }
         }
-
         ctx.restore();
     }
 
@@ -467,32 +766,31 @@ export class Interface {
         const rect = cm.canvas.getBoundingClientRect();
         const sx = clientX - rect.left;
         const sy = clientY - rect.top;
-
         const wx = Math.round((sx - cm.offsetX) / cm.scale);
         const wy = Math.round((sy - cm.offsetY) / cm.scale);
-
         const x = ((wx % world.width) + world.width) % world.width;
-        const y = wy;
-
         let newHovered = -1;
-        if (y >= 0 && y < world.height) {
-            const cell = world.grid[x][y];
-            if (!cell.isWater && cell.nationIndex !== undefined && cell.nationIndex >= 0) {
-                newHovered = cell.nationIndex;
-            }
+        if (wy >= 0 && wy < world.height) {
+            const cell = world.grid[x][wy];
+            if (!cell.isWater && cell.nationIndex !== undefined && cell.nationIndex >= 0) newHovered = cell.nationIndex;
         }
 
         if (newHovered !== this.hoveredNationIndex) {
             const prev = this.hoveredNationIndex;
             this.hoveredNationIndex = newHovered;
-            // Patch only the changed nations into the cache — no full re-render
             this.applyHoverToCache(newHovered, prev);
             this.canvasManager.scheduleRender();
+
+            // Sync with list
+            document.querySelectorAll('.nation-item').forEach(el => el.classList.remove('hovered'));
+            if (newHovered !== -1) {
+                const item = document.querySelector(`.nation-item[data-index="${newHovered}"]`);
+                item?.classList.add('hovered');
+            }
         }
 
-        if (newHovered >= 0 && newHovered < world.nations.length) {
+        if (newHovered >= 0) {
             const nation = world.nations[newHovered];
-            // Find nearest city of this nation to cursor (in world space)
             let nearestCity = null;
             let nearestDist = Infinity;
             for (const city of world.cities) {
@@ -502,26 +800,20 @@ export class Interface {
                 const dist = Math.hypot(dx, wy - city.y);
                 if (dist < nearestDist) { nearestDist = dist; nearestCity = city; }
             }
-            const cityThreshold = 10 / cm.scale; // ~10 screen pixels
-            if (nearestCity && nearestDist < cityThreshold) {
-                const typeLabel = nearestCity.isCapital ? '♦ Capital' : nearestCity.size === 1 ? '● Town' : '· Village';
-                this.showTooltip(clientX, clientY, nearestCity.name, `${typeLabel} · ${nation.name}`);
+            if (nearestCity && nearestDist < 10 / cm.scale) {
+                this.showTooltip(clientX, clientY, nearestCity.name, `${nearestCity.isCapital ? '♦ Capital' : (nearestCity.size === 1 ? '● Town' : '· Village')} · ${nation.name}`);
             } else {
-                const cityCount = world.cities.filter(c => c.nationIndex === newHovered && !c.isCapital).length;
-                this.showTooltip(clientX, clientY, nation.name, `${cityCount} cities`);
+                this.showTooltip(clientX, clientY, nation.name, `${world.cities.filter(c => c.nationIndex === newHovered && !c.isCapital).length} cities`);
             }
         } else {
             this.hideTooltip();
         }
-
     }
 
     private buildNationsCache() {
         const world = this.generator.getWorld();
         const W = world.width;
         const H = world.height;
-
-        // Build per-nation flat cell indices and calculate centroids/sizes
         this.nationCellsList = world.nations.map(() => []);
         this.nationCentroids = world.nations.map(() => ({ x: 0, y: 0 }));
         this.nationSizes = world.nations.map(() => 0);
@@ -537,7 +829,6 @@ export class Interface {
             }
         }
 
-        // Finalize statistics
         let maxArea = 0;
         for (let i = 0; i < world.nations.length; i++) {
             const area = this.nationCellsList[i].length;
@@ -549,15 +840,9 @@ export class Interface {
                 this.nationCentroids[i].x = world.nations[i].capitalX;
                 this.nationCentroids[i].y = world.nations[i].capitalY;
             }
-        }
-
-        // Calculate relative sizes for font scaling (0 to 1)
-        for (let i = 0; i < world.nations.length; i++) {
-            const area = this.nationCellsList[i].length;
             this.nationSizes[i] = maxArea > 0 ? Math.sqrt(area / maxArea) : 0.5;
         }
 
-        // Render base (resting, no hover) into ImageData at map resolution
         const id = new ImageData(W, H);
         const data = id.data;
         const ncCache = world.nations.map(n => this.hexToRgb(n.color));
@@ -566,80 +851,49 @@ export class Interface {
             for (let y = 0; y < H; y++) {
                 const cell = world.grid[x][y];
                 const base = this.hexToRgb(BIOME_COLORS[cell.biome]);
-                let r = Math.floor(base[0] * 0.45);
-                let g = Math.floor(base[1] * 0.45);
-                let b = Math.floor(base[2] * 0.45);
-
+                let r = Math.floor(base[0] * 0.45), g = Math.floor(base[1] * 0.45), b = Math.floor(base[2] * 0.45);
                 const nIdx = cell.nationIndex ?? -1;
                 if (nIdx >= 0 && nIdx < world.nations.length) {
                     const nc = ncCache[nIdx];
                     if (cell.isNationBorder) {
-                        r = Math.floor(nc[0] * 0.75);
-                        g = Math.floor(nc[1] * 0.75);
-                        b = Math.floor(nc[2] * 0.75);
+                        r = Math.floor(nc[0] * 0.75); g = Math.floor(nc[1] * 0.75); b = Math.floor(nc[2] * 0.75);
                     } else {
-                        r = Math.floor(r * 0.86 + nc[0] * 0.14);
-                        g = Math.floor(g * 0.86 + nc[1] * 0.14);
-                        b = Math.floor(b * 0.86 + nc[2] * 0.14);
+                        r = Math.floor(r * 0.86 + nc[0] * 0.14); g = Math.floor(g * 0.86 + nc[1] * 0.14); b = Math.floor(b * 0.86 + nc[2] * 0.14);
                     }
                 }
-
                 const i = (y * W + x) * 4;
                 data[i] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = 255;
             }
         }
-
         this.nationsBaseData = new Uint8ClampedArray(data);
         this.nationsActiveData = new Uint8ClampedArray(data);
-
         const canvas = document.createElement('canvas');
-        canvas.width = W;
-        canvas.height = H;
+        canvas.width = W; canvas.height = H;
         canvas.getContext('2d')!.putImageData(id, 0, 0);
         this.nationsCanvas = canvas;
     }
 
-    /** Restore old nation's pixels to base, brighten new nation's pixels. O(nation_cells) only. */
     private applyHoverToCache(newIdx: number, oldIdx: number = -1) {
         if (!this.nationsCanvas || !this.nationsBaseData || !this.nationsActiveData) return;
-        const world = this.generator.getWorld();
-        const W = world.width;
-        const ctx = this.nationsCanvas.getContext('2d')!;
+        const world = this.generator.getWorld(), W = world.width;
+        const active = this.nationsActiveData, base = this.nationsBaseData;
 
-        const restoreIds = oldIdx >= 0 ? this.nationCellsList[oldIdx] ?? [] : [];
-        const highlightIds = newIdx >= 0 ? this.nationCellsList[newIdx] ?? [] : [];
-
-        // Work on active buffer
-        const active = this.nationsActiveData;
-        const base = this.nationsBaseData;
-
-        // Restore previous hovered nation back to base
-        for (const flatIdx of restoreIds) {
-            const i = flatIdx * 4;
-            active[i] = base[i]; active[i + 1] = base[i + 1]; active[i + 2] = base[i + 2];
-        }
-
-        // Apply bright highlight to new hovered nation
-        if (newIdx >= 0 && newIdx < world.nations.length) {
-            const nc = this.hexToRgb(world.nations[newIdx].color);
-            for (const flatIdx of highlightIds) {
-                const x = flatIdx % W;
-                const y = Math.floor(flatIdx / W);
-                const cell = world.grid[x][y];
+        if (oldIdx >= 0) {
+            for (const flatIdx of this.nationCellsList[oldIdx] || []) {
                 const i = flatIdx * 4;
-                if (cell.isNationBorder) {
-                    active[i] = nc[0]; active[i + 1] = nc[1]; active[i + 2] = nc[2];
-                } else {
-                    // Brighter fill blend compared to base 14%
-                    active[i] = Math.floor(base[i] * 0.62 + nc[0] * 0.38);
-                    active[i + 1] = Math.floor(base[i + 1] * 0.62 + nc[1] * 0.38);
-                    active[i + 2] = Math.floor(base[i + 2] * 0.62 + nc[2] * 0.38);
-                }
+                active[i] = base[i]; active[i + 1] = base[i + 1]; active[i + 2] = base[i + 2];
             }
         }
-
-        // Push changes to the offscreen canvas
-        ctx.putImageData(new ImageData(new Uint8ClampedArray(active), W, world.height), 0, 0);
+        if (newIdx >= 0 && newIdx < world.nations.length) {
+            const nc = this.hexToRgb(world.nations[newIdx].color);
+            for (const flatIdx of this.nationCellsList[newIdx] || []) {
+                const cell = world.grid[flatIdx % W][Math.floor(flatIdx / W)];
+                const i = flatIdx * 4;
+                if (cell.isNationBorder) { active[i] = nc[0]; active[i + 1] = nc[1]; active[i + 2] = nc[2]; }
+                else { active[i] = Math.floor(base[i] * 0.62 + nc[0] * 0.38); active[i + 1] = Math.floor(base[i + 1] * 0.62 + nc[1] * 0.38); active[i + 2] = Math.floor(base[i + 2] * 0.62 + nc[2] * 0.38); }
+            }
+        }
+        this.nationsCanvas.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(active), W, world.height), 0, 0);
     }
 
     private showTooltip(x: number, y: number, name: string, detail: string) {
@@ -647,29 +901,22 @@ export class Interface {
         if (!tooltip) return;
         (tooltip.querySelector('.tooltip-name') as HTMLElement).textContent = name;
         (tooltip.querySelector('.tooltip-detail') as HTMLElement).textContent = detail;
-        tooltip.style.display = 'block';
-        tooltip.style.left = `${x + 16}px`;
-        tooltip.style.top = `${y + 16}px`;
+        tooltip.style.display = 'block'; tooltip.style.left = `${x + 16}px`; tooltip.style.top = `${y + 16}px`;
     }
 
     private hideTooltip() {
         const tooltip = document.getElementById('nation-tooltip');
         if (tooltip) tooltip.style.display = 'none';
     }
+
     private hexToRgb(hex: string): number[] {
         const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-        return result ? [
-            parseInt(result[1], 16),
-            parseInt(result[2], 16),
-            parseInt(result[3], 16)
-        ] : [0, 0, 0];
+        return result ? [parseInt(result[1], 16), parseInt(result[2], 16), parseInt(result[3], 16)] : [0, 0, 0];
     }
+
     private showLoadingModal() {
         const modal = document.getElementById('loading-modal');
-        if (modal) {
-            modal.style.display = 'flex';
-            this.updateLoadingModal(0);
-        }
+        if (modal) { modal.style.display = 'flex'; this.updateLoadingModal(0); }
     }
 
     private hideLoadingModal() {
@@ -680,14 +927,11 @@ export class Interface {
     private updateLoadingModal(pct: number) {
         const modal = document.getElementById('loading-modal');
         if (!modal) return;
-
         const fill = modal.querySelector('.loader-progress-fill') as HTMLElement;
         const text = modal.querySelector('.loader-percentage') as HTMLElement;
         const subtext = modal.querySelector('.loader-subtext') as HTMLElement;
-
         if (fill) fill.style.width = `${pct}%`;
         if (text) text.textContent = `${pct}%`;
-
         if (subtext) {
             if (pct < 20) subtext.textContent = "Adding mountains and valleys...";
             else if (pct < 40) subtext.textContent = "Determining rainfall patterns...";
@@ -695,6 +939,35 @@ export class Interface {
             else if (pct < 80) subtext.textContent = "Generating river systems...";
             else if (pct < 95) subtext.textContent = "Establishing national borders...";
             else subtext.textContent = "Founding cities and capitals...";
+        }
+    }
+
+    private updateNationStatistics() {
+        const world = this.generator.getWorld();
+        const W = world.width;
+
+        let maxArea = 0;
+        for (let i = 0; i < world.nations.length; i++) {
+            const cells = this.nationCellsList[i];
+            const area = cells.length;
+            if (area > maxArea) maxArea = area;
+
+            if (area > 0) {
+                let sumX = 0;
+                let sumY = 0;
+                for (const flatIdx of cells) {
+                    sumX += (flatIdx % W);
+                    sumY += Math.floor(flatIdx / W);
+                }
+                this.nationCentroids[i] = { x: sumX / area, y: sumY / area };
+            } else {
+                this.nationCentroids[i] = { x: world.nations[i].capitalX, y: world.nations[i].capitalY };
+            }
+        }
+
+        for (let i = 0; i < world.nations.length; i++) {
+            const area = this.nationCellsList[i].length;
+            this.nationSizes[i] = maxArea > 0 ? Math.sqrt(area / maxArea) : 0.5;
         }
     }
 }

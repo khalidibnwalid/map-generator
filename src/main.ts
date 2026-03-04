@@ -16,49 +16,76 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <button id="toggle-panel" class="toggle-btn" title="Toggle Panel">[-]</button>
     </div>
     
+    <div class="panel-tabs">
+      <button id="tab-generate" class="tab-btn active">GENERATE</button>
+      <button id="tab-nations" class="tab-btn">NATIONS</button>
+    </div>
+
     <div id="panel-content" class="panel-content">
-      <div class="control-group">
-      <label for="preset">[PARAM] PRESET</label>
-      <div class="select-wrapper">
-        <select id="preset">
-          <option value="Heavy Landmass">Heavy Landmass</option>
-          <option value="Realistic Continents">Realistic Continents</option>
-          <option value="Mediterranean Archipelago">Mediterranean Archipelago</option>
-          <option value="Pangea">Pangea</option>
-        </select>
+      <!-- Generate Tab -->
+      <div id="content-generate" class="tab-content active">
+        <div class="control-group">
+          <label for="preset">[PARAM] PRESET</label>
+          <div class="select-wrapper">
+            <select id="preset">
+              <option value="Heavy Landmass">Heavy Landmass</option>
+              <option value="Realistic Continents">Realistic Continents</option>
+              <option value="Mediterranean Archipelago">Mediterranean Archipelago</option>
+              <option value="Pangea">Pangea</option>
+            </select>
+          </div>
+        </div>
+        
+        <div class="control-group">
+          <label for="size">[PARAM] SIZE</label>
+          <div class="select-wrapper">
+            <select id="size">
+              <option value="400x225">Small (400x225)</option>
+              <option value="800x450" selected>Medium (800x450)</option>
+              <option value="1600x900">Large (1600x900)</option>
+              <option value="3200x1800">Epic (3200x1800)</option>
+            </select>
+          </div>
+        </div>
+        
+        <div class="control-group">
+          <label>[PARAM] SEED</label>
+          <div class="input-row">
+            <input type="number" id="seed" value="123456" />
+            <button id="generate" class="btn-primary">GENERATE</button>
+          </div>
+        </div>
+        
+        <div class="control-group layers-group">
+          <label>[VIEW] LAYERS [■■■■]</label>
+          <div class="layers">
+            <button id="layer-biomes" class="layer-btn active">BIOMES</button>
+            <button id="layer-elevation" class="layer-btn">ELEVATION</button>
+            <button id="layer-heatmap" class="layer-btn">HEATMAP</button>
+            <button id="layer-moisture" class="layer-btn">MOISTURE</button>
+            <button id="layer-nations" class="layer-btn layer-btn--full">NATIONS</button>
+          </div>
+        </div>
       </div>
-    </div>
-    
-    <div class="control-group">
-      <label for="size">[PARAM] SIZE</label>
-      <div class="select-wrapper">
-        <select id="size">
-          <option value="400x225">Small (400x225)</option>
-          <option value="800x450" selected>Medium (800x450)</option>
-          <option value="1600x900">Large (1600x900)</option>
-          <option value="3200x1800">Epic (3200x1800)</option>
-        </select>
+
+      <!-- Nations Tab -->
+      <div id="content-nations" class="tab-content">
+        <div class="edit-mode-controls">
+          <button id="btn-edit-nations" class="btn-icon" title="Toggle Edit Mode">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+              <path d="M20.71,7.04C21.1,6.65 21.1,6 20.71,5.63L18.37,3.29C18,2.9 17.35,2.9 16.96,3.29L15.12,5.12L18.87,8.87M3,17.25V21H6.75L17.81,9.93L14.06,6.18L3,17.25Z" />
+            </svg>
+          </button>
+          <div class="brush-size-control">
+            <span class="brush-label-overlay">BRUSH</span>
+            <input type="range" id="brush-size" min="1" max="10" value="2">
+            <span id="brush-size-value" class="brush-value-overlay">2</span>
+          </div>
+        </div>
+        <div id="nations-list" class="nations-list">
+          <!-- Dynamically populated -->
+        </div>
       </div>
-    </div>
-    
-    <div class="control-group">
-      <label>[PARAM] SEED</label>
-      <div class="input-row">
-        <input type="number" id="seed" value="123456" />
-        <button id="generate" class="btn-primary">GENERATE</button>
-      </div>
-    </div>
-    
-    <div class="control-group layers-group">
-      <label>[VIEW] LAYERS [■■■■]</label>
-      <div class="layers">
-        <button id="layer-biomes" class="layer-btn active">BIOMES</button>
-        <button id="layer-elevation" class="layer-btn">ELEVATION</button>
-        <button id="layer-heatmap" class="layer-btn">HEATMAP</button>
-        <button id="layer-moisture" class="layer-btn">MOISTURE</button>
-        <button id="layer-nations" class="layer-btn layer-btn--full">NATIONS</button>
-      </div>
-    </div>
     </div>
   </div>
   <canvas id="mapCanvas"></canvas>

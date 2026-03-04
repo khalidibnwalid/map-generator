@@ -6,6 +6,7 @@ export class CanvasManager {
     public offsetX: number = 0;
     public offsetY: number = 0;
 
+    public panningLocked: boolean = false;
     private isDragging: boolean = false;
     private lastX: number = 0;
     private lastY: number = 0;
@@ -36,6 +37,9 @@ export class CanvasManager {
     }
 
     private setupEvents() {
+        // Prevent context menu to allow right-click panning
+        this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
         this.canvas.addEventListener('wheel', (e) => {
             const zoomSensitivity = 0.001;
             const wheelDelta = e.deltaY;
@@ -53,6 +57,9 @@ export class CanvasManager {
         });
 
         this.canvas.addEventListener('mousedown', (e) => {
+            // allowing right-click (2) or middle-click (1) to pan even if locked
+            if (this.panningLocked && e.button === 0) return;
+
             this.isDragging = true;
             this.lastX = e.clientX;
             this.lastY = e.clientY;
@@ -62,7 +69,7 @@ export class CanvasManager {
 
         window.addEventListener('mouseup', () => {
             this.isDragging = false;
-            this.canvas.style.cursor = 'grab';
+            this.canvas.style.cursor = this.panningLocked ? 'default' : 'grab';
             this.scheduleHighResRender();
         });
 
