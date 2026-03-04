@@ -11,7 +11,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
     <div class="tech-corner bottom-right"></div>
     <div class="panel-header">
       <span class="header-icon">⬡</span>
-      <h1>SYSTEM CONFIG</h1>
+      <h1>MAP</h1>
       <span class="header-line"></span>
       <button id="toggle-panel" class="toggle-btn" title="Toggle Panel">[-]</button>
     </div>
@@ -45,7 +45,7 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
       <label>[PARAM] SEED</label>
       <div class="input-row">
         <input type="number" id="seed" value="123456" />
-        <button id="generate" class="btn-primary">INITIATE //></button>
+        <button id="generate" class="btn-primary">GENERATE</button>
       </div>
     </div>
     

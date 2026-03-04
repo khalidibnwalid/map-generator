@@ -1,7 +1,8 @@
 import { MapGenerator } from '../game/MapGenerator';
 import type { Preset } from '../game/MapGenerator';
-import { WorldData, BIOME_COLORS } from '../game/WorldData';
+import { BIOME_COLORS } from '../game/WorldData';
 import { CanvasManager } from '../core/CanvasManager';
+import { GPURenderer } from '../core/GPURenderer';
 
 export type ViewLayer = 'Biomes' | 'Elevation' | 'Heatmap' | 'Moisture' | 'Nations';
 
@@ -15,11 +16,33 @@ export class Interface {
     private nationsBaseData: Uint8ClampedArray | null = null;
     private nationsActiveData: Uint8ClampedArray | null = null;
     private nationCellsList: number[][] = [];
+    private nationCentroids: { x: number, y: number }[] = [];
+    private nationSizes: number[] = []; // Relative size (0 to 1) 
     private nationsStateDirty: boolean = true; // rebuilt on next Nations render
+
+    // GPU rendering
+    private gpuRenderer!: GPURenderer;
+    private gpuCanvas: HTMLCanvasElement;
 
     constructor(generator: MapGenerator, canvasManager: CanvasManager) {
         this.generator = generator;
         this.canvasManager = canvasManager;
+
+        // Initialize GPU Renderer with an offscreen canvas
+        this.gpuCanvas = document.createElement('canvas');
+        try {
+            this.gpuRenderer = new GPURenderer(this.gpuCanvas);
+            // Initial generation so we don't start with an empty ocean
+            console.log("Starting initial generation...");
+            this.generator.generate();
+            const world = this.generator.getWorld();
+            console.log("Initial generation complete. Sample elevation at 10,10:", world.grid[10][10]?.elevation);
+
+            this.gpuRenderer.updateWorldTexture(world);
+            console.log("GPURenderer initialized and texture updated");
+        } catch (e) {
+            console.error("Failed to initialize GPURenderer:", e);
+        }
 
         this.setupUI();
         this.canvasManager.onRender = this.renderMap.bind(this);
@@ -103,6 +126,9 @@ export class Interface {
             }
 
             this.generator.generate();
+            const world = this.generator.getWorld();
+            console.log("Generation complete. Sample elevation:", world.grid[10][10]?.elevation);
+            this.gpuRenderer.updateWorldTexture(world);
             this.nationsStateDirty = true;
             this.hoveredNationIndex = -1;
             this.canvasManager.scheduleRender();
@@ -112,7 +138,7 @@ export class Interface {
     private renderMap(ctx: CanvasRenderingContext2D, width: number, height: number, scale: number, offsetX: number, offsetY: number, isInteracting: boolean) {
         const world = this.generator.getWorld();
 
-        // Enforce zoom and pan limits to prevent viewing the background void vertically
+        // Enforce zoom and pan limits
         const minScale = height / world.height;
         if (this.canvasManager.scale < minScale) {
             this.canvasManager.scale = minScale;
@@ -128,128 +154,42 @@ export class Interface {
             offsetY = height - mapPixelHeight;
         }
 
-        // Dynamic resolution: When user is interacting (panning/zooming), we render at a lower resolution (step > 1)
-        // to keep framerates perfectly smooth. Once they stop, we render full 1:1 sharp resolution.
-        const step = isInteracting ? 3 : 1;
-        const renderWidth = Math.ceil(width / step);
-        const renderHeight = Math.ceil(height / step);
+        // --- GPU RENDER PHASE ---
+        const layerMap: Record<ViewLayer, number> = {
+            'Biomes': 0,
+            'Elevation': 1,
+            'Heatmap': 2,
+            'Moisture': 3,
+            'Nations': 0 // Nations handled by cached canvas blit below
+        };
 
-        // Render to offscreen image data of size width/step x height/step
-        const id = ctx.createImageData(renderWidth, renderHeight);
-        const data = id.data;
-
-        const invScale = 1 / scale;
-
-        // Calculate exact screen bounds that map to the physical world map
-        // Enable continuous East/West wrapping by rendering the full screen width and wrapping array coordinates
-        const minSx = 0;
-        const maxSx = width;
-        const minSy = Math.max(0, Math.floor(offsetY));
-        const maxSy = Math.min(height, Math.ceil((world.height - 2) * scale + offsetY));
-
-        const minRx = Math.floor(minSx / step);
-        const maxRx = Math.ceil(maxSx / step);
-        const minRy = Math.floor(minSy / step);
-        const maxRy = Math.ceil(maxSy / step);
-
-        // Pre-fill everything with ambient Ocean color (matches BIOME_COLORS[BiomeType.OCEAN] #1C3E5A -> 28, 62, 90)
-        for (let i = 0; i < data.length; i += 4) {
-            data[i] = 28;     // R
-            data[i + 1] = 62;   // G
-            data[i + 2] = 90;   // B
-            data[i + 3] = 255;  // A
-        }
-
-
-        for (let ry = minRy; ry < maxRy; ry++) {
-            for (let rx = minRx; rx < maxRx; rx++) {
-                const sx = rx * step;
-                const sy = ry * step;
-
-                // Map screen pixel (sx, sy) to world coordinate (wx, wy)
-                const wx = (sx - offsetX) * invScale;
-                const wy = (sy - offsetY) * invScale;
-
-                // Bilinear interpolation
-                const rawX0 = Math.floor(wx);
-                let x0 = rawX0;
-                let x1 = rawX0 + 1;
-                const y0 = Math.floor(wy);
-                const y1 = y0 + 1;
-
-                // Wrap X coordinates infinitely for our seamless cylinder
-                x0 = ((x0 % world.width) + world.width) % world.width;
-                x1 = ((x1 % world.width) + world.width) % world.width;
-
-                if (y0 < 0 || y1 >= world.height) continue;
-
-                const tx = wx - rawX0;
-                const ty = wy - y0;
-                const oneMinusTx = 1 - tx;
-                const oneMinusTy = 1 - ty;
-
-                const c00 = world.grid[x0][y0];
-                const c10 = world.grid[x1][y0];
-                const c01 = world.grid[x0][y1];
-                const c11 = world.grid[x1][y1];
-
-                const e0 = c00.elevation * oneMinusTx + c10.elevation * tx;
-                const e1 = c01.elevation * oneMinusTx + c11.elevation * tx;
-                const elevation = e0 * oneMinusTy + e1 * ty;
-
-                let color = [0, 0, 0];
-
-                if (this.currentLayer === 'Biomes') {
-                    const m0 = c00.moisture * oneMinusTx + c10.moisture * tx;
-                    const m1 = c01.moisture * oneMinusTx + c11.moisture * tx;
-                    const moisture = m0 * oneMinusTy + m1 * ty;
-
-                    const t0 = c00.temperature * oneMinusTx + c10.temperature * tx;
-                    const t1 = c01.temperature * oneMinusTx + c11.temperature * tx;
-                    const temperature = t0 * oneMinusTy + t1 * ty;
-
-                    const biome = WorldData.getBiome(elevation, temperature, moisture);
-                    color = this.hexToRgb(BIOME_COLORS[biome]);
-                } else if (this.currentLayer === 'Elevation') {
-                    const isWater = elevation < 0.45;
-                    const v = Math.floor(elevation * 255);
-                    color = isWater ? [0, 0, v] : [v, v, v];
-                } else if (this.currentLayer === 'Heatmap') {
-                    const t0 = c00.temperature * oneMinusTx + c10.temperature * tx;
-                    const t1 = c01.temperature * oneMinusTx + c11.temperature * tx;
-                    const temperature = t0 * oneMinusTy + t1 * ty;
-                    const v = Math.floor(temperature * 255);
-                    color = [v, 0, 255 - v];
-                } else if (this.currentLayer === 'Moisture') {
-                    const m0 = c00.moisture * oneMinusTx + c10.moisture * tx;
-                    const m1 = c01.moisture * oneMinusTx + c11.moisture * tx;
-                    const moisture = m0 * oneMinusTy + m1 * ty;
-                    const v = Math.floor(moisture * 255);
-                    color = [255 - v, 255 - v, v];
-                } else if (this.currentLayer === 'Nations') {
-                    // Nations layer uses cached canvas — skip pixel loop entry
-                    // (handled by drawImage below; set transparent so we don't paint over it)
-                    data[(ry * renderWidth + rx) * 4 + 3] = 0;
-                    continue;
-                }
-
-                const index = (ry * renderWidth + rx) * 4;
-                data[index] = color[0];
-                data[index + 1] = color[1];
-                data[index + 2] = color[2];
-                data[index + 3] = 255;
+        if (this.currentLayer !== 'Nations') {
+            // Resize GPU canvas to match viewport if needed
+            if (this.gpuCanvas.width !== width || this.gpuCanvas.height !== height) {
+                this.gpuCanvas.width = width;
+                this.gpuCanvas.height = height;
             }
+
+            this.gpuRenderer.render(
+                width, height,
+                world.width, world.height,
+                scale, offsetX, offsetY,
+                layerMap[this.currentLayer]
+            );
+
+            // Draw GPU output to main 2D context
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.drawImage(this.gpuCanvas, 0, 0);
+        } else {
+            // Pre-fill everything with ambient Ocean color for Nations layer
+            ctx.fillStyle = '#1C3E5A';
+            ctx.fillRect(0, 0, width, height);
         }
 
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = renderWidth;
-        tempCanvas.height = renderHeight;
-        tempCanvas.getContext('2d')?.putImageData(id, 0, 0);
+        // --- OVERLAY PHASE (Nations, Rivers, Cities, Labels) ---
 
-        // Draw and scale the offscreen canvas to the main context
-        ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(tempCanvas, 0, 0, width, height);
+
+        // End Overlay Phase 
 
         // For Nations layer: blit the pre-rendered cached canvas on top
         if (this.currentLayer === 'Nations') {
@@ -342,47 +282,30 @@ export class Interface {
                     const cx = city.x + copy * world.width;
                     const cy = city.y;
 
-                    if (city.isCapital) {
-                        // Capital: diamond shape + outer glow ring
-                        const s = isHovered ? 4.5 : 3.2;
-                        ctx.save();
-                        ctx.translate(cx, cy);
-                        ctx.rotate(Math.PI / 4);
-                        ctx.strokeStyle = colorStr;
-                        ctx.lineWidth = (isHovered ? 1.2 : 0.8) / scale;
-                        ctx.strokeRect(-s / 2, -s / 2, s, s);
-                        ctx.fillStyle = colorStr;
-                        ctx.globalAlpha = isHovered ? 0.6 : 0.35;
-                        ctx.fillRect(-s / 2, -s / 2, s, s);
-                        ctx.globalAlpha = isHovered ? 1.0 : 0.85;
-                        ctx.restore();
+                    // Base dots: Dark gray/black with a white halo for high contrast
+                    const isCapital = city.isCapital;
+                    const radius = isCapital ? 3.8 : (city.size === 1 ? 2.5 : 1.5);
+                    const dotColor = '#1a1a1c';
+                    const haloColor = 'rgba(255, 255, 255, 0.9)';
+                    const highlightColor = colorStr;
 
-                        // Outer ring
-                        ctx.beginPath();
-                        ctx.arc(cx, cy, isHovered ? 6 : 4.5, 0, Math.PI * 2);
-                        ctx.strokeStyle = colorStr;
-                        ctx.lineWidth = (isHovered ? 1 : 0.6) / scale;
-                        ctx.globalAlpha = isHovered ? 0.7 : 0.45;
-                        ctx.stroke();
-                        ctx.globalAlpha = isHovered ? 1.0 : 0.85;
+                    // 1. Draw Halo (White outline for visibility on any background)
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, radius + 0.6 / scale, 0, Math.PI * 2);
+                    ctx.fillStyle = haloColor;
+                    ctx.fill();
 
-                    } else if (city.size === 1) {
-                        // Town: circle with fill
-                        ctx.beginPath();
-                        ctx.arc(cx, cy, isHovered ? 2.8 : 2, 0, Math.PI * 2);
-                        ctx.strokeStyle = colorStr;
-                        ctx.lineWidth = (isHovered ? 1 : 0.7) / scale;
-                        ctx.stroke();
-                        ctx.fillStyle = colorStr;
-                        ctx.globalAlpha = isHovered ? 0.5 : 0.25;
-                        ctx.fill();
-                        ctx.globalAlpha = isHovered ? 1.0 : 0.65;
+                    // 2. Draw Main Dot
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+                    ctx.fillStyle = isHovered ? highlightColor : dotColor;
+                    ctx.fill();
 
-                    } else {
-                        // Village: small dot
+                    // 3. Optional inner detail for Capital
+                    if (isCapital) {
                         ctx.beginPath();
-                        ctx.arc(cx, cy, isHovered ? 1.8 : 1.2, 0, Math.PI * 2);
-                        ctx.fillStyle = colorStr;
+                        ctx.arc(cx, cy, radius * 0.45, 0, Math.PI * 2);
+                        ctx.fillStyle = isHovered ? '#FFF' : 'rgba(255,255,255,0.2)';
                         ctx.fill();
                     }
                 }
@@ -392,6 +315,126 @@ export class Interface {
             ctx.restore();
         }
 
+        // Render Labels (Nations, Cities)
+        this.renderLabels(ctx, width, height, scale, offsetX, offsetY, isInteracting);
+    }
+
+    private renderLabels(ctx: CanvasRenderingContext2D, width: number, height: number, scale: number, offsetX: number, offsetY: number, isInteracting: boolean) {
+        const world = this.generator.getWorld();
+        const mapPixelWidth = world.width * scale;
+        const startCopy = Math.floor(-offsetX / mapPixelWidth);
+        const endCopy = Math.ceil((width - offsetX) / mapPixelWidth);
+
+        // Simple collision detection: track occupied regions
+        const occupiedRects: { x: number, y: number, w: number, h: number }[] = [];
+        const checkCollision = (x: number, y: number, w: number, h: number) => {
+            const pad = 6; // Padding between labels
+            for (const r of occupiedRects) {
+                if (x < r.x + r.w + pad && x + w + pad > r.x &&
+                    y < r.y + r.h + pad && y + h + pad > r.y) return true;
+            }
+            return false;
+        };
+
+        ctx.save();
+        // Reset transform to screen space for easier collision and sharp text
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+
+        const drawLabelWithHalo = (text: string, sx: number, sy: number, font: string, color: string, haloColor: string = 'rgba(255,255,255,0.45)', haloWidth: number = 3) => {
+            ctx.font = font;
+            const metrics = ctx.measureText(text);
+            const textW = metrics.width;
+            const textH = parseInt(font) || 12;
+
+            const lx = sx - textW / 2;
+            const ly = sy - textH / 2;
+
+            if (checkCollision(lx, ly, textW, textH)) return false;
+
+            // Very subtle halo (soft glow)
+            ctx.strokeStyle = haloColor;
+            ctx.lineWidth = haloWidth;
+            ctx.lineJoin = 'round';
+            ctx.strokeText(text, sx, sy);
+
+            // Draw text
+            ctx.fillStyle = color;
+            ctx.fillText(text, sx, sy);
+
+            occupiedRects.push({ x: lx, y: ly, w: textW, h: textH });
+            return true;
+        };
+
+        // 1. Render Nation Names (Area-based scaling)
+        if (scale > 0.3) {
+            const nationAlpha = Math.min(1.0, (scale - 0.25) * 4);
+
+            // Sort nations by size to prioritize larger ones in collision detection
+            const sortedNations = [...world.nations].sort((a, b) =>
+                (this.nationSizes[b.id] || 0) - (this.nationSizes[a.id] || 0)
+            );
+
+            for (const nation of sortedNations) {
+                const sizeFactor = this.nationSizes[nation.id] || 0.5;
+                // Area-based font size: nations with more territory get larger labels
+                const baseSize = 9 + sizeFactor * 10;
+                const fontSize = Math.max(9, Math.floor(baseSize * Math.sqrt(scale)));
+                const font = `bold ${fontSize}px system-ui, -apple-system, sans-serif`;
+                const labelColor = `rgba(35, 35, 40, ${nationAlpha * 0.9})`;
+
+                const centroid = this.nationCentroids[nation.id] || { x: nation.capitalX, y: nation.capitalY };
+
+                for (let copy = startCopy; copy <= endCopy; copy++) {
+                    const sx = (centroid.x + copy * world.width) * scale + offsetX;
+                    const sy = centroid.y * scale + offsetY;
+
+                    if (sx < -200 || sx > width + 200 || sy < -100 || sy > height + 100) continue;
+
+                    // Subtle tracking for medium/large nations
+                    const tracking = sizeFactor > 0.5 ? ' ' : '';
+                    const spacedName = nation.name.toUpperCase().split('').join(tracking);
+                    drawLabelWithHalo(spacedName, sx, sy, font, labelColor, `rgba(255, 255, 255, ${0.4 * nationAlpha})`, 4);
+                }
+            }
+        }
+
+        // 2. Render City Names (Higher priority for larger cities)
+        if (scale > 0.8 && !isInteracting) {
+            const cityAlpha = Math.min(1.0, (scale - 0.8) * 2.5);
+            const capitalFont = `bold 12px system-ui, sans-serif`;
+            const cityFont = `500 11px system-ui, sans-serif`;
+
+            const sortedCities = [...world.cities].sort((a, b) => {
+                if (a.isCapital && !b.isCapital) return -1;
+                if (!a.isCapital && b.isCapital) return 1;
+                return b.size - a.size;
+            });
+
+            for (const city of sortedCities) {
+                let visible = false;
+                if (city.isCapital) visible = true;
+                if (city.size >= 1 && scale > 1.4) visible = true;
+                if (city.size === 0 && scale > 2.5) visible = true;
+
+                if (!visible) continue;
+
+                const font = city.isCapital ? capitalFont : cityFont;
+                const labelColor = `rgba(45, 45, 50, ${cityAlpha * 0.85})`;
+
+                for (let copy = startCopy; copy <= endCopy; copy++) {
+                    const sx = (city.x + copy * world.width) * scale + offsetX;
+                    const sy = city.y * scale + offsetY + (city.isCapital ? 12 : 9);
+
+                    if (sx < -100 || sx > width + 100 || sy < -50 || sy > height + 50) continue;
+
+                    drawLabelWithHalo(city.name, sx, sy, font, labelColor, `rgba(255, 255, 255, ${0.3 * cityAlpha})`, 2.5);
+                }
+            }
+        }
+
+        ctx.restore();
     }
 
     private updateHover(clientX: number, clientY: number) {
@@ -454,15 +497,40 @@ export class Interface {
         const W = world.width;
         const H = world.height;
 
-        // Build per-nation flat cell indices
+        // Build per-nation flat cell indices and calculate centroids/sizes
         this.nationCellsList = world.nations.map(() => []);
+        this.nationCentroids = world.nations.map(() => ({ x: 0, y: 0 }));
+        this.nationSizes = world.nations.map(() => 0);
+
         for (let x = 0; x < W; x++) {
             for (let y = 0; y < H; y++) {
                 const cell = world.grid[x][y];
                 if (!cell.isWater && cell.nationIndex !== undefined && cell.nationIndex >= 0) {
                     this.nationCellsList[cell.nationIndex].push(y * W + x);
+                    this.nationCentroids[cell.nationIndex].x += x;
+                    this.nationCentroids[cell.nationIndex].y += y;
                 }
             }
+        }
+
+        // Finalize statistics
+        let maxArea = 0;
+        for (let i = 0; i < world.nations.length; i++) {
+            const area = this.nationCellsList[i].length;
+            if (area > maxArea) maxArea = area;
+            if (area > 0) {
+                this.nationCentroids[i].x /= area;
+                this.nationCentroids[i].y /= area;
+            } else {
+                this.nationCentroids[i].x = world.nations[i].capitalX;
+                this.nationCentroids[i].y = world.nations[i].capitalY;
+            }
+        }
+
+        // Calculate relative sizes for font scaling (0 to 1)
+        for (let i = 0; i < world.nations.length; i++) {
+            const area = this.nationCellsList[i].length;
+            this.nationSizes[i] = maxArea > 0 ? Math.sqrt(area / maxArea) : 0.5;
         }
 
         // Render base (resting, no hover) into ImageData at map resolution
