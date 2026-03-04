@@ -8,4 +8,5 @@ export interface GeneratorContext {
     width: number;
     height: number;
     preset: Preset;
+    onProgress?: (pct: number) => void;
 }

@@ -34,12 +34,17 @@ export class Interface {
             this.gpuRenderer = new GPURenderer(this.gpuCanvas);
             // Initial generation so we don't start with an empty ocean
             console.log("Starting initial generation...");
-            this.generator.generate();
-            const world = this.generator.getWorld();
-            console.log("Initial generation complete. Sample elevation at 10,10:", world.grid[10][10]?.elevation);
-
-            this.gpuRenderer.updateWorldTexture(world);
-            console.log("GPURenderer initialized and texture updated");
+            this.showLoadingModal();
+            this.generator.generate((pct) => {
+                this.updateLoadingModal(pct);
+            }).then(() => {
+                const world = this.generator.getWorld();
+                console.log("Initial generation complete. Sample elevation at 10,10:", world.grid[10][10]?.elevation);
+                this.gpuRenderer.updateWorldTexture(world);
+                console.log("GPURenderer initialized and texture updated");
+                this.hideLoadingModal();
+                this.canvasManager.scheduleRender();
+            });
         } catch (e) {
             console.error("Failed to initialize GPURenderer:", e);
         }
@@ -95,7 +100,9 @@ export class Interface {
 
         seedInput.value = this.generator.currentSeed.toString();
 
-        generateBtn.addEventListener('click', () => {
+        generateBtn.addEventListener('click', async () => {
+            if (generateBtn.classList.contains('loading')) return;
+
             const p = presetSelect.value as Preset;
             const seedVal = parseInt(seedInput.value) || Math.floor(Math.random() * 999999);
             seedInput.value = seedVal.toString();
@@ -125,13 +132,30 @@ export class Interface {
                 this.canvasManager.offsetY = 0;
             }
 
-            this.generator.generate();
-            const world = this.generator.getWorld();
-            console.log("Generation complete. Sample elevation:", world.grid[10][10]?.elevation);
-            this.gpuRenderer.updateWorldTexture(world);
-            this.nationsStateDirty = true;
-            this.hoveredNationIndex = -1;
-            this.canvasManager.scheduleRender();
+            // Update UI to loading state
+            generateBtn.classList.add('loading');
+            generateBtn.style.setProperty('--progress', '0%');
+            const originalText = generateBtn.textContent;
+
+            try {
+                this.showLoadingModal();
+                await this.generator.generate((pct) => {
+                    generateBtn.textContent = `${pct}%`;
+                    generateBtn.style.setProperty('--progress', `${pct}%`);
+                    this.updateLoadingModal(pct);
+                });
+
+                const world = this.generator.getWorld();
+                this.gpuRenderer.updateWorldTexture(world);
+                this.nationsStateDirty = true;
+                this.hoveredNationIndex = -1;
+                this.hideLoadingModal();
+                this.canvasManager.scheduleRender();
+            } finally {
+                generateBtn.classList.remove('loading');
+                generateBtn.textContent = originalText;
+                generateBtn.style.setProperty('--progress', '0%');
+            }
         });
     }
 
@@ -639,5 +663,38 @@ export class Interface {
             parseInt(result[2], 16),
             parseInt(result[3], 16)
         ] : [0, 0, 0];
+    }
+    private showLoadingModal() {
+        const modal = document.getElementById('loading-modal');
+        if (modal) {
+            modal.style.display = 'flex';
+            this.updateLoadingModal(0);
+        }
+    }
+
+    private hideLoadingModal() {
+        const modal = document.getElementById('loading-modal');
+        if (modal) modal.style.display = 'none';
+    }
+
+    private updateLoadingModal(pct: number) {
+        const modal = document.getElementById('loading-modal');
+        if (!modal) return;
+
+        const fill = modal.querySelector('.loader-progress-fill') as HTMLElement;
+        const text = modal.querySelector('.loader-percentage') as HTMLElement;
+        const subtext = modal.querySelector('.loader-subtext') as HTMLElement;
+
+        if (fill) fill.style.width = `${pct}%`;
+        if (text) text.textContent = `${pct}%`;
+
+        if (subtext) {
+            if (pct < 20) subtext.textContent = "Adding mountains and valleys...";
+            else if (pct < 40) subtext.textContent = "Determining rainfall patterns...";
+            else if (pct < 60) subtext.textContent = "Spreading forests and deserts...";
+            else if (pct < 80) subtext.textContent = "Generating river systems...";
+            else if (pct < 95) subtext.textContent = "Establishing national borders...";
+            else subtext.textContent = "Founding cities and capitals...";
+        }
     }
 }

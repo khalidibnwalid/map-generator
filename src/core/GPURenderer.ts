@@ -60,35 +60,16 @@ const FRAGMENT_SHADER_SOURCE = `
         float wx = wxwy.x;
         float wy = wxwy.y;
 
-        // DIAGNOSTIC 1: RED if out of vertical bounds
-        if (wy < -0.1 || wy > u_worldSize.y + 0.1) {
-            gl_FragColor = vec4(1.0, 0.0, 0.0, 1.0); 
-            return;
-        }
-
-        // Wrap X continuously
+        // Wrap X continuously and clamp Y
         float normX = wx / u_worldSize.x;
         normX = normX - floor(normX);
-        
         float normY = clamp(wy / u_worldSize.y, 0.0, 1.0);
 
         vec4 data = texture2D(u_mapTexture, vec2(normX, normY));
         
-        // DIAGNOSTIC 2: GREEN if sampling purely empty (alpha=0) data
-        if (data.a < 0.01) {
-            gl_FragColor = vec4(0.0, 1.0, 0.0, 1.0);
-            return;
-        }
-
         float elevation = data.r;
         float moisture = data.g;
         float temperature = data.b;
-
-        // DIAGNOSTIC 3: MAGENTA if data is perfect zero (uninitialized)
-        if (elevation < 0.001 && moisture < 0.001 && temperature < 0.001) {
-            gl_FragColor = vec4(1.0, 0.0, 1.0, 1.0);
-            return;
-        }
 
         vec3 color = vec3(0.0);
 

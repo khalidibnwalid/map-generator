@@ -37,7 +37,10 @@ export class MapGenerator {
         this.height = height;
     }
 
-    public generate() {
+    public async generate(onProgress?: (pct: number) => void) {
+        onProgress?.(0);
+        await new Promise(r => requestAnimationFrame(r)); // Yield to paint loading state
+
         this.noise = new NoiseEngine(this.currentSeed);
         this.world = new WorldData(this.width, this.height);
 
@@ -49,13 +52,42 @@ export class MapGenerator {
             preset: this.currentPreset
         };
 
-        generateElevation(ctx);
-        generateMoisture(ctx);
-        generateTemperature(ctx);
-        determineBiomes(ctx);
-        generateRivers(ctx);
-        generateNations(ctx);
-        generateCities(ctx);
+        // Helper to report sub-ranges smoothly
+        const report = (start: number, end: number) => (subPct: number) => {
+            if (onProgress) {
+                const totalPct = start + (subPct / 100) * (end - start);
+                onProgress(Math.floor(totalPct));
+            }
+        };
+
+        // Stages with fixed starting points and granular sub-progress
+        ctx.onProgress = report(0, 30);
+        await generateElevation(ctx);
+        onProgress?.(30); await new Promise(r => requestAnimationFrame(r));
+
+        ctx.onProgress = report(30, 40);
+        await generateMoisture(ctx);
+        onProgress?.(40); await new Promise(r => requestAnimationFrame(r));
+
+        ctx.onProgress = report(40, 45);
+        await generateTemperature(ctx);
+        onProgress?.(45); await new Promise(r => requestAnimationFrame(r));
+
+        ctx.onProgress = report(45, 50);
+        await determineBiomes(ctx);
+        onProgress?.(50); await new Promise(r => requestAnimationFrame(r));
+
+        ctx.onProgress = report(50, 90);
+        await generateRivers(ctx);
+        onProgress?.(90); await new Promise(r => requestAnimationFrame(r));
+
+        ctx.onProgress = report(90, 95);
+        await generateNations(ctx);
+        onProgress?.(95); await new Promise(r => requestAnimationFrame(r));
+
+        ctx.onProgress = report(95, 100);
+        await generateCities(ctx);
+        onProgress?.(100);
 
         return this.world;
     }

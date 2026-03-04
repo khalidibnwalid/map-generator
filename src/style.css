@@ -322,9 +322,34 @@ button:active {
   color: var(--accent-gold);
   border-color: var(--accent-gold);
   background: rgba(220, 180, 50, 0.05);
+  --progress: 0%;
 }
 
-.btn-primary:hover {
+.btn-primary::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: var(--progress);
+  background: rgba(220, 180, 50, 0.2);
+  z-index: -1;
+  transition: width 0.1s ease-out;
+}
+
+.btn-primary.loading {
+  color: #fff;
+  border-color: var(--accent-bright);
+  box-shadow: 0 0 15px rgba(0, 255, 170, 0.2);
+  cursor: wait;
+}
+
+.btn-primary.loading::after {
+  background: rgba(0, 255, 170, 0.3);
+  box-shadow: inset -5px 0 10px rgba(0, 255, 170, 0.2);
+}
+
+.btn-primary:hover:not(.loading) {
   background: rgba(220, 180, 50, 0.15);
   color: #fff;
   border-color: #ffe66d;
@@ -430,4 +455,112 @@ button:active {
   color: var(--text-dim);
   letter-spacing: 0.5px;
   margin-top: 2px;
+}
+
+/* === Loading Modal === */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(3, 8, 12, 0.85);
+  /* Slightly more transparent */
+  backdrop-filter: blur(15px);
+  -webkit-backdrop-filter: blur(15px);
+  z-index: 5;
+  /* Lowered from 2000 to stay behind UI panels */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: modal-fade-in 0.4s ease-out;
+  pointer-events: none;
+  /* Allow interaction with panels behind/above it */
+}
+
+@keyframes modal-fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.modal-content {
+  text-align: center;
+  width: 100%;
+  max-width: 450px;
+  padding: 40px;
+  position: relative;
+}
+
+.loader-icon {
+  font-size: 3.5rem;
+  color: var(--accent-bright);
+  margin-bottom: 20px;
+  animation: rotate-pulse 4s infinite linear;
+  display: inline-block;
+}
+
+@keyframes rotate-pulse {
+  0% {
+    transform: rotate(0deg) scale(1);
+    opacity: 0.8;
+  }
+
+  50% {
+    transform: rotate(180deg) scale(1.15);
+    opacity: 1;
+    text-shadow: 0 0 20px var(--accent-bright);
+  }
+
+  100% {
+    transform: rotate(360deg) scale(1);
+    opacity: 0.8;
+  }
+}
+
+.loader-text {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 1.8rem;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: 5px;
+  margin-bottom: 8px;
+  text-shadow: 0 0 15px rgba(0, 255, 170, 0.3);
+}
+
+.loader-subtext {
+  font-size: 0.9rem;
+  color: var(--text-dim);
+  letter-spacing: 2px;
+  margin-bottom: 35px;
+  text-transform: uppercase;
+  opacity: 0.8;
+}
+
+.loader-progress-bar {
+  width: 100%;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(0, 255, 170, 0.2);
+  margin-bottom: 12px;
+  position: relative;
+  overflow: hidden;
+}
+
+.loader-progress-fill {
+  height: 100%;
+  background: var(--accent-bright);
+  box-shadow: 0 0 15px var(--accent-bright);
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.loader-percentage {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 1.2rem;
+  color: var(--accent-bright);
+  letter-spacing: 2px;
 }

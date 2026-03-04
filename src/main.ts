@@ -70,17 +70,14 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
 
 // Initialize
 const canvasManager = new CanvasManager('mapCanvas');
-// Generate an 800x450 map logic cells size (16:9 aspect ratio), will be rendered scaling to screen via Interface
+// Generate an 800x450 map logic cells size (16:9 aspect ratio)
 const generator = new MapGenerator(800, 450, 123456);
-new Interface(generator, canvasManager);
 
-// Initial Generation
-generator.generate();
-
-// First render
-// Default scale to fit height perfectly
+// Initial state: fit to screen
 const fitScale = window.innerHeight / 450;
 canvasManager.scale = fitScale;
 canvasManager.offsetX = (window.innerWidth - (800 * canvasManager.scale)) / 2;
 canvasManager.offsetY = 0;
-canvasManager.scheduleRender();
+
+// The Interface constructor now triggers the initial generation automatically (async)
+new Interface(generator, canvasManager);

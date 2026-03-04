@@ -1,7 +1,7 @@
 import type { GeneratorContext } from './types';
 
-export function generateRivers(ctx: GeneratorContext): void {
-    const { world, noise, width, height } = ctx;
+export async function generateRivers(ctx: GeneratorContext): Promise<void> {
+    const { world, noise, width, height, onProgress } = ctx;
     // Basic hydrological carving
     const numRivers = Math.floor((width * height) / 5000);
     world.rivers = []; // Clear rivers
@@ -9,6 +9,12 @@ export function generateRivers(ctx: GeneratorContext): void {
     const maxRiverLen = Math.floor(100 * (width / 800));
 
     for (let r = 0; r < numRivers; r++) {
+        // Yield every 5 rivers for UI responsiveness and detailed progress
+        if (r % 5 === 0) {
+            onProgress?.((r / numRivers) * 100);
+            await new Promise(resolve => requestAnimationFrame(resolve));
+        }
+
         let x = Math.floor(noise.random() * width);
         let y = Math.floor(noise.random() * height);
 
