@@ -18,6 +18,15 @@ export const BiomeType = {
 
 export type BiomeType = typeof BiomeType[keyof typeof BiomeType];
 
+export interface Nation {
+    id: number;
+    name: string;
+    color: string;
+    capitalX: number;
+    capitalY: number;
+}
+
+
 export interface CellData {
     elevation: number;
     moisture: number;
@@ -28,6 +37,7 @@ export interface CellData {
     plateId: number;
     distanceToBoundary: number;
     nationIndex?: number;
+    isNationBorder?: boolean;
 }
 
 export class WorldData {
@@ -35,6 +45,7 @@ export class WorldData {
     public height: number;
     public grid: CellData[][];
     public rivers: { x: number, y: number }[][] = [];
+    public nations: Nation[] = [];
 
     constructor(width: number, height: number) {
         this.width = width;

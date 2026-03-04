@@ -3,12 +3,19 @@ import type { Preset } from '../game/MapGenerator';
 import { WorldData, BIOME_COLORS } from '../game/WorldData';
 import { CanvasManager } from '../core/CanvasManager';
 
-export type ViewLayer = 'Biomes' | 'Elevation' | 'Heatmap' | 'Moisture';
+export type ViewLayer = 'Biomes' | 'Elevation' | 'Heatmap' | 'Moisture' | 'Nations';
 
 export class Interface {
     private generator: MapGenerator;
     private canvasManager: CanvasManager;
     private currentLayer: ViewLayer = 'Biomes';
+    private hoveredNationIndex: number = -1;
+    // Nations layer cache
+    private nationsCanvas: HTMLCanvasElement | null = null;
+    private nationsBaseData: Uint8ClampedArray | null = null;
+    private nationsActiveData: Uint8ClampedArray | null = null;
+    private nationCellsList: number[][] = [];
+    private nationsStateDirty: boolean = true; // rebuilt on next Nations render
 
     constructor(generator: MapGenerator, canvasManager: CanvasManager) {
         this.generator = generator;
@@ -16,6 +23,22 @@ export class Interface {
 
         this.setupUI();
         this.canvasManager.onRender = this.renderMap.bind(this);
+
+        // Track mouse for hover
+        const canvas = this.canvasManager.canvas;
+        canvas.addEventListener('mousemove', (e) => {
+            if (this.currentLayer === 'Nations') {
+                this.updateHover(e.clientX, e.clientY);
+            }
+        });
+        canvas.addEventListener('mouseleave', () => {
+            if (this.currentLayer === 'Nations') {
+                this.applyHoverToCache(-1);
+                this.hoveredNationIndex = -1;
+                this.hideTooltip();
+                this.canvasManager.scheduleRender();
+            }
+        });
     }
 
     private setupUI() {
@@ -33,7 +56,7 @@ export class Interface {
         }
 
         // Layers
-        const layers = ['Biomes', 'Elevation', 'Heatmap', 'Moisture'] as ViewLayer[];
+        const layers = ['Biomes', 'Elevation', 'Heatmap', 'Moisture', 'Nations'] as ViewLayer[];
         layers.forEach(layer => {
             const btn = document.getElementById(`layer-${layer.toLowerCase()}`);
             if (btn) {
@@ -80,6 +103,8 @@ export class Interface {
             }
 
             this.generator.generate();
+            this.nationsStateDirty = true;
+            this.hoveredNationIndex = -1;
             this.canvasManager.scheduleRender();
         });
     }
@@ -134,6 +159,7 @@ export class Interface {
             data[i + 2] = 90;   // B
             data[i + 3] = 255;  // A
         }
+
 
         for (let ry = minRy; ry < maxRy; ry++) {
             for (let rx = minRx; rx < maxRx; rx++) {
@@ -200,6 +226,11 @@ export class Interface {
                     const moisture = m0 * oneMinusTy + m1 * ty;
                     const v = Math.floor(moisture * 255);
                     color = [255 - v, 255 - v, v];
+                } else if (this.currentLayer === 'Nations') {
+                    // Nations layer uses cached canvas — skip pixel loop entry
+                    // (handled by drawImage below; set transparent so we don't paint over it)
+                    data[(ry * renderWidth + rx) * 4 + 3] = 0;
+                    continue;
                 }
 
                 const index = (ry * renderWidth + rx) * 4;
@@ -219,6 +250,26 @@ export class Interface {
         ctx.setTransform(1, 0, 0, 1, 0, 0);
         ctx.imageSmoothingEnabled = false;
         ctx.drawImage(tempCanvas, 0, 0, width, height);
+
+        // For Nations layer: blit the pre-rendered cached canvas on top
+        if (this.currentLayer === 'Nations') {
+            // Lazy build / rebuild after generation
+            if (!this.nationsCanvas || this.nationsStateDirty) {
+                this.buildNationsCache();
+                this.nationsStateDirty = false;
+            }
+            if (this.nationsCanvas) {
+                ctx.setTransform(1, 0, 0, 1, 0, 0);
+                ctx.imageSmoothingEnabled = false;
+                const mapPixW = world.width * scale;
+                const startCopy = Math.floor(-offsetX / mapPixW);
+                const endCopy = Math.ceil((width - offsetX) / mapPixW);
+                for (let copy = startCopy; copy <= endCopy; copy++) {
+                    const dx = offsetX + copy * mapPixW;
+                    ctx.drawImage(this.nationsCanvas, dx, offsetY, mapPixW, world.height * scale);
+                }
+            }
+        }
 
         // Render Vector lines (Rivers) over the map
         ctx.save();
@@ -265,8 +316,200 @@ export class Interface {
         }
 
         ctx.restore();
+
+        // Render capital markers for the Nations layer
+        if (this.currentLayer === 'Nations' && !isInteracting) {
+            ctx.save();
+            ctx.translate(offsetX, offsetY);
+            ctx.scale(scale, scale);
+
+            const mapPixelWidth = world.width * scale;
+            const startCopy = Math.floor(-offsetX / mapPixelWidth);
+            const endCopy = Math.ceil((width - offsetX) / mapPixelWidth);
+
+            for (const nation of world.nations) {
+                const isHovered = nation.id === this.hoveredNationIndex;
+                const nationColor = this.hexToRgb(nation.color);
+                const colorStr = `rgb(${nationColor[0]}, ${nationColor[1]}, ${nationColor[2]})`;
+
+                for (let copy = startCopy; copy <= endCopy; copy++) {
+                    const cx = nation.capitalX + copy * world.width;
+                    const cy = nation.capitalY;
+
+                    // Outer glow ring
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, isHovered ? 5 : 3.5, 0, Math.PI * 2);
+                    ctx.strokeStyle = colorStr;
+                    ctx.lineWidth = isHovered ? 1.5 / scale : 1 / scale;
+                    ctx.globalAlpha = isHovered ? 1.0 : 0.8;
+                    ctx.stroke();
+
+                    // Capital dot
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, isHovered ? 2.5 : 1.5, 0, Math.PI * 2);
+                    ctx.fillStyle = colorStr;
+                    ctx.globalAlpha = 1.0;
+                    ctx.fill();
+                }
+            }
+
+            ctx.globalAlpha = 1.0;
+            ctx.restore();
+        }
     }
 
+    private updateHover(clientX: number, clientY: number) {
+        const world = this.generator.getWorld();
+        const cm = this.canvasManager;
+        const rect = cm.canvas.getBoundingClientRect();
+        const sx = clientX - rect.left;
+        const sy = clientY - rect.top;
+
+        const wx = Math.round((sx - cm.offsetX) / cm.scale);
+        const wy = Math.round((sy - cm.offsetY) / cm.scale);
+
+        const x = ((wx % world.width) + world.width) % world.width;
+        const y = wy;
+
+        let newHovered = -1;
+        if (y >= 0 && y < world.height) {
+            const cell = world.grid[x][y];
+            if (!cell.isWater && cell.nationIndex !== undefined && cell.nationIndex >= 0) {
+                newHovered = cell.nationIndex;
+            }
+        }
+
+        if (newHovered !== this.hoveredNationIndex) {
+            const prev = this.hoveredNationIndex;
+            this.hoveredNationIndex = newHovered;
+            // Patch only the changed nations into the cache — no full re-render
+            this.applyHoverToCache(newHovered, prev);
+            this.canvasManager.scheduleRender();
+        }
+
+        if (newHovered >= 0 && newHovered < world.nations.length) {
+            const nation = world.nations[newHovered];
+            this.showTooltip(clientX, clientY, nation.name, `Capital (${nation.capitalX}, ${nation.capitalY})`);
+        } else {
+            this.hideTooltip();
+        }
+    }
+
+    private buildNationsCache() {
+        const world = this.generator.getWorld();
+        const W = world.width;
+        const H = world.height;
+
+        // Build per-nation flat cell indices
+        this.nationCellsList = world.nations.map(() => []);
+        for (let x = 0; x < W; x++) {
+            for (let y = 0; y < H; y++) {
+                const cell = world.grid[x][y];
+                if (!cell.isWater && cell.nationIndex !== undefined && cell.nationIndex >= 0) {
+                    this.nationCellsList[cell.nationIndex].push(y * W + x);
+                }
+            }
+        }
+
+        // Render base (resting, no hover) into ImageData at map resolution
+        const id = new ImageData(W, H);
+        const data = id.data;
+        const ncCache = world.nations.map(n => this.hexToRgb(n.color));
+
+        for (let x = 0; x < W; x++) {
+            for (let y = 0; y < H; y++) {
+                const cell = world.grid[x][y];
+                const base = this.hexToRgb(BIOME_COLORS[cell.biome]);
+                let r = Math.floor(base[0] * 0.45);
+                let g = Math.floor(base[1] * 0.45);
+                let b = Math.floor(base[2] * 0.45);
+
+                const nIdx = cell.nationIndex ?? -1;
+                if (nIdx >= 0 && nIdx < world.nations.length) {
+                    const nc = ncCache[nIdx];
+                    if (cell.isNationBorder) {
+                        r = Math.floor(nc[0] * 0.75);
+                        g = Math.floor(nc[1] * 0.75);
+                        b = Math.floor(nc[2] * 0.75);
+                    } else {
+                        r = Math.floor(r * 0.86 + nc[0] * 0.14);
+                        g = Math.floor(g * 0.86 + nc[1] * 0.14);
+                        b = Math.floor(b * 0.86 + nc[2] * 0.14);
+                    }
+                }
+
+                const i = (y * W + x) * 4;
+                data[i] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = 255;
+            }
+        }
+
+        this.nationsBaseData = new Uint8ClampedArray(data);
+        this.nationsActiveData = new Uint8ClampedArray(data);
+
+        const canvas = document.createElement('canvas');
+        canvas.width = W;
+        canvas.height = H;
+        canvas.getContext('2d')!.putImageData(id, 0, 0);
+        this.nationsCanvas = canvas;
+    }
+
+    /** Restore old nation's pixels to base, brighten new nation's pixels. O(nation_cells) only. */
+    private applyHoverToCache(newIdx: number, oldIdx: number = -1) {
+        if (!this.nationsCanvas || !this.nationsBaseData || !this.nationsActiveData) return;
+        const world = this.generator.getWorld();
+        const W = world.width;
+        const ctx = this.nationsCanvas.getContext('2d')!;
+
+        const restoreIds = oldIdx >= 0 ? this.nationCellsList[oldIdx] ?? [] : [];
+        const highlightIds = newIdx >= 0 ? this.nationCellsList[newIdx] ?? [] : [];
+
+        // Work on active buffer
+        const active = this.nationsActiveData;
+        const base = this.nationsBaseData;
+
+        // Restore previous hovered nation back to base
+        for (const flatIdx of restoreIds) {
+            const i = flatIdx * 4;
+            active[i] = base[i]; active[i + 1] = base[i + 1]; active[i + 2] = base[i + 2];
+        }
+
+        // Apply bright highlight to new hovered nation
+        if (newIdx >= 0 && newIdx < world.nations.length) {
+            const nc = this.hexToRgb(world.nations[newIdx].color);
+            for (const flatIdx of highlightIds) {
+                const x = flatIdx % W;
+                const y = Math.floor(flatIdx / W);
+                const cell = world.grid[x][y];
+                const i = flatIdx * 4;
+                if (cell.isNationBorder) {
+                    active[i] = nc[0]; active[i + 1] = nc[1]; active[i + 2] = nc[2];
+                } else {
+                    // Brighter fill blend compared to base 14%
+                    active[i] = Math.floor(base[i] * 0.62 + nc[0] * 0.38);
+                    active[i + 1] = Math.floor(base[i + 1] * 0.62 + nc[1] * 0.38);
+                    active[i + 2] = Math.floor(base[i + 2] * 0.62 + nc[2] * 0.38);
+                }
+            }
+        }
+
+        // Push changes to the offscreen canvas
+        ctx.putImageData(new ImageData(new Uint8ClampedArray(active), W, world.height), 0, 0);
+    }
+
+    private showTooltip(x: number, y: number, name: string, detail: string) {
+        const tooltip = document.getElementById('nation-tooltip');
+        if (!tooltip) return;
+        (tooltip.querySelector('.tooltip-name') as HTMLElement).textContent = name;
+        (tooltip.querySelector('.tooltip-detail') as HTMLElement).textContent = detail;
+        tooltip.style.display = 'block';
+        tooltip.style.left = `${x + 16}px`;
+        tooltip.style.top = `${y + 16}px`;
+    }
+
+    private hideTooltip() {
+        const tooltip = document.getElementById('nation-tooltip');
+        if (tooltip) tooltip.style.display = 'none';
+    }
     private hexToRgb(hex: string): number[] {
         const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
         return result ? [

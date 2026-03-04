@@ -56,11 +56,16 @@ document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
         <button id="layer-elevation" class="layer-btn">ELEVATION</button>
         <button id="layer-heatmap" class="layer-btn">HEATMAP</button>
         <button id="layer-moisture" class="layer-btn">MOISTURE</button>
+        <button id="layer-nations" class="layer-btn layer-btn--full">NATIONS</button>
       </div>
     </div>
     </div>
   </div>
   <canvas id="mapCanvas"></canvas>
+  <div id="nation-tooltip" class="nation-tooltip" style="display:none;">
+    <div class="tooltip-name"></div>
+    <div class="tooltip-detail"></div>
+  </div>
 `;
 
 // Initialize
