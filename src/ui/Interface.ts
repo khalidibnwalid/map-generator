@@ -558,7 +558,7 @@ export class Interface {
 
         ctx.restore();
 
-        if (this.currentLayer === 'Nations' && !isInteracting) {
+        if (this.currentLayer === 'Nations') {
             ctx.save();
             ctx.translate(offsetX, offsetY);
             ctx.scale(scale, scale);
@@ -572,35 +572,21 @@ export class Interface {
                 const isHovered = city.nationIndex === this.hoveredNationIndex;
                 const nation = world.nations[city.nationIndex];
                 if (!nation) continue;
-                const nc = this.hexToRgb(nation.color);
-                const colorStr = `rgb(${nc[0]}, ${nc[1]}, ${nc[2]})`;
-                ctx.globalAlpha = isHovered ? 1.0 : (city.isCapital ? 0.85 : 0.65);
+
+                // Overall opacity
+                ctx.globalAlpha = isHovered ? 1.0 : (city.isCapital ? 0.7 : 0.4);
 
                 for (let copy = startCopy; copy <= endCopy; copy++) {
                     const cx = city.x + copy * world.width;
                     const cy = city.y;
                     const isCapital = city.isCapital;
-                    const radius = isCapital ? 3.8 : (city.size === 1 ? 2.5 : 1.5);
-                    const dotColor = '#1a1a1c';
-                    const haloColor = 'rgba(255, 255, 255, 0.9)';
-                    const highlightColor = colorStr;
-
-                    ctx.beginPath();
-                    ctx.arc(cx, cy, radius + 0.6 / scale, 0, Math.PI * 2);
-                    ctx.fillStyle = haloColor;
-                    ctx.fill();
+                    // Simplify: even smaller white dot
+                    const radius = isCapital ? 1.3 : (city.size === 1 ? 0.8 : 0.4);
 
                     ctx.beginPath();
                     ctx.arc(cx, cy, radius, 0, Math.PI * 2);
-                    ctx.fillStyle = isHovered ? highlightColor : dotColor;
+                    ctx.fillStyle = '#FFFFFF';
                     ctx.fill();
-
-                    if (isCapital) {
-                        ctx.beginPath();
-                        ctx.arc(cx, cy, radius * 0.45, 0, Math.PI * 2);
-                        ctx.fillStyle = isHovered ? '#FFF' : 'rgba(255,255,255,0.2)';
-                        ctx.fill();
-                    }
                 }
             }
             ctx.globalAlpha = 1.0;
@@ -648,6 +634,48 @@ export class Interface {
             return true;
         };
 
+        const drawCityLabel = (text: string, sx: number, sy: number, font: string) => {
+            ctx.font = font;
+            const metrics = ctx.measureText(text);
+            const paddingX = 4;
+            const paddingY = 2;
+            const textW = metrics.width;
+            // Better parsing for font size: look for the px value
+            const fontSizeMatch = font.match(/(\d+)px/);
+            const textH = fontSizeMatch ? parseInt(fontSizeMatch[1]) : 11;
+
+            const lx = sx - textW / 2 - paddingX;
+            const ly = sy - textH / 2 - paddingY;
+            const boxW = textW + paddingX * 2;
+            const boxH = textH + paddingY * 2;
+
+            if (checkCollision(lx, ly, boxW, boxH)) return false;
+
+            // Draw rounded black background
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+            const radius = 2;
+            ctx.beginPath();
+            ctx.moveTo(lx + radius, ly);
+            ctx.lineTo(lx + boxW - radius, ly);
+            ctx.quadraticCurveTo(lx + boxW, ly, lx + boxW, ly + radius);
+            ctx.lineTo(lx + boxW, ly + boxH - radius);
+            ctx.quadraticCurveTo(lx + boxW, ly + boxH, lx + boxW - radius, ly + boxH);
+            ctx.lineTo(lx + radius, ly + boxH);
+            ctx.quadraticCurveTo(lx, ly + boxH, lx, ly + boxH - radius);
+            ctx.lineTo(lx, ly + radius);
+            ctx.quadraticCurveTo(lx, ly, lx + radius, ly);
+            ctx.closePath();
+            ctx.fill();
+
+            // Draw white text
+            ctx.fillStyle = '#FFFFFF';
+            // Adjusted sy slightly down for visual centering in the box
+            ctx.fillText(text, sx, sy + 1);
+
+            occupiedRects.push({ x: lx, y: ly, w: boxW, h: boxH });
+            return true;
+        };
+
         if (scale > 0.3) {
             const nationAlpha = Math.min(1.0, (scale - 0.25) * 4);
             const sortedNations = [...world.nations].sort((a, b) => (this.nationSizes[b.id] || 0) - (this.nationSizes[a.id] || 0));
@@ -664,25 +692,29 @@ export class Interface {
                     const sy = centroid.y * scale + offsetY;
                     if (sx < -200 || sx > width + 200 || sy < -100 || sy > height + 100) continue;
                     const spacedName = nation.name.toUpperCase().split('').join(sizeFactor > 0.5 ? ' ' : '');
-                    drawLabelWithHalo(spacedName, sx, sy, font, labelColor, `rgba(255, 255, 255, ${0.4 * nationAlpha})`, 4);
+                    drawLabelWithHalo(spacedName, sx, sy, font, labelColor, `rgba(255, 255, 255, ${0.6 * nationAlpha})`, 4);
                 }
             }
         }
 
-        if (scale > 0.8 && !isInteracting) {
-            const cityAlpha = Math.min(1.0, (scale - 0.8) * 2.5);
+        if (scale > 0.8) {
+            const cityAlpha = Math.min(0.8, (scale - 0.8) * 2.5);
             const sortedCities = [...world.cities].sort((a, b) => (a.isCapital === b.isCapital) ? (b.size - a.size) : (a.isCapital ? -1 : 1));
 
             for (const city of sortedCities) {
                 let visible = city.isCapital || (city.size >= 1 && scale > 1.4) || (city.size === 0 && scale > 2.5);
                 if (!visible) continue;
                 const font = city.isCapital ? `bold 12px system-ui, sans-serif` : `500 11px system-ui, sans-serif`;
-                const labelColor = `rgba(45, 45, 50, ${cityAlpha * 0.85})`;
+
+                // During interaction, we might want to slightly fade labels or skip expensive collision?
+                // For now, let's just draw them. collision detection is always on inside drawCityLabel anyway.
+                ctx.globalAlpha = isInteracting ? cityAlpha * 0.6 : cityAlpha;
+
                 for (let copy = startCopy; copy <= endCopy; copy++) {
                     const sx = (city.x + copy * world.width) * scale + offsetX;
                     const sy = city.y * scale + offsetY + (city.isCapital ? 12 : 9);
                     if (sx < -100 || sx > width + 100 || sy < -50 || sy > height + 50) continue;
-                    drawLabelWithHalo(city.name, sx, sy, font, labelColor, `rgba(255, 255, 255, ${0.3 * cityAlpha})`, 2.5);
+                    drawCityLabel(city.name, sx, sy, font);
                 }
             }
         }
