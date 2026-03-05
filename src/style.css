@@ -575,7 +575,7 @@ button:active {
   color: #fff;
   border-color: var(--accent-bright);
   box-shadow: 0 0 15px rgba(0, 255, 170, 0.2);
-  cursor: wait;
+  cursor: default;
 }
 
 .btn-primary.loading::after {
