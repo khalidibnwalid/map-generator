@@ -11,10 +11,6 @@ export class Interface {
     private canvasManager: CanvasManager;
     private currentLayer: ViewLayer = 'Biomes';
     private hoveredNationIndex: number = -1;
-    // Nations layer cache
-    private nationsCanvas: HTMLCanvasElement | null = null;
-    private nationsBaseData: Uint8ClampedArray | null = null;
-    private nationsActiveData: Uint8ClampedArray | null = null;
     private nationCellsList: number[][] = [];
     private nationCentroids: { x: number, y: number }[] = [];
     private nationSizes: number[] = []; // Relative size (0 to 1) 
@@ -158,7 +154,6 @@ export class Interface {
         });
         canvas.addEventListener('mouseleave', () => {
             if (this.currentLayer === 'Nations') {
-                this.applyHoverToCache(-1);
                 this.hoveredNationIndex = -1;
                 this.hideTooltip();
                 this.canvasManager.scheduleRender();
@@ -355,17 +350,13 @@ export class Interface {
 
             item.addEventListener('mouseenter', () => {
                 if (this.isPainting) return;
-                const oldIdx = this.hoveredNationIndex;
                 this.hoveredNationIndex = idx;
-                this.applyHoverToCache(idx, oldIdx);
                 this.canvasManager.scheduleRender();
             });
 
             item.addEventListener('mouseleave', () => {
                 if (this.isPainting) return;
-                const oldIdx = this.hoveredNationIndex;
                 this.hoveredNationIndex = -1;
-                this.applyHoverToCache(-1, oldIdx);
                 this.canvasManager.scheduleRender();
             });
 
@@ -402,17 +393,10 @@ export class Interface {
             }
         }
 
-        this.lastPaintedX = wx;
-        this.lastPaintedY = wy;
-
-        // Perform a single batched cache update for the affected area
-        const brushHalf = Math.floor(this.brushSize / 2);
-        this.updateNationsCacheInRect(
-            minX - brushHalf - 2,
-            minY - brushHalf - 2,
-            maxX + brushHalf + 2,
-            maxY + brushHalf + 2
-        );
+        // Trigger a GPU texture update directly for the affected area!
+        // Rather than updating the entire texture, we can just rebuild it for now
+        // since updateNationsDataTexture is very fast (just copies a Uint8Array)
+        this.gpuRenderer.updateNationsDataTexture(this.generator.getWorld());
         this.canvasManager.scheduleRender();
         this.renderNationsList();
     }
@@ -489,53 +473,6 @@ export class Interface {
         }
     }
 
-    private updateNationsCacheInRect(x1: number, y1: number, x2: number, y2: number) {
-        if (!this.nationsCanvas || !this.nationsBaseData || !this.nationsActiveData) return;
-        const world = this.generator.getWorld();
-        const W = world.width;
-        const ctx = this.nationsCanvas.getContext('2d')!;
-        const active = this.nationsActiveData;
-        const base = this.nationsBaseData;
-
-        // Normlize coords and clamp Y
-        const startY = Math.max(0, Math.min(y1, y2));
-        const endY = Math.min(world.height - 1, Math.max(y1, y2));
-        const startX = Math.min(x1, x2);
-        const endX = Math.max(x1, x2);
-
-        for (let ty = startY; ty <= endY; ty++) {
-            for (let txRaw = startX; txRaw <= endX; txRaw++) {
-                const tx = (txRaw % W + W) % W;
-                const cell = world.grid[tx][ty];
-                const flatIdx = ty * W + tx;
-                const i = flatIdx * 4;
-
-                const baseRGB = this.hexToRgb(BIOME_COLORS[cell.biome]);
-                // Default desaturated biome color
-                let r = Math.floor(baseRGB[0] * 0.45);
-                let g = Math.floor(baseRGB[1] * 0.45);
-                let b = Math.floor(baseRGB[2] * 0.45);
-
-                const nIdx = cell.nationIndex ?? -1;
-                if (nIdx >= 0 && nIdx < world.nations.length) {
-                    const nc = this.hexToRgb(world.nations[nIdx].color);
-                    if (cell.isNationBorder) {
-                        r = Math.floor(nc[0] * 0.75);
-                        g = Math.floor(nc[1] * 0.75);
-                        b = Math.floor(nc[2] * 0.75);
-                    } else {
-                        r = Math.floor(r * 0.86 + nc[0] * 0.14);
-                        g = Math.floor(g * 0.86 + nc[1] * 0.14);
-                        b = Math.floor(b * 0.86 + nc[2] * 0.14);
-                    }
-                }
-                active[i] = r; active[i + 1] = g; active[i + 2] = b;
-                base[i] = r; base[i + 1] = g; base[i + 2] = b;
-            }
-        }
-        ctx.putImageData(new ImageData(new Uint8ClampedArray(active), W, world.height), 0, 0);
-    }
-
     private renderMap(ctx: CanvasRenderingContext2D, width: number, height: number, scale: number, offsetX: number, offsetY: number, isInteracting: boolean) {
         const world = this.generator.getWorld();
         const minScale = height / world.height;
@@ -554,39 +491,31 @@ export class Interface {
         }
 
         const layerMap: Record<ViewLayer, number> = {
-            'Biomes': 0, 'Elevation': 1, 'Heatmap': 2, 'Moisture': 3, 'Nations': 0
+            'Biomes': 0, 'Elevation': 1, 'Heatmap': 2, 'Moisture': 3, 'Nations': 4
         };
 
-        if (this.currentLayer !== 'Nations') {
-            if (this.gpuCanvas.width !== width || this.gpuCanvas.height !== height) {
-                this.gpuCanvas.width = width;
-                this.gpuCanvas.height = height;
-            }
-            this.gpuRenderer.render(width, height, world.width, world.height, scale, offsetX, offsetY, layerMap[this.currentLayer]);
-            ctx.setTransform(1, 0, 0, 1, 0, 0);
-            ctx.drawImage(this.gpuCanvas, 0, 0);
-        } else {
-            ctx.fillStyle = '#1C3E5A';
-            ctx.fillRect(0, 0, width, height);
-        }
-
         if (this.currentLayer === 'Nations') {
-            if (!this.nationsCanvas || this.nationsStateDirty) {
+            if (this.nationsStateDirty) {
                 this.buildNationsCache();
+                this.gpuRenderer.updateNationsDataTexture(world);
                 this.nationsStateDirty = false;
             }
-            if (this.nationsCanvas) {
-                ctx.setTransform(1, 0, 0, 1, 0, 0);
-                ctx.imageSmoothingEnabled = false;
-                const mapPixW = world.width * scale;
-                const startCopy = Math.floor(-offsetX / mapPixW);
-                const endCopy = Math.ceil((width - offsetX) / mapPixW);
-                for (let copy = startCopy; copy <= endCopy; copy++) {
-                    const dx = offsetX + copy * mapPixW;
-                    ctx.drawImage(this.nationsCanvas, dx, offsetY, mapPixW, world.height * scale);
-                }
-            }
         }
+
+        if (this.gpuCanvas.width !== width || this.gpuCanvas.height !== height) {
+            this.gpuCanvas.width = width;
+            this.gpuCanvas.height = height;
+        }
+
+        let hoverColor: number[] | undefined = undefined;
+        if (this.currentLayer === 'Nations' && this.hoveredNationIndex >= 0 && this.hoveredNationIndex < world.nations.length) {
+            const hColor = this.hexToRgb(world.nations[this.hoveredNationIndex].color);
+            hoverColor = [hColor[0] / 255, hColor[1] / 255, hColor[2] / 255];
+        }
+
+        this.gpuRenderer.render(width, height, world.width, world.height, scale, offsetX, offsetY, layerMap[this.currentLayer], hoverColor);
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        ctx.drawImage(this.gpuCanvas, 0, 0);
 
         ctx.save();
         ctx.translate(offsetX, offsetY);
@@ -776,9 +705,7 @@ export class Interface {
         }
 
         if (newHovered !== this.hoveredNationIndex) {
-            const prev = this.hoveredNationIndex;
             this.hoveredNationIndex = newHovered;
-            this.applyHoverToCache(newHovered, prev);
             this.canvasManager.scheduleRender();
 
             // Sync with list
@@ -843,57 +770,7 @@ export class Interface {
             this.nationSizes[i] = maxArea > 0 ? Math.sqrt(area / maxArea) : 0.5;
         }
 
-        const id = new ImageData(W, H);
-        const data = id.data;
-        const ncCache = world.nations.map(n => this.hexToRgb(n.color));
-
-        for (let x = 0; x < W; x++) {
-            for (let y = 0; y < H; y++) {
-                const cell = world.grid[x][y];
-                const base = this.hexToRgb(BIOME_COLORS[cell.biome]);
-                let r = Math.floor(base[0] * 0.45), g = Math.floor(base[1] * 0.45), b = Math.floor(base[2] * 0.45);
-                const nIdx = cell.nationIndex ?? -1;
-                if (nIdx >= 0 && nIdx < world.nations.length) {
-                    const nc = ncCache[nIdx];
-                    if (cell.isNationBorder) {
-                        r = Math.floor(nc[0] * 0.75); g = Math.floor(nc[1] * 0.75); b = Math.floor(nc[2] * 0.75);
-                    } else {
-                        r = Math.floor(r * 0.86 + nc[0] * 0.14); g = Math.floor(g * 0.86 + nc[1] * 0.14); b = Math.floor(b * 0.86 + nc[2] * 0.14);
-                    }
-                }
-                const i = (y * W + x) * 4;
-                data[i] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = 255;
-            }
-        }
-        this.nationsBaseData = new Uint8ClampedArray(data);
-        this.nationsActiveData = new Uint8ClampedArray(data);
-        const canvas = document.createElement('canvas');
-        canvas.width = W; canvas.height = H;
-        canvas.getContext('2d')!.putImageData(id, 0, 0);
-        this.nationsCanvas = canvas;
-    }
-
-    private applyHoverToCache(newIdx: number, oldIdx: number = -1) {
-        if (!this.nationsCanvas || !this.nationsBaseData || !this.nationsActiveData) return;
-        const world = this.generator.getWorld(), W = world.width;
-        const active = this.nationsActiveData, base = this.nationsBaseData;
-
-        if (oldIdx >= 0) {
-            for (const flatIdx of this.nationCellsList[oldIdx] || []) {
-                const i = flatIdx * 4;
-                active[i] = base[i]; active[i + 1] = base[i + 1]; active[i + 2] = base[i + 2];
-            }
-        }
-        if (newIdx >= 0 && newIdx < world.nations.length) {
-            const nc = this.hexToRgb(world.nations[newIdx].color);
-            for (const flatIdx of this.nationCellsList[newIdx] || []) {
-                const cell = world.grid[flatIdx % W][Math.floor(flatIdx / W)];
-                const i = flatIdx * 4;
-                if (cell.isNationBorder) { active[i] = nc[0]; active[i + 1] = nc[1]; active[i + 2] = nc[2]; }
-                else { active[i] = Math.floor(base[i] * 0.62 + nc[0] * 0.38); active[i + 1] = Math.floor(base[i + 1] * 0.62 + nc[1] * 0.38); active[i + 2] = Math.floor(base[i + 2] * 0.62 + nc[2] * 0.38); }
-            }
-        }
-        this.nationsCanvas.getContext('2d')!.putImageData(new ImageData(new Uint8ClampedArray(active), W, world.height), 0, 0);
+        // We no longer build a canvas image data here! The GPU handles it procedurally.
     }
 
     private showTooltip(x: number, y: number, name: string, detail: string) {

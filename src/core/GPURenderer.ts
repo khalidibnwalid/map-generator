@@ -12,12 +12,14 @@ const VERTEX_SHADER_SOURCE = `
 const FRAGMENT_SHADER_SOURCE = `
     precision highp float;
     uniform sampler2D u_mapTexture;
+    uniform sampler2D u_nationsTexture;
     uniform vec2 u_resolution;
     uniform vec2 u_worldSize;
     uniform float u_scale;
     uniform vec2 u_offset;
     uniform int u_layer;
     uniform vec3 u_biomeColors[16];
+    uniform vec3 u_hoverColor;
 
     int getBiome(float elevation, float temperature, float moisture) {
         if (elevation < 0.3) return 0; // OCEAN
@@ -50,44 +52,121 @@ const FRAGMENT_SHADER_SOURCE = `
         return 6; // TUNDRA
     }
 
+    float rand(vec2 co) {
+        return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453);
+    }
+
+    // Simple noise for organic displacement
+    float noise(vec2 p) {
+        vec2 i = floor(p);
+        vec2 f = fract(p);
+        float a = rand(i);
+        float b = rand(i + vec2(1.0, 0.0));
+        float c = rand(i + vec2(0.0, 1.0));
+        float d = rand(i + vec2(1.0, 1.0));
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+    }
+
+    vec3 getBiomeColor(int idx) {
+        for (int i = 0; i < 16; i++) {
+            if (i == idx) return u_biomeColors[i];
+        }
+        return vec3(0.0);
+    }
+
     void main() {
         vec2 screenCoord = gl_FragCoord.xy;
         screenCoord.y = u_resolution.y - screenCoord.y;
 
         vec2 wxwy = (screenCoord - u_offset) / u_scale;
         
-        // Final pixel coordinates in world space
-        float wx = wxwy.x;
-        float wy = wxwy.y;
+        float worldX = wxwy.x;
+        float worldY = wxwy.y;
 
-        // Wrap X continuously and clamp Y
-        float normX = wx / u_worldSize.x;
-        normX = normX - floor(normX);
-        float normY = clamp(wy / u_worldSize.y, 0.0, 1.0);
-
-        vec4 data = texture2D(u_mapTexture, vec2(normX, normY));
+        // Displace coordinates with noise for organic borders
+        // Using a larger scale for smooth "wiggles"
+        float n = (noise(wxwy * 0.1) - 0.5) * 1.5;
+        float n2 = (noise(wxwy * 0.23) - 0.5) * 0.8;
         
-        float elevation = data.r;
-        float moisture = data.g;
-        float temperature = data.b;
+        float dx = worldX + n + n2;
+        float dy = worldY + n2 - n;
 
+        // Final sampling position
+        float nx = dx / u_worldSize.x;
+        nx = nx - floor(nx);
+        float ny = clamp(dy / u_worldSize.y, 0.0, 1.0);
+        
+        vec4 data = texture2D(u_mapTexture, vec2(nx, ny));
         vec3 color = vec3(0.0);
 
         if (u_layer == 0) { // Biomes
-            int biomeIdx = getBiome(elevation, temperature, moisture);
-            for (int i = 0; i < 16; i++) {
-                if (i == biomeIdx) {
-                    color = u_biomeColors[i];
-                    break;
+            int bIdx = getBiome(data.r, data.b, data.g);
+            color = getBiomeColor(bIdx);
+        } else if (u_layer == 4) { // Nations
+            vec2 pos = vec2(nx, ny) * u_worldSize - 0.5;
+            vec2 ixy = floor(pos);
+            vec2 fxy = fract(pos);
+            
+            vec2 uv00 = (ixy + vec2(0.5, 0.5)) / u_worldSize;
+            vec2 uv10 = (ixy + vec2(1.5, 0.5)) / u_worldSize;
+            vec2 uv01 = (ixy + vec2(0.5, 1.5)) / u_worldSize;
+            vec2 uv11 = (ixy + vec2(1.5, 1.5)) / u_worldSize;
+
+            vec4 c00 = texture2D(u_nationsTexture, uv00);
+            vec4 c10 = texture2D(u_nationsTexture, uv10);
+            vec4 c01 = texture2D(u_nationsTexture, uv01);
+            vec4 c11 = texture2D(u_nationsTexture, uv11);
+            
+            vec4 blended = mix(mix(c00, c10, fxy.x), mix(c01, c11, fxy.x), fxy.y);
+            
+            float d00 = distance(blended, c00);
+            float d10 = distance(blended, c10);
+            float d01 = distance(blended, c01);
+            float d11 = distance(blended, c11);
+            
+            float minDist = min(min(d00, d10), min(d01, d11));
+            vec4 nationColor;
+            if (minDist == d00) nationColor = c00;
+            else if (minDist == d10) nationColor = c10;
+            else if (minDist == d01) nationColor = c01;
+            else nationColor = c11;
+
+            if (nationColor.a < 0.5) {
+                float elevation = data.r;
+                bool isWater = elevation < 0.45;
+                int bIdx = getBiome(data.r, data.b, data.g);
+                color = getBiomeColor(bIdx) * 0.7; // Dim the sea
+            } else {
+                int bIdx = getBiome(data.r, data.b, data.g);
+                vec3 biomeC = getBiomeColor(bIdx);
+                bool isBorder = (distance(nationColor, c00) > 0.01 || distance(nationColor, c10) > 0.01 || distance(nationColor, c01) > 0.01 || distance(nationColor, c11) > 0.01) && (minDist > 0.005);
+                
+                if (isBorder) {
+                    color = nationColor.rgb * 0.75;
+                } else {
+                    vec3 desatBiome = biomeC * 0.45;
+                    color = desatBiome * 0.86 + nationColor.rgb * 0.14;
+                    // Add hover highlight
+                    if (distance(nationColor.rgb, u_hoverColor) < 0.01) {
+                        color = mix(color, nationColor.rgb, 0.2) + vec3(0.15); 
+                    }
                 }
             }
-        } else if (u_layer == 1) { // Elevation
-            bool isWater = elevation < 0.45;
-            color = isWater ? vec3(0.0, 0.0, elevation) : vec3(elevation);
-        } else if (u_layer == 2) { // Heatmap
-            color = vec3(temperature, 0.0, 1.0 - temperature);
-        } else if (u_layer == 3) { // Moisture
-            color = vec3(1.0 - moisture, 1.0 - moisture, moisture);
+        } else {
+            // Other layers also get the organic edges but stay sharp
+            float elevation = data.r;
+            float moisture = data.g;
+            float temperature = data.b;
+
+            if (u_layer == 1) { // Elevation
+                bool isWater = elevation < 0.45;
+                color = isWater ? vec3(0.0, 0.0, elevation) : vec3(elevation);
+            } else if (u_layer == 2) { // Heatmap
+                color = vec3(temperature, 0.0, 1.0 - temperature);
+            } else if (u_layer == 3) { // Moisture
+                color = vec3(1.0 - moisture, 1.0 - moisture, moisture);
+            }
         }
 
         gl_FragColor = vec4(color, 1.0);
@@ -98,6 +177,7 @@ export class GPURenderer {
     private gl: WebGLRenderingContext;
     private program: WebGLProgram;
     private texture: WebGLTexture | null = null;
+    private nationsTexture: WebGLTexture | null = null;
     private buffer: WebGLBuffer | null = null;
     private biomeColors: Float32Array;
 
@@ -193,12 +273,53 @@ export class GPURenderer {
         console.log(`Texture updated for ${world.width}x${world.height}`);
     }
 
-    public render(width: number, height: number, worldWidth: number, worldHeight: number, scale: number, offsetX: number, offsetY: number, layer: number) {
+    public updateNationsDataTexture(world: WorldData) {
+        if (!world || !world.grid) return;
+        if (this.nationsTexture) this.gl.deleteTexture(this.nationsTexture);
+        this.nationsTexture = this.gl.createTexture();
+        this.gl.bindTexture(this.gl.TEXTURE_2D, this.nationsTexture);
+
+        const data = new Uint8Array(world.width * world.height * 4);
+        for (let y = 0; y < world.height; y++) {
+            for (let x = 0; x < world.width; x++) {
+                const cell = world.grid[x][y];
+                const idx = (y * world.width + x) * 4;
+                const nIdx = cell.nationIndex ?? -1;
+
+                if (nIdx >= 0 && nIdx < world.nations.length) {
+                    const hex = world.nations[nIdx].color;
+                    data[idx] = parseInt(hex.slice(1, 3), 16);
+                    data[idx + 1] = parseInt(hex.slice(3, 5), 16);
+                    data[idx + 2] = parseInt(hex.slice(5, 7), 16);
+                    data[idx + 3] = 255;
+                } else {
+                    data[idx] = 0;
+                    data[idx + 1] = 0;
+                    data[idx + 2] = 0;
+                    data[idx + 3] = 0; // Ocean/Water
+                }
+            }
+        }
+
+        this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, world.width, world.height, 0, this.gl.RGBA, this.gl.UNSIGNED_BYTE, data);
+        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.NEAREST);
+        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.NEAREST);
+        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
+        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
+    }
+
+    public render(width: number, height: number, worldWidth: number, worldHeight: number, scale: number, offsetX: number, offsetY: number, layer: number, hoverColor?: number[]) {
         this.gl.viewport(0, 0, width, height);
         this.gl.useProgram(this.program);
         this.gl.activeTexture(this.gl.TEXTURE0);
         this.gl.bindTexture(this.gl.TEXTURE_2D, this.texture);
         this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_mapTexture'), 0);
+
+        if (this.nationsTexture) {
+            this.gl.activeTexture(this.gl.TEXTURE1);
+            this.gl.bindTexture(this.gl.TEXTURE_2D, this.nationsTexture);
+            this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_nationsTexture'), 1);
+        }
 
         const posLoc = this.gl.getAttribLocation(this.program, 'a_position');
         this.gl.enableVertexAttribArray(posLoc);
@@ -211,6 +332,12 @@ export class GPURenderer {
         this.gl.uniform2f(this.gl.getUniformLocation(this.program, 'u_offset'), offsetX, offsetY);
         this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_layer'), layer);
         this.gl.uniform3fv(this.gl.getUniformLocation(this.program, 'u_biomeColors'), this.biomeColors);
+
+        if (hoverColor) {
+            this.gl.uniform3f(this.gl.getUniformLocation(this.program, 'u_hoverColor'), hoverColor[0], hoverColor[1], hoverColor[2]);
+        } else {
+            this.gl.uniform3f(this.gl.getUniformLocation(this.program, 'u_hoverColor'), -1.0, -1.0, -1.0);
+        }
 
         this.gl.drawArrays(this.gl.TRIANGLES, 0, 6);
     }
