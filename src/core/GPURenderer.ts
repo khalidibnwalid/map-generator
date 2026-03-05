@@ -18,10 +18,11 @@ const FRAGMENT_SHADER_SOURCE = `
     uniform float u_scale;
     uniform vec2 u_offset;
     uniform int u_layer;
-    uniform vec3 u_biomeColors[16];
+    uniform vec3 u_biomeColors[24];
     uniform vec3 u_hoverColor;
 
     int getBiome(float elevation, float temperature, float moisture) {
+        if (elevation < 0.1) return 20; // DEEP_OCEAN
         if (elevation < 0.3) return 0; // OCEAN
         if (elevation < 0.45) return 1; // SHALLOW_WATER
         if (elevation < 0.48) return 2; // BEACH
@@ -33,21 +34,30 @@ const FRAGMENT_SHADER_SOURCE = `
             return 4; // SCORCHED
         }
 
-        if (temperature > 0.66) {
+        // Low Elevation - high moisture check for Marsh
+        if (elevation < 0.55 && moisture > 0.7) {
+            return 21; // MARSH
+        }
+
+        if (temperature > 0.66) { // Hot
             if (moisture > 0.66) return 15; // TROPICAL_RAIN_FOREST
-            if (moisture > 0.33) return 14; // TROPICAL_SEASONAL_FOREST
+            if (moisture > 0.50) return 14; // TROPICAL_SEASONAL_FOREST
+            if (moisture > 0.33) return 22; // SAVANNA
             if (moisture > 0.16) return 10; // GRASSLAND
             return 13; // SUBTROPICAL_DESERT
         }
 
-        if (temperature > 0.33) {
+        if (temperature > 0.33) { // Temperate
             if (moisture > 0.83) return 12; // TEMPERATE_RAIN_FOREST
-            if (moisture > 0.5) return 11; // TEMPERATE_DECIDUOUS_FOREST
-            if (moisture > 0.16) return 10; // GRASSLAND
+            if (moisture > 0.50) return 11; // TEMPERATE_DECIDUOUS_FOREST
+            if (moisture > 0.33) return 10; // GRASSLAND
+            if (moisture > 0.16) return 23; // STEPPE
             return 8; // TEMPERATE_DESERT
         }
 
-        if (moisture > 0.66) return 7; // SNOW
+        // Cold
+        if (moisture > 0.80) return 7; // SNOW
+        if (moisture > 0.50) return 19; // TAIGA
         if (moisture > 0.33) return 9; // SHRUBLAND
         return 6; // TUNDRA
     }
@@ -81,7 +91,7 @@ const FRAGMENT_SHADER_SOURCE = `
     }
 
     vec3 getBiomeColor(int idx) {
-        for (int i = 0; i < 16; i++) {
+        for (int i = 0; i < 24; i++) {
             if (i == idx) return u_biomeColors[i];
         }
         return vec3(0.0);
@@ -159,7 +169,7 @@ const FRAGMENT_SHADER_SOURCE = `
                 color = biomeBase;
 
                 // 3. Agricultural Patterns in fertile areas
-                if (bIdx == 10 || bIdx == 11 || bIdx == 13 || bIdx == 14 || bIdx == 15) {
+                if (bIdx == 10 || bIdx == 11 || bIdx == 22 || bIdx == 14 || bIdx == 15) {
                    float ag = agriculture(wxwy);
                    if (ag > 0.0) {
                        vec3 agColor = mix(color, color * (0.8 + 0.4 * ag), 0.3);
@@ -297,14 +307,16 @@ export class GPURenderer {
     }
 
     private prepareBiomeColors(): Float32Array {
-        const colors = new Float32Array(16 * 3);
+        const colors = new Float32Array(24 * 3);
         const typeToIndex: Record<string, number> = {
             [BiomeType.OCEAN]: 0, [BiomeType.SHALLOW_WATER]: 1, [BiomeType.BEACH]: 2,
             [BiomeType.SCORCHED]: 4, [BiomeType.BARE]: 5, [BiomeType.TUNDRA]: 6,
             [BiomeType.SNOW]: 7, [BiomeType.TEMPERATE_DESERT]: 8, [BiomeType.SHRUBLAND]: 9,
             [BiomeType.GRASSLAND]: 10, [BiomeType.TEMPERATE_DECIDUOUS_FOREST]: 11,
             [BiomeType.TEMPERATE_RAIN_FOREST]: 12, [BiomeType.SUBTROPICAL_DESERT]: 13,
-            [BiomeType.TROPICAL_SEASONAL_FOREST]: 14, [BiomeType.TROPICAL_RAIN_FOREST]: 15
+            [BiomeType.TROPICAL_SEASONAL_FOREST]: 14, [BiomeType.TROPICAL_RAIN_FOREST]: 15,
+            [BiomeType.DEEP_OCEAN]: 20, [BiomeType.MARSH]: 21, [BiomeType.SAVANNA]: 22,
+            [BiomeType.STEPPE]: 23, [BiomeType.TAIGA]: 19 // Using 19 for Taiga to avoid out of bounds if array is 24
         };
         for (const [type, colorHex] of Object.entries(BIOME_COLORS)) {
             const idx = typeToIndex[type];
