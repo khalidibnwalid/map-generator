@@ -34,7 +34,6 @@ const FRAGMENT_SHADER_SOURCE = `
             return 4; // SCORCHED
         }
 
-        // Low Elevation - high moisture check for Marsh
         if (elevation < 0.55 && moisture > 0.7) {
             return 21; // MARSH
         }
@@ -55,7 +54,6 @@ const FRAGMENT_SHADER_SOURCE = `
             return 8; // TEMPERATE_DESERT
         }
 
-        // Cold
         if (moisture > 0.80) return 7; // SNOW
         if (moisture > 0.50) return 19; // TAIGA
         if (moisture > 0.33) return 9; // SHRUBLAND
@@ -66,7 +64,6 @@ const FRAGMENT_SHADER_SOURCE = `
         return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453);
     }
 
-    // Simple noise for organic displacement
     float noise(vec2 p) {
         vec2 i = floor(p);
         vec2 f = fract(p);
@@ -78,7 +75,6 @@ const FRAGMENT_SHADER_SOURCE = `
         return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
     }
 
-    // Fractal Brownian Motion for high-frequency detail
     float fbm(vec2 p) {
         float value = 0.0;
         float amplitude = 0.5;
@@ -97,13 +93,11 @@ const FRAGMENT_SHADER_SOURCE = `
         return vec3(0.0);
     }
 
-    // Rotated grid for agricultural field patterns
     float agriculture(vec2 p) {
-        float angle = 0.45; // ~25 degrees
+        float angle = 0.45;
         mat2 rot = mat2(cos(angle), -sin(angle), sin(angle), cos(angle));
         vec2 q = rot * p * 0.15;
         vec2 f = fract(q);
-        // Discrete cells
         float cell = rand(floor(q));
         return (f.x < 0.95 && f.y < 0.95) ? cell : -1.0;
     }
@@ -117,58 +111,60 @@ const FRAGMENT_SHADER_SOURCE = `
         float worldX = wxwy.x;
         float worldY = wxwy.y;
 
-        // Sampling coordinates
         float nx = worldX / u_worldSize.x;
         nx = nx - floor(nx);
         float ny = clamp(worldY / u_worldSize.y, 0.0, 1.0);
         
-        // Sample core data
         vec4 data = texture2D(u_mapTexture, vec2(nx, ny));
         float elevation = data.r;
         float moisture = data.g;
         float temperature = data.b;
 
-        // 1. Hillshading calculation (Relief)
         float eps = 1.0 / u_worldSize.x; 
         float hL = texture2D(u_mapTexture, vec2(nx - eps, ny)).r;
         float hR = texture2D(u_mapTexture, vec2(nx + eps, ny)).r;
         float hD = texture2D(u_mapTexture, vec2(nx, ny - eps)).r;
         float hU = texture2D(u_mapTexture, vec2(nx, ny + eps)).r;
         
-        // Light direction (top-left)
         vec3 lightDir = normalize(vec3(-1.0, 1.0, 0.5));
         vec3 va = normalize(vec3(2.0 * eps, 0.0, hR - hL));
         vec3 vb = normalize(vec3(0.0, 2.0 * eps, hU - hD));
         vec3 normal = cross(va, vb);
         float shade = dot(normal, lightDir);
-        shade = 0.8 + 0.4 * shade; // Remap to visible range
+        shade = 0.8 + 0.4 * shade;
 
         vec3 color = vec3(0.0);
-        int bIdx = getBiome(elevation, temperature, moisture);
-        vec3 biomeBase = getBiomeColor(bIdx);
+        
+        if (u_layer == 0 || u_layer == 4) { 
+            float blendFactor = smoothstep(3.0, 8.0, u_scale);
 
-        if (u_layer == 0 || u_layer == 4) { // Biomes or Nations
-            // 2. Procedural Detail (FBM)
-            float detail = fbm(wxwy * 0.05);
+            float e_noise = (fbm(wxwy * 1.5) - 0.5) * 0.05 * blendFactor;
+            float t_noise = (fbm(wxwy * 1.5 + 10.0) - 0.5) * 0.15 * blendFactor;
+            float m_noise = (fbm(wxwy * 1.5 + 20.0) - 0.5) * 0.15 * blendFactor;
+
+            float query_e = clamp(elevation + e_noise, 0.0, 1.0);
+            float query_t = clamp(temperature + t_noise, 0.0, 1.0);
+            float query_m = clamp(moisture + m_noise, 0.0, 1.0);
             
-            if (elevation < 0.45) { // Water
-                // Depth gradient
+            int bIdx = getBiome(query_e, query_t, query_m);
+            vec3 biomeBase = getBiomeColor(bIdx);
+
+            float detail = fbm(wxwy * 0.05);
+
+            if (elevation < 0.45) { 
                 float depth = clamp(elevation / 0.45, 0.0, 1.0);
-                vec3 deepOcean = vec3(0.05, 0.15, 0.3); // Deep blue
-                vec3 shallowOcean = vec3(0.1, 0.4, 0.6); // Turquoise
+                vec3 deepOcean = vec3(0.05, 0.15, 0.3);
+                vec3 shallowOcean = vec3(0.1, 0.4, 0.6);
                 color = mix(deepOcean, shallowOcean, depth);
-                
-                // Add minor water surface noise
                 color += (detail - 0.5) * 0.05;
-                
-                // Shoreline glow
                 float distToLand = smoothstep(0.4, 0.45, elevation);
                 color = mix(color, color + vec3(0.1, 0.2, 0.2), distToLand * 0.5);
 
-            } else { // Land
+            } else { 
                 color = biomeBase;
+                float dirtNoise = fbm(wxwy * 2.0);
+                color *= (0.85 + 0.3 * dirtNoise);
 
-                // 3. Agricultural Patterns in fertile areas
                 if (bIdx == 10 || bIdx == 11 || bIdx == 22 || bIdx == 14 || bIdx == 15) {
                    float ag = agriculture(wxwy);
                    if (ag > 0.0) {
@@ -177,25 +173,25 @@ const FRAGMENT_SHADER_SOURCE = `
                    }
                 }
 
-                // 4. Detailed Texturing
-                if (elevation > 0.7) { // Rugged mountains
+                if (elevation > 0.7) { 
                     color = mix(color, vec3(0.4, 0.35, 0.3), (detail - 0.5) * 0.5);
+                    if (elevation > 0.85) {
+                        float snowBlend = smoothstep(0.85, 0.9, elevation + (detail-0.5)*0.2);
+                        color = mix(color, vec3(0.9, 0.9, 0.95), snowBlend);
+                    }
                 } else {
                     color = mix(color, color * (0.9 + 0.2 * detail), 0.4);
                 }
 
-                // Apply Hillshading (only to land for better contrast)
                 color *= shade;
 
-                // Beach/Shore blend
                 if (elevation < 0.48) {
                     float beachBlend = smoothstep(0.45, 0.48, elevation);
-                    color = mix(vec3(0.83, 0.8, 0.63), color, beachBlend);
+                    color = mix(vec3(0.83, 0.8, 0.63) * shade, color, beachBlend);
                 }
             }
 
-            if (u_layer == 4) { // Nations Overlay Logic
-                // [Nations logic remains similar but integrated with the new realistic base]
+            if (u_layer == 4) {
                 vec2 pos = vec2(nx, ny) * u_worldSize - 0.5;
                 vec2 ixy = floor(pos);
                 vec2 fxy = fract(pos);
@@ -225,13 +221,13 @@ const FRAGMENT_SHADER_SOURCE = `
                 else nationColor = c11;
 
                 if (nationColor.a < 0.5) {
-                    color *= 0.7; // Dim the sea outside nations
+                    color *= 0.7; 
                 } else {
                     bool isBorder = (distance(nationColor, c00) > 0.01 || distance(nationColor, c10) > 0.01 || distance(nationColor, c01) > 0.01 || distance(nationColor, c11) > 0.01) && (minDist > 0.005);
                     if (isBorder) {
                         color = mix(color, nationColor.rgb * 0.75, 0.5);
                     } else {
-                        color = mix(color, nationColor.rgb, 0.25); // Subtle tint
+                        color = mix(color, nationColor.rgb, 0.25); 
                         if (distance(nationColor.rgb, u_hoverColor) < 0.01) {
                             color = mix(color, nationColor.rgb, 0.3) + vec3(0.15); 
                         }
@@ -239,13 +235,12 @@ const FRAGMENT_SHADER_SOURCE = `
                 }
             }
         } else {
-            // Debug layers (Elevation, Heat, Moisture)
-            if (u_layer == 1) { // Elevation
+            if (u_layer == 1) { 
                 bool isWater = elevation < 0.45;
                 color = isWater ? vec3(0.0, 0.0, elevation) : vec3(elevation) * shade;
-            } else if (u_layer == 2) { // Heatmap
+            } else if (u_layer == 2) { 
                 color = vec3(temperature, 0.0, 1.0 - temperature);
-            } else if (u_layer == 3) { // Moisture
+            } else if (u_layer == 3) { 
                 color = vec3(1.0 - moisture, 1.0 - moisture, moisture);
             }
         }
