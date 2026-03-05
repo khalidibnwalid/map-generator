@@ -1,7 +1,7 @@
-@import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap');
+@import url("https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap");
 
 :root {
-  font-family: 'Share Tech Mono', monospace;
+  font-family: "Share Tech Mono", monospace;
   line-height: 1.5;
   font-weight: 400;
 
@@ -68,9 +68,14 @@ body {
   gap: 0;
   /* Changed from 25px, let panel-content handle gaps */
   pointer-events: auto;
-  clip-path: polygon(0 4px, 4px 0,
-      100% 0, 100% calc(100% - 15px),
-      calc(100% - 15px) 100%, 0 100%);
+  clip-path: polygon(
+    0 4px,
+    4px 0,
+    100% 0,
+    100% calc(100% - 15px),
+    calc(100% - 15px) 100%,
+    0 100%
+  );
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -134,7 +139,11 @@ body {
   border-top: none;
   /* Account for clip-path */
   border-width: 0;
-  background: linear-gradient(135deg, transparent 50%, var(--accent-bright) 50%);
+  background: linear-gradient(
+    135deg,
+    transparent 50%,
+    var(--accent-bright) 50%
+  );
   width: 15px;
   height: 15px;
   bottom: 0px;
@@ -302,7 +311,7 @@ body {
 }
 
 h1 {
-  font-family: 'Rajdhani', sans-serif;
+  font-family: "Rajdhani", sans-serif;
   font-size: 1.6rem;
   font-weight: 600;
   margin: 0;
@@ -322,12 +331,14 @@ h1 {
   background: transparent;
   border: none;
   color: var(--accent-bright);
-  font-family: 'Share Tech Mono', monospace;
+  font-family: "Share Tech Mono", monospace;
   font-size: 1.2rem;
   padding: 0 5px;
   cursor: pointer;
   box-shadow: none;
-  transition: transform 0.3s ease, color 0.3s ease;
+  transition:
+    transform 0.3s ease,
+    color 0.3s ease;
 }
 
 .toggle-btn:hover {
@@ -370,7 +381,7 @@ label {
 }
 
 label::before {
-  content: '';
+  content: "";
   display: inline-block;
   width: 4px;
   height: 4px;
@@ -431,7 +442,7 @@ label::before {
   letter-spacing: 2px;
   color: rgba(255, 255, 255, 0.2);
   pointer-events: none;
-  font-family: 'Rajdhani', sans-serif;
+  font-family: "Rajdhani", sans-serif;
 }
 
 .brush-value-overlay {
@@ -439,7 +450,7 @@ label::before {
   right: 12px;
   top: 50%;
   transform: translateY(-50%);
-  font-family: 'Share Tech Mono', monospace;
+  font-family: "Share Tech Mono", monospace;
   font-size: 0.9rem;
   color: var(--accent-bright);
   pointer-events: none;
@@ -510,7 +521,7 @@ select:focus {
 }
 
 .select-wrapper::after {
-  content: '▼';
+  content: "▼";
   font-size: 0.7em;
   color: var(--border-neon-bright);
   position: absolute;
@@ -528,7 +539,7 @@ select option {
 /* === Buttons === */
 button {
   padding: 10px 16px;
-  font-family: 'Rajdhani', sans-serif;
+  font-family: "Rajdhani", sans-serif;
   font-size: 1rem;
   font-weight: 600;
   letter-spacing: 2px;
@@ -560,7 +571,7 @@ button:active {
 }
 
 .btn-primary::after {
-  content: '';
+  content: "";
   position: absolute;
   top: 0;
   left: 0;
@@ -616,7 +627,7 @@ button:active {
 }
 
 .layer-btn.active::before {
-  content: '';
+  content: "";
   position: absolute;
   top: 0;
   left: 0;
@@ -658,7 +669,14 @@ button:active {
   pointer-events: none;
   z-index: 100;
   min-width: 140px;
-  clip-path: polygon(0 4px, 4px 0, 100% 0, 100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%);
+  clip-path: polygon(
+    0 4px,
+    4px 0,
+    100% 0,
+    100% calc(100% - 8px),
+    calc(100% - 8px) 100%,
+    0 100%
+  );
   box-shadow: 0 0 14px rgba(180, 120, 255, 0.2);
   animation: tooltip-fade-in 0.15s ease;
 }
@@ -676,7 +694,7 @@ button:active {
 }
 
 .tooltip-name {
-  font-family: 'Rajdhani', sans-serif;
+  font-family: "Rajdhani", sans-serif;
   font-size: 1rem;
   font-weight: 700;
   color: rgba(220, 180, 255, 1);
@@ -757,7 +775,7 @@ button:active {
 }
 
 .loader-text {
-  font-family: 'Rajdhani', sans-serif;
+  font-family: "Rajdhani", sans-serif;
   font-size: 1.8rem;
   font-weight: 700;
   color: #fff;
@@ -793,8 +811,64 @@ button:active {
 }
 
 .loader-percentage {
-  font-family: 'Share Tech Mono', monospace;
+  font-family: "Share Tech Mono", monospace;
   font-size: 1.2rem;
   color: var(--accent-bright);
   letter-spacing: 2px;
+}
+
+/* === Map Ruler === */
+.map-ruler {
+  position: absolute;
+  bottom: 30px;
+  right: 30px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  pointer-events: none;
+  z-index: 10;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+
+.ruler-line {
+  position: relative;
+  height: 6px;
+  border-bottom: 2px solid var(--text-active);
+  border-left: 2px solid var(--text-active);
+  border-right: 2px solid var(--text-active);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+  transition: width 0.1s linear;
+}
+
+.ruler-line::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 2px;
+  height: 6px;
+  background-color: var(--text-active);
+  transform: translateX(-50%);
+}
+
+.ruler-labels {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  position: relative;
+}
+
+.ruler-label {
+  font-family: "Share Tech Mono", monospace;
+  font-size: 0.85rem;
+  color: var(--text-active);
+  font-weight: bold;
+  letter-spacing: 1px;
+}
+
+.ruler-label-mid {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
 }

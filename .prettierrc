@@ -1,0 +1,4 @@
+{
+  "embeddedLanguageFormatting": "auto",
+  "plugins": ["prettier-plugin-embed"]
+}

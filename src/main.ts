@@ -1,109 +1,21 @@
-import './style.css';
-import { CanvasManager } from './core/CanvasManager';
-import { MapGenerator } from './game/MapGenerator';
-import { Interface } from './ui/Interface';
+import "./style.css";
+import { CanvasManager } from "./core/CanvasManager";
+import { MapGenerator } from "./game/MapGenerator";
+import { Interface } from "./ui/Interface";
+import renderMainApp from "./ui/components/MainApp";
 
-document.querySelector<HTMLDivElement>('#app')!.innerHTML = `
-  <div id="ui-panel" class="tech-panel">
-    <div class="tech-corner top-left"></div>
-    <div class="tech-corner top-right"></div>
-    <div class="tech-corner bottom-left"></div>
-    <div class="tech-corner bottom-right"></div>
-    <div class="panel-header">
-      <span class="header-icon">⬡</span>
-      <h1>MAP</h1>
-      <span class="header-line"></span>
-      <button id="toggle-panel" class="toggle-btn" title="Toggle Panel">[-]</button>
-    </div>
-    
-    <div class="panel-tabs">
-      <button id="tab-generate" class="tab-btn active">GENERATE</button>
-      <button id="tab-nations" class="tab-btn">NATIONS</button>
-    </div>
-
-    <div id="panel-content" class="panel-content">
-      <!-- Generate Tab -->
-      <div id="content-generate" class="tab-content active">
-        <div class="control-group">
-          <label for="preset">[PARAM] PRESET</label>
-          <div class="select-wrapper">
-            <select id="preset">
-              <option value="Heavy Landmass">Heavy Landmass</option>
-              <option value="Realistic Continents">Realistic Continents</option>
-              <option value="Mediterranean Archipelago">Mediterranean Archipelago</option>
-              <option value="Pangea">Pangea</option>
-            </select>
-          </div>
-        </div>
-        
-        <div class="control-group">
-          <label for="size">[PARAM] SIZE</label>
-          <div class="select-wrapper">
-            <select id="size">
-              <option value="400x225">Small (400x225)</option>
-              <option value="800x450" selected>Medium (800x450)</option>
-              <option value="1600x900">Large (1600x900)</option>
-              <option value="3200x1800">Epic (3200x1800)</option>
-            </select>
-          </div>
-        </div>
-        
-        <div class="control-group">
-          <label>[PARAM] SEED</label>
-          <div class="input-row">
-            <input type="number" id="seed" value="123456" />
-            <button id="generate" class="btn-primary">GENERATE</button>
-          </div>
-        </div>
-        
-        <div class="control-group layers-group">
-          <label>[VIEW] LAYERS [■■■■]</label>
-          <div class="layers">
-            <button id="layer-biomes" class="layer-btn active">BIOMES</button>
-            <button id="layer-elevation" class="layer-btn">ELEVATION</button>
-            <button id="layer-heatmap" class="layer-btn">HEATMAP</button>
-            <button id="layer-moisture" class="layer-btn">MOISTURE</button>
-            <button id="layer-nations" class="layer-btn layer-btn--full">NATIONS</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Nations Tab -->
-      <div id="content-nations" class="tab-content">
-        <div class="edit-mode-controls">
-          <button id="btn-edit-nations" class="btn-icon" title="Toggle Edit Mode">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
-              <path d="M20.71,7.04C21.1,6.65 21.1,6 20.71,5.63L18.37,3.29C18,2.9 17.35,2.9 16.96,3.29L15.12,5.12L18.87,8.87M3,17.25V21H6.75L17.81,9.93L14.06,6.18L3,17.25Z" />
-            </svg>
-          </button>
-          <div class="brush-size-control">
-            <span class="brush-label-overlay">BRUSH</span>
-            <input type="range" id="brush-size" min="1" max="10" value="2">
-            <span id="brush-size-value" class="brush-value-overlay">2</span>
-          </div>
-        </div>
-        <div id="nations-list" class="nations-list">
-          <!-- Dynamically populated -->
-        </div>
-      </div>
-    </div>
-  </div>
-  <canvas id="mapCanvas"></canvas>
-  <div id="nation-tooltip" class="nation-tooltip" style="display:none;">
-    <div class="tooltip-name"></div>
-    <div class="tooltip-detail"></div>
-  </div>
-`;
+renderMainApp();
 
 // Initialize
-const canvasManager = new CanvasManager('mapCanvas');
+const canvasManager = new CanvasManager("mapCanvas");
 // Generate an 800x450 map logic cells size (16:9 aspect ratio)
-const generator = new MapGenerator(800, 450, 123456);
+const random = Math.floor(Math.random() * 1000000);
+const generator = new MapGenerator(800, 450, random);
 
 // Initial state: fit to screen
 const fitScale = window.innerHeight / 450;
 canvasManager.scale = fitScale;
-canvasManager.offsetX = (window.innerWidth - (800 * canvasManager.scale)) / 2;
+canvasManager.offsetX = (window.innerWidth - 800 * canvasManager.scale) / 2;
 canvasManager.offsetY = 0;
 
 // The Interface constructor now triggers the initial generation automatically (async)

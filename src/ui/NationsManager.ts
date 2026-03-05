@@ -1,255 +1,266 @@
-import type { MapGenerator } from '../game/MapGenerator';
-import type { CanvasManager } from '../core/CanvasManager';
-import type { GPURenderer } from '../core/GPURenderer';
+import type { MapGenerator } from "../game/MapGenerator";
+import type { CanvasManager } from "../core/CanvasManager";
+import type { GPURenderer } from "../core/GPURenderer";
 
 export class NationsManager {
-    public hoveredNationIndex: number = -1;
-    public selectedNationIndex: number = -1;
-    public isEditingNations: boolean = false;
-    public isPainting: boolean = false;
-    public brushSize: number = 2;
-    public nationCellsList: number[][] = [];
-    public nationCentroids: { x: number, y: number }[] = [];
-    public nationSizes: number[] = [];
-    public nationsStateDirty: boolean = true;
+  public hoveredNationIndex: number = -1;
+  public selectedNationIndex: number = -1;
+  public isEditingNations: boolean = false;
+  public isPainting: boolean = false;
+  public brushSize: number = 2;
+  public nationCellsList: number[][] = [];
+  public nationCentroids: { x: number; y: number }[] = [];
+  public nationSizes: number[] = [];
+  public nationsStateDirty: boolean = true;
 
-    private lastPaintedX: number | null = null;
-    private lastPaintedY: number | null = null;
+  private lastPaintedX: number | null = null;
+  private lastPaintedY: number | null = null;
 
-    private generator: MapGenerator;
-    private canvasManager: CanvasManager;
-    private gpuRenderer: GPURenderer;
+  private generator: MapGenerator;
+  private canvasManager: CanvasManager;
+  private gpuRenderer: GPURenderer;
 
-    constructor(
-        generator: MapGenerator,
-        canvasManager: CanvasManager,
-        gpuRenderer: GPURenderer
-    ) {
-        this.generator = generator;
-        this.canvasManager = canvasManager;
-        this.gpuRenderer = gpuRenderer;
-    }
+  constructor(
+    generator: MapGenerator,
+    canvasManager: CanvasManager,
+    gpuRenderer: GPURenderer,
+  ) {
+    this.generator = generator;
+    this.canvasManager = canvasManager;
+    this.gpuRenderer = gpuRenderer;
+  }
 
-    public renderList() {
-        if (document.activeElement?.classList.contains('nation-name-input')) return;
+  public renderList() {
+    if (document.activeElement?.classList.contains("nation-name-input")) return;
 
-        const listContainer = document.getElementById('nations-list');
-        if (!listContainer) return;
+    const listContainer = document.getElementById("nations-list");
+    if (!listContainer) return;
 
-        const world = this.generator.getWorld();
-        listContainer.innerHTML = '';
+    const world = this.generator.getWorld();
+    listContainer.innerHTML = "";
 
-        world.nations.forEach((nation, idx) => {
-            const item = document.createElement('div');
-            item.className = `nation-item ${this.selectedNationIndex === idx ? 'selected' : ''}`;
-            item.dataset.index = idx.toString();
+    world.nations.forEach((nation, idx) => {
+      const item = document.createElement("div");
+      item.className = `nation-item ${this.selectedNationIndex === idx ? "selected" : ""}`;
+      item.dataset.index = idx.toString();
 
-            const swatch = document.createElement('div');
-            swatch.className = 'nation-color-swatch';
-            swatch.style.backgroundColor = nation.color;
+      const swatch = document.createElement("div");
+      swatch.className = "nation-color-swatch";
+      swatch.style.backgroundColor = nation.color;
 
-            const nameInput = document.createElement('input');
-            nameInput.type = 'text';
-            nameInput.className = 'nation-name-input';
-            nameInput.value = nation.name;
-            nameInput.addEventListener('change', (e) => {
-                nation.name = (e.target as HTMLInputElement).value;
-                this.canvasManager.scheduleRender();
-            });
-            nameInput.addEventListener('mousedown', (e) => e.stopPropagation());
-            nameInput.addEventListener('click', (e) => e.stopPropagation());
-
-            const territoryCount = document.createElement('span');
-            territoryCount.className = 'nation-territory-count';
-            const area = this.nationCellsList[idx]?.length || 0;
-            territoryCount.textContent = `${area} px²`;
-
-            item.appendChild(swatch);
-            item.appendChild(nameInput);
-            item.appendChild(territoryCount);
-
-            item.addEventListener('click', () => {
-                this.selectedNationIndex = idx;
-                this.renderList();
-            });
-
-            item.addEventListener('mouseenter', () => {
-                if (this.isPainting) return;
-                this.hoveredNationIndex = idx;
-                this.canvasManager.scheduleRender();
-            });
-
-            item.addEventListener('mouseleave', () => {
-                if (this.isPainting) return;
-                this.hoveredNationIndex = -1;
-                this.canvasManager.scheduleRender();
-            });
-
-            listContainer.appendChild(item);
-        });
-    }
-
-    public handlePainting(clientX: number, clientY: number) {
-        if (!this.isPainting || this.selectedNationIndex === -1) return;
-
-        const cm = this.canvasManager;
-        const rect = cm.canvas.getBoundingClientRect();
-        const sx = clientX - rect.left;
-        const sy = clientY - rect.top;
-
-        const wx = Math.floor((sx - cm.offsetX) / cm.scale);
-        const wy = Math.floor((sy - cm.offsetY) / cm.scale);
-
-        if (this.lastPaintedX === null || this.lastPaintedY === null) {
-            this.paintAt(wx, wy);
-        } else {
-            const dx = wx - this.lastPaintedX;
-            const dy = wy - this.lastPaintedY;
-            const steps = Math.max(Math.abs(dx), Math.abs(dy), 1);
-            for (let i = 0; i <= steps; i++) {
-                const px = Math.floor(this.lastPaintedX + (dx * i) / steps);
-                const py = Math.floor(this.lastPaintedY + (dy * i) / steps);
-                this.paintAt(px, py);
-            }
-        }
-
-        this.lastPaintedX = wx;
-        this.lastPaintedY = wy;
-
-        this.gpuRenderer.updateNationsDataTexture(this.generator.getWorld());
+      const nameInput = document.createElement("input");
+      nameInput.type = "text";
+      nameInput.className = "nation-name-input";
+      nameInput.value = nation.name;
+      nameInput.addEventListener("change", (e) => {
+        nation.name = (e.target as HTMLInputElement).value;
         this.canvasManager.scheduleRender();
+      });
+      nameInput.addEventListener("mousedown", (e) => e.stopPropagation());
+      nameInput.addEventListener("click", (e) => e.stopPropagation());
+
+      const territoryCount = document.createElement("span");
+      territoryCount.className = "nation-territory-count";
+      const areaPx = this.nationCellsList[idx]?.length || 0;
+      // 1 px = 5km, so 1 px² = 25 km²
+      const areaKm2 = areaPx * 25;
+      territoryCount.textContent = `${areaKm2.toLocaleString()} km²`;
+
+      item.appendChild(swatch);
+      item.appendChild(nameInput);
+      item.appendChild(territoryCount);
+
+      item.addEventListener("click", () => {
+        this.selectedNationIndex = idx;
         this.renderList();
+      });
+
+      item.addEventListener("mouseenter", () => {
+        if (this.isPainting) return;
+        this.hoveredNationIndex = idx;
+        this.canvasManager.scheduleRender();
+      });
+
+      item.addEventListener("mouseleave", () => {
+        if (this.isPainting) return;
+        this.hoveredNationIndex = -1;
+        this.canvasManager.scheduleRender();
+      });
+
+      listContainer.appendChild(item);
+    });
+  }
+
+  public handlePainting(clientX: number, clientY: number) {
+    if (!this.isPainting || this.selectedNationIndex === -1) return;
+
+    const cm = this.canvasManager;
+    const rect = cm.canvas.getBoundingClientRect();
+    const sx = clientX - rect.left;
+    const sy = clientY - rect.top;
+
+    const wx = Math.floor((sx - cm.offsetX) / cm.scale);
+    const wy = Math.floor((sy - cm.offsetY) / cm.scale);
+
+    if (this.lastPaintedX === null || this.lastPaintedY === null) {
+      this.paintAt(wx, wy);
+    } else {
+      const dx = wx - this.lastPaintedX;
+      const dy = wy - this.lastPaintedY;
+      const steps = Math.max(Math.abs(dx), Math.abs(dy), 1);
+      for (let i = 0; i <= steps; i++) {
+        const px = Math.floor(this.lastPaintedX + (dx * i) / steps);
+        const py = Math.floor(this.lastPaintedY + (dy * i) / steps);
+        this.paintAt(px, py);
+      }
     }
 
-    public stopPainting() {
-        if (this.isPainting) {
-            this.isPainting = false;
-            this.lastPaintedX = null;
-            this.lastPaintedY = null;
-            this.updateStatistics();
-            this.canvasManager.scheduleRender();
-        }
+    this.lastPaintedX = wx;
+    this.lastPaintedY = wy;
+
+    this.gpuRenderer.updateNationsDataTexture(this.generator.getWorld());
+    this.canvasManager.scheduleRender();
+    this.renderList();
+  }
+
+  public stopPainting() {
+    if (this.isPainting) {
+      this.isPainting = false;
+      this.lastPaintedX = null;
+      this.lastPaintedY = null;
+      this.updateStatistics();
+      this.canvasManager.scheduleRender();
     }
+  }
 
-    private paintAt(wx: number, wy: number) {
-        const world = this.generator.getWorld();
-        const brushSize = this.brushSize;
-        const radiusSq = (brushSize / 2) * (brushSize / 2);
-        const offset = Math.floor(brushSize / 2);
+  private paintAt(wx: number, wy: number) {
+    const world = this.generator.getWorld();
+    const brushSize = this.brushSize;
+    const radiusSq = (brushSize / 2) * (brushSize / 2);
+    const offset = Math.floor(brushSize / 2);
 
-        for (let dx = 0; dx < brushSize; dx++) {
-            for (let dy = 0; dy < brushSize; dy++) {
-                const lx = dx - offset;
-                const ly = dy - offset;
+    for (let dx = 0; dx < brushSize; dx++) {
+      for (let dy = 0; dy < brushSize; dy++) {
+        const lx = dx - offset;
+        const ly = dy - offset;
 
-                if (lx * lx + ly * ly > radiusSq + 0.25) continue;
+        if (lx * lx + ly * ly > radiusSq + 0.25) continue;
 
-                const tx = ((wx + lx % world.width) + world.width) % world.width;
-                const ty = wy + ly;
+        const tx = (wx + (lx % world.width) + world.width) % world.width;
+        const ty = wy + ly;
 
-                if (ty >= 0 && ty < world.height) {
-                    const cell = world.grid[tx][ty];
-                    if (!cell.isWater && cell.nationIndex !== this.selectedNationIndex) {
-                        const oldIdx = cell.nationIndex ?? -1;
-                        cell.nationIndex = this.selectedNationIndex;
+        if (ty >= 0 && ty < world.height) {
+          const cell = world.grid[tx][ty];
+          if (!cell.isWater && cell.nationIndex !== this.selectedNationIndex) {
+            const oldIdx = cell.nationIndex ?? -1;
+            cell.nationIndex = this.selectedNationIndex;
 
-                        if (oldIdx !== -1) {
-                            const oldList = this.nationCellsList[oldIdx];
-                            const flatIdx = ty * world.width + tx;
-                            const listIdx = oldList.indexOf(flatIdx);
-                            if (listIdx > -1) oldList.splice(listIdx, 1);
-                        }
-                        this.nationCellsList[this.selectedNationIndex].push(ty * world.width + tx);
-
-                        this.updateLocalBorders(tx, ty);
-                    }
-                }
+            if (oldIdx !== -1) {
+              const oldList = this.nationCellsList[oldIdx];
+              const flatIdx = ty * world.width + tx;
+              const listIdx = oldList.indexOf(flatIdx);
+              if (listIdx > -1) oldList.splice(listIdx, 1);
             }
+            this.nationCellsList[this.selectedNationIndex].push(
+              ty * world.width + tx,
+            );
+
+            this.updateLocalBorders(tx, ty);
+          }
         }
+      }
     }
+  }
 
-    private updateLocalBorders(x: number, y: number) {
-        const world = this.generator.getWorld();
-        for (let dx = -1; dx <= 1; dx++) {
-            for (let dy = -1; dy <= 1; dy++) {
-                const tx = ((x + dx) % world.width + world.width) % world.width;
-                const ty = y + dy;
+  private updateLocalBorders(x: number, y: number) {
+    const world = this.generator.getWorld();
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const tx = (((x + dx) % world.width) + world.width) % world.width;
+        const ty = y + dy;
 
-                if (ty >= 0 && ty < world.height) {
-                    const cell = world.grid[tx][ty];
-                    if (cell.isWater) continue;
+        if (ty >= 0 && ty < world.height) {
+          const cell = world.grid[tx][ty];
+          if (cell.isWater) continue;
 
-                    let isBorder = false;
-                    const nid = cell.nationIndex;
-                    neighborLoop:
-                    for (let nxd = -1; nxd <= 1; nxd++) {
-                        for (let nyd = -1; nyd <= 1; nyd++) {
-                            if (nxd === 0 && nyd === 0) continue;
-                            const nx = ((tx + nxd) % world.width + world.width) % world.width;
-                            const ny = ty + nyd;
-                            if (ny >= 0 && ny < world.height) {
-                                const nb = world.grid[nx][ny];
-                                if (nb.isWater || (nb.nationIndex ?? -1) !== nid) {
-                                    isBorder = true;
-                                    break neighborLoop;
-                                }
-                            }
-                        }
-                    }
-                    cell.isNationBorder = isBorder;
+          let isBorder = false;
+          const nid = cell.nationIndex;
+          neighborLoop: for (let nxd = -1; nxd <= 1; nxd++) {
+            for (let nyd = -1; nyd <= 1; nyd++) {
+              if (nxd === 0 && nyd === 0) continue;
+              const nx =
+                (((tx + nxd) % world.width) + world.width) % world.width;
+              const ny = ty + nyd;
+              if (ny >= 0 && ny < world.height) {
+                const nb = world.grid[nx][ny];
+                if (nb.isWater || (nb.nationIndex ?? -1) !== nid) {
+                  isBorder = true;
+                  break neighborLoop;
                 }
+              }
             }
+          }
+          cell.isNationBorder = isBorder;
         }
+      }
+    }
+  }
+
+  public buildCache() {
+    const world = this.generator.getWorld();
+    const W = world.width;
+    const H = world.height;
+    this.nationCellsList = world.nations.map(() => []);
+    this.nationCentroids = world.nations.map(() => ({ x: 0, y: 0 }));
+    this.nationSizes = world.nations.map(() => 0);
+
+    for (let x = 0; x < W; x++) {
+      for (let y = 0; y < H; y++) {
+        const cell = world.grid[x][y];
+        if (
+          !cell.isWater &&
+          cell.nationIndex !== undefined &&
+          cell.nationIndex >= 0
+        ) {
+          this.nationCellsList[cell.nationIndex].push(y * W + x);
+          this.nationCentroids[cell.nationIndex].x += x;
+          this.nationCentroids[cell.nationIndex].y += y;
+        }
+      }
     }
 
-    public buildCache() {
-        const world = this.generator.getWorld();
-        const W = world.width;
-        const H = world.height;
-        this.nationCellsList = world.nations.map(() => []);
-        this.nationCentroids = world.nations.map(() => ({ x: 0, y: 0 }));
-        this.nationSizes = world.nations.map(() => 0);
+    this.updateStatistics();
+  }
 
-        for (let x = 0; x < W; x++) {
-            for (let y = 0; y < H; y++) {
-                const cell = world.grid[x][y];
-                if (!cell.isWater && cell.nationIndex !== undefined && cell.nationIndex >= 0) {
-                    this.nationCellsList[cell.nationIndex].push(y * W + x);
-                    this.nationCentroids[cell.nationIndex].x += x;
-                    this.nationCentroids[cell.nationIndex].y += y;
-                }
-            }
+  public updateStatistics() {
+    const world = this.generator.getWorld();
+    const W = world.width;
+
+    let maxArea = 0;
+    for (let i = 0; i < world.nations.length; i++) {
+      const cells = this.nationCellsList[i];
+      const area = cells.length;
+      if (area > maxArea) maxArea = area;
+
+      if (area > 0) {
+        let sumX = 0;
+        let sumY = 0;
+        for (const flatIdx of cells) {
+          sumX += flatIdx % W;
+          sumY += Math.floor(flatIdx / W);
         }
-
-        this.updateStatistics();
+        this.nationCentroids[i] = { x: sumX / area, y: sumY / area };
+      } else {
+        this.nationCentroids[i] = {
+          x: world.nations[i]?.capitalX || 0,
+          y: world.nations[i]?.capitalY || 0,
+        };
+      }
     }
 
-    public updateStatistics() {
-        const world = this.generator.getWorld();
-        const W = world.width;
-
-        let maxArea = 0;
-        for (let i = 0; i < world.nations.length; i++) {
-            const cells = this.nationCellsList[i];
-            const area = cells.length;
-            if (area > maxArea) maxArea = area;
-
-            if (area > 0) {
-                let sumX = 0;
-                let sumY = 0;
-                for (const flatIdx of cells) {
-                    sumX += (flatIdx % W);
-                    sumY += Math.floor(flatIdx / W);
-                }
-                this.nationCentroids[i] = { x: sumX / area, y: sumY / area };
-            } else {
-                this.nationCentroids[i] = { x: world.nations[i]?.capitalX || 0, y: world.nations[i]?.capitalY || 0 };
-            }
-        }
-
-        for (let i = 0; i < world.nations.length; i++) {
-            const area = this.nationCellsList[i].length;
-            this.nationSizes[i] = maxArea > 0 ? Math.sqrt(area / maxArea) : 0.5;
-        }
+    for (let i = 0; i < world.nations.length; i++) {
+      const area = this.nationCellsList[i].length;
+      this.nationSizes[i] = maxArea > 0 ? Math.sqrt(area / maxArea) : 0.5;
     }
+  }
 }
