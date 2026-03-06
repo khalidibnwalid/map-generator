@@ -8,6 +8,8 @@ import {
   generateRivers,
   generateNations,
   generateCities,
+  generateRoads,
+  generateCityGeometry,
   type GeneratorContext,
 } from "./generators";
 
@@ -104,8 +106,18 @@ export class MapGenerator {
     onProgress?.(95);
     await new Promise((r) => requestAnimationFrame(r));
 
-    ctx.onProgress = report(95, 100);
+    ctx.onProgress = report(95, 97);
     await generateCities(ctx);
+    onProgress?.(97);
+    await new Promise((r) => requestAnimationFrame(r));
+
+    ctx.onProgress = report(97, 98);
+    await generateRoads(ctx);
+    onProgress?.(98);
+    await new Promise((r) => requestAnimationFrame(r));
+
+    ctx.onProgress = report(98, 100);
+    await generateCityGeometry(ctx);
     onProgress?.(100);
 
     return this.world;

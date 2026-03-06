@@ -6,6 +6,7 @@ import { TooltipManager } from "./TooltipManager";
 import { LabelRenderer } from "./LabelRenderer";
 import { NationsManager } from "./NationsManager";
 import { UIManager } from "./UIManager";
+import { CityRenderer } from "./CityRenderer";
 
 export type ViewLayer =
   | "Biomes"
@@ -25,6 +26,7 @@ export class Interface {
   private labelRenderer!: LabelRenderer;
   private nationsManager!: NationsManager;
   private uiManager!: UIManager;
+  private cityRenderer!: CityRenderer;
 
   // GPU rendering
   private gpuRenderer!: GPURenderer;
@@ -48,6 +50,7 @@ export class Interface {
         this.gpuRenderer,
       );
       this.uiManager = new UIManager();
+      this.cityRenderer = new CityRenderer();
 
       console.log("Starting initial generation...");
       this.uiManager.showLoadingModal();
@@ -432,7 +435,7 @@ export class Interface {
 
     ctx.restore();
 
-    if (this.currentLayer === "Nations") {
+    if (this.currentLayer === "Nations" && scale < 10) {
       ctx.save();
       ctx.translate(offsetX, offsetY);
       ctx.scale(scale, scale);
@@ -465,6 +468,60 @@ export class Interface {
       ctx.globalAlpha = 1.0;
       ctx.restore();
     }
+
+    // Render World Roads
+    if (world.worldRoads && world.worldRoads.length > 0) {
+      ctx.save();
+      const mapPixelWidth = world.width * scale;
+      const startCopy = Math.floor(-offsetX / mapPixelWidth);
+      const endCopy = Math.ceil((width - offsetX) / mapPixelWidth);
+
+      ctx.strokeStyle = "rgba(140, 110, 80, 0.7)";
+      ctx.lineWidth = Math.max(1, scale * 0.15);
+      // Round caps/joins for smoother looking roads
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+
+      for (let copy = startCopy; copy <= endCopy; copy++) {
+        const cxOffset = copy * world.width;
+
+        ctx.beginPath();
+        for (const road of world.worldRoads) {
+          if (road.length === 0) continue;
+          let first = true;
+          for (let i = 0; i < road.length; i++) {
+            const p = road[i];
+            const px = (p.x + cxOffset) * scale + offsetX;
+            const py = p.y * scale + offsetY;
+
+            if (first) {
+              ctx.moveTo(px, py);
+              first = false;
+            } else {
+              const prev = road[i - 1];
+              if (Math.abs(p.x - prev.x) > world.width / 2) {
+                // Handle world wrap edge case by skipping the jump
+                ctx.moveTo(px, py);
+              } else {
+                ctx.lineTo(px, py);
+              }
+            }
+          }
+        }
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    this.cityRenderer.render(
+      ctx,
+      world,
+      width,
+      height,
+      scale,
+      offsetX,
+      offsetY,
+    );
 
     this.labelRenderer.render(
       ctx,
