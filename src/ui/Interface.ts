@@ -7,6 +7,7 @@ import { LabelRenderer } from "./LabelRenderer";
 import { NationsManager } from "./NationsManager";
 import { UIManager } from "./UIManager";
 import { CityRenderer } from "./CityRenderer";
+import type { Point } from "../game/WorldData";
 
 export type ViewLayer =
   | "Biomes"
@@ -427,14 +428,7 @@ export class Interface {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.drawImage(this.gpuCanvas, 0, 0);
 
-    ctx.save();
-    ctx.translate(offsetX, offsetY);
-    ctx.scale(scale, scale);
-
-    ctx.restore();
-
-    ctx.restore();
-
+    // 1. Render Nation Capitals Circles (at low zoom)
     if (this.currentLayer === "Nations" && scale < 10) {
       ctx.save();
       ctx.translate(offsetX, offsetY);
@@ -469,50 +463,6 @@ export class Interface {
       ctx.restore();
     }
 
-    // Render World Roads
-    if (world.worldRoads && world.worldRoads.length > 0) {
-      ctx.save();
-      const mapPixelWidth = world.width * scale;
-      const startCopy = Math.floor(-offsetX / mapPixelWidth);
-      const endCopy = Math.ceil((width - offsetX) / mapPixelWidth);
-
-      ctx.strokeStyle = "rgba(140, 110, 80, 0.7)";
-      ctx.lineWidth = Math.max(1, scale * 0.15);
-      // Round caps/joins for smoother looking roads
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-
-      for (let copy = startCopy; copy <= endCopy; copy++) {
-        const cxOffset = copy * world.width;
-
-        ctx.beginPath();
-        for (const road of world.worldRoads) {
-          if (road.length === 0) continue;
-          let first = true;
-          for (let i = 0; i < road.length; i++) {
-            const p = road[i];
-            const px = (p.x + cxOffset) * scale + offsetX;
-            const py = p.y * scale + offsetY;
-
-            if (first) {
-              ctx.moveTo(px, py);
-              first = false;
-            } else {
-              const prev = road[i - 1];
-              if (Math.abs(p.x - prev.x) > world.width / 2) {
-                // Handle world wrap edge case by skipping the jump
-                ctx.moveTo(px, py);
-              } else {
-                ctx.lineTo(px, py);
-              }
-            }
-          }
-        }
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
-
     this.cityRenderer.render(
       ctx,
       world,
@@ -522,6 +472,136 @@ export class Interface {
       offsetX,
       offsetY,
     );
+
+    // 3. Render World Roads (AFTER city geometry for better connectivity)
+    if (world.worldRoads && world.worldRoads.length > 0) {
+      ctx.save();
+      const mapPixelWidth = world.width * scale;
+      const startCopy = Math.floor(-offsetX / mapPixelWidth);
+      const endCopy = Math.ceil((width - offsetX) / mapPixelWidth);
+
+      // Pre-smooth paths once per frame to avoid redundant O(N) work in the copy loop
+      const smoothedRoads = world.worldRoads.map((road) => {
+        let currentPath = road;
+        const iterations = 1;
+        for (let iter = 0; iter < iterations; iter++) {
+          const smoothed: Point[] = [];
+          if (currentPath.length < 3) return currentPath;
+          smoothed.push(currentPath[0]);
+          for (let i = 0; i < currentPath.length - 1; i++) {
+            const p0 = currentPath[i];
+            const p1 = currentPath[i + 1];
+
+            let inCity = false;
+            if (scale > 10) {
+              for (const city of world.cities) {
+                const cityRadius = city.isCapital
+                  ? 2.5
+                  : city.size === 1
+                    ? 1.5
+                    : 0.8;
+                const dx0 = p0.x - city.x;
+                const dy0 = p0.y - city.y;
+                const dx1 = p1.x - city.x;
+                const dy1 = p1.y - city.y;
+                if (
+                  dx0 * dx0 + dy0 * dy0 < cityRadius * cityRadius &&
+                  dx1 * dx1 + dy1 * dy1 < cityRadius * cityRadius
+                ) {
+                  inCity = true;
+                  break;
+                }
+              }
+            }
+
+            if (Math.abs(p0.x - p1.x) > world.width / 2 || inCity) {
+              smoothed.push(p0, p1);
+              continue;
+            }
+            smoothed.push({
+              x: 0.75 * p0.x + 0.25 * p1.x,
+              y: 0.75 * p0.y + 0.25 * p1.y,
+            });
+            smoothed.push({
+              x: 0.25 * p0.x + 0.75 * p1.x,
+              y: 0.25 * p0.y + 0.75 * p1.y,
+            });
+          }
+          smoothed.push(currentPath[currentPath.length - 1]);
+          currentPath = smoothed;
+        }
+        return currentPath;
+      });
+
+      const roadStrokeWidth = 0.6 + Math.pow(scale, 0.45) * 0.15;
+      const casingWidth = roadStrokeWidth + 0.3 + Math.pow(scale, 0.4) * 0.1;
+
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+
+      for (let copy = startCopy; copy <= endCopy; copy++) {
+        const cxOffset = copy * world.width;
+
+        // Pass 1: Casing
+        ctx.strokeStyle = "rgba(40, 30, 20, 0.8)";
+        ctx.lineWidth = casingWidth;
+        for (const road of smoothedRoads) {
+          if (road.length < 2) continue;
+          ctx.beginPath();
+          let pPrev = road[0];
+          ctx.moveTo(
+            (pPrev.x + cxOffset) * scale + offsetX,
+            pPrev.y * scale + offsetY,
+          );
+          for (let i = 1; i < road.length; i++) {
+            const p = road[i];
+            if (Math.abs(p.x - pPrev.x) < world.width / 2) {
+              ctx.lineTo(
+                (p.x + cxOffset) * scale + offsetX,
+                p.y * scale + offsetY,
+              );
+            } else {
+              ctx.moveTo(
+                (p.x + cxOffset) * scale + offsetX,
+                p.y * scale + offsetY,
+              );
+            }
+            pPrev = p;
+          }
+          ctx.stroke();
+        }
+
+        // Pass 2: Fill
+        ctx.strokeStyle = "rgba(225, 210, 190, 1.0)";
+        ctx.lineWidth = roadStrokeWidth;
+        for (const road of smoothedRoads) {
+          if (road.length < 2) continue;
+          ctx.beginPath();
+          let pPrev = road[0];
+          ctx.moveTo(
+            (pPrev.x + cxOffset) * scale + offsetX,
+            pPrev.y * scale + offsetY,
+          );
+          for (let i = 1; i < road.length; i++) {
+            const p = road[i];
+            if (Math.abs(p.x - pPrev.x) < world.width / 2) {
+              ctx.lineTo(
+                (p.x + cxOffset) * scale + offsetX,
+                p.y * scale + offsetY,
+              );
+            } else {
+              ctx.moveTo(
+                (p.x + cxOffset) * scale + offsetX,
+                p.y * scale + offsetY,
+              );
+            }
+            pPrev = p;
+          }
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+    }
 
     this.labelRenderer.render(
       ctx,

@@ -63,12 +63,16 @@ export async function generateRoads(ctx: GeneratorContext): Promise<void> {
       }
       const current = openList.splice(lowestIndex, 1)[0];
 
-      // Check if reached target (within 1 tile)
+      // Check if reached target (within 0.5 tiles of target integer coordinate)
       let dx = Math.abs(current.x - targetX);
       if (dx > width / 2) dx = width - dx;
-      if (dx <= 1 && Math.abs(current.y - targetY) <= 1) {
+      if (dx === 0 && current.y === targetY) {
         // Reconstruct path
         const path: Point[] = [];
+
+        // Add exact sub-pixel target coordinate at the VERY end
+        path.push({ x: targetCity.x, y: targetCity.y });
+
         let currNode: Node | null = current;
         while (currNode !== null) {
           path.push({
@@ -77,6 +81,10 @@ export async function generateRoads(ctx: GeneratorContext): Promise<void> {
           });
           currNode = currNode.parent;
         }
+
+        // Add exact sub-pixel start coordinate at the VERY beginning
+        path.push({ x: startCity.x, y: startCity.y });
+
         return path.reverse();
       }
 
@@ -114,22 +122,27 @@ export async function generateRoads(ctx: GeneratorContext): Promise<void> {
         // Terrain cost modifiers
         let cost = current.g + (edge.dx !== 0 && edge.dy !== 0 ? 1.414 : 1.0);
 
+        // Add organic "jitter" based on position to avoid perfectly straight lines
+        // This makes roads feel more worn and organic
+        const jitter = (Math.sin(nx * 0.5) * Math.cos(ny * 0.5) + 1.0) * 0.2;
+        cost += jitter;
+
         // Elevation change penalty
         const currentCell =
           world.grid[((current.x % width) + width) % width][current.y];
         const elevDiff = Math.abs(cell.elevation - currentCell.elevation);
-        cost += elevDiff * 50;
+        cost += elevDiff * 100; // Increased penalty to follow contours better
 
-        // Biome preferences (prefer flat)
+        // Biome preferences (prefer plains/grassland)
         if (
           cell.biome === "Bare" ||
           cell.biome === "Snow" ||
           cell.elevation > 0.7
         ) {
-          cost += 2;
+          cost += 5; // Heavier penalty for rugged terrain
         }
         if (cell.hasRiver) {
-          cost += 5; // Bridges are expensive
+          cost += 8; // Bridges are very expensive
         }
 
         const h = getH(nx, ny);

@@ -293,11 +293,53 @@ export async function generateCityGeometry(
 
     if (!hasWall) towers = []; // Clear towers if no wall
 
+    // Find world road entry angles
+    const roadAngles: number[] = [];
+    for (const road of world.worldRoads) {
+      if (road.length < 2) continue;
+      const start = road[0];
+      const end = road[road.length - 1];
+
+      // Check if this road connects to our city
+      if (
+        Math.abs(start.x - city.x) < 0.1 &&
+        Math.abs(start.y - city.y) < 0.1
+      ) {
+        // Road starts at city, find entry direction from first few points
+        const p1 = road[Math.min(road.length - 1, 3)];
+        roadAngles.push(Math.atan2(p1.y - city.y, p1.x - city.x));
+      } else if (
+        Math.abs(end.x - city.x) < 0.1 &&
+        Math.abs(end.y - city.y) < 0.1
+      ) {
+        // Road ends at city, find entry direction from last few points
+        const p1 = road[Math.max(0, road.length - 4)];
+        roadAngles.push(Math.atan2(p1.y - city.y, p1.x - city.x));
+      }
+    }
+
     let blocksToSplit: Polygon[] = [outline];
     let finalBlocks: Polygon[] = [];
 
-    // 1. Recursive Block Splitting (Streets - Radial & Concentric)
-    const targetBlockArea = 0.15 + Math.random() * 0.1; // Smaller blocks for denser city
+    // 1. Initial splitting based on world roads to ensure alignment
+    for (const angle of roadAngles) {
+      const nextBlocks: Polygon[] = [];
+      const splitDir = { x: Math.cos(angle), y: Math.sin(angle) };
+
+      while (blocksToSplit.length > 0) {
+        const block = blocksToSplit.pop()!;
+        const res = splitPolygon(block, cityCenter, splitDir);
+        if (res) {
+          nextBlocks.push(res[0], res[1]);
+        } else {
+          nextBlocks.push(block);
+        }
+      }
+      blocksToSplit = nextBlocks;
+    }
+
+    // 2. Recursive Block Splitting (Streets - Radial & Concentric)
+    const targetBlockArea = 0.15 + Math.random() * 0.1;
     const attemptsBeforeGivingUp = 15;
 
     while (blocksToSplit.length > 0) {
@@ -346,8 +388,8 @@ export async function generateCityGeometry(
             dir = { x: Math.cos(angle), y: Math.sin(angle) };
           }
 
-          // Add slight noise to direction
-          const noiseAngle = (Math.random() - 0.5) * 0.4;
+          // Add slight noise to direction for organic "wiggle"
+          const noiseAngle = (Math.random() - 0.5) * 0.6; // Increased wiggle
           const currentAngle = Math.atan2(dir.y, dir.x);
           dir = {
             x: Math.cos(currentAngle + noiseAngle),

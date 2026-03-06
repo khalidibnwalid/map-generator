@@ -91,13 +91,8 @@ export class MapGenerator {
     onProgress?.(50);
     await new Promise((r) => requestAnimationFrame(r));
 
-    ctx.onProgress = report(50, 85);
+    ctx.onProgress = report(50, 90);
     await generateRivers(ctx);
-    onProgress?.(85);
-    await new Promise((r) => requestAnimationFrame(r));
-
-    ctx.onProgress = report(85, 90);
-    await determineBiomes(ctx); // Re-run to update biomes for carved rivers
     onProgress?.(90);
     await new Promise((r) => requestAnimationFrame(r));
 
