@@ -1,6 +1,5 @@
 import { MapGenerator } from "../game/MapGenerator";
 import type { Preset } from "../game/MapGenerator";
-import { BIOME_COLORS } from "../game/WorldData";
 import { CanvasManager } from "../core/CanvasManager";
 import { GPURenderer } from "../core/GPURenderer";
 import { TooltipManager } from "./TooltipManager";
@@ -429,40 +428,7 @@ export class Interface {
     ctx.translate(offsetX, offsetY);
     ctx.scale(scale, scale);
 
-    if (this.currentLayer === "Biomes" || this.currentLayer === "Elevation") {
-      const riverColor = this.hexToRgb(BIOME_COLORS["Shallow Water"]);
-      ctx.strokeStyle = `rgb(${riverColor[0]}, ${riverColor[1]}, ${riverColor[2]})`;
-      ctx.lineJoin = "round";
-      ctx.lineCap = "round";
-      ctx.lineWidth = 1.5;
-
-      const mapPixelWidth = world.width * scale;
-      const startCopy = Math.floor(-offsetX / mapPixelWidth);
-      const endCopy = Math.ceil((width - offsetX) / mapPixelWidth);
-
-      for (let copy = startCopy; copy <= endCopy; copy++) {
-        ctx.save();
-        ctx.translate(copy * world.width, 0);
-        ctx.beginPath();
-        if (world.rivers) {
-          for (const river of world.rivers) {
-            if (river.length === 0) continue;
-            ctx.moveTo(river[0].x, river[0].y);
-            for (let i = 1; i < river.length; i++) {
-              let rx = river[i].x;
-              let prevRx = river[i - 1].x;
-              if (Math.abs(rx - prevRx) > world.width / 2) {
-                ctx.moveTo(rx, river[i].y);
-              } else {
-                ctx.lineTo(rx, river[i].y);
-              }
-            }
-          }
-        }
-        ctx.stroke();
-        ctx.restore();
-      }
-    }
+    ctx.restore();
 
     ctx.restore();
 

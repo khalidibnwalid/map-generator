@@ -1,4 +1,4 @@
-import { WorldData, BIOME_COLORS, BiomeType } from '../game/WorldData';
+import { WorldData, BIOME_COLORS, BiomeType } from "../game/WorldData";
 
 const VERTEX_SHADER_SOURCE = `
     attribute vec2 a_position;
@@ -86,6 +86,17 @@ const FRAGMENT_SHADER_SOURCE = `
         return value;
     }
 
+    float fbm_high(vec2 p) {
+        float value = 0.0;
+        float amplitude = 0.5;
+        for (int i = 0; i < 6; i++) {
+            value += amplitude * noise(p);
+            p *= 2.0;
+            amplitude *= 0.5;
+        }
+        return value;
+    }
+
     vec3 getBiomeColor(int idx) {
         for (int i = 0; i < 24; i++) {
             if (i == idx) return u_biomeColors[i];
@@ -137,6 +148,11 @@ const FRAGMENT_SHADER_SOURCE = `
         
         if (u_layer == 0 || u_layer == 4) { 
             float blendFactor = smoothstep(3.0, 8.0, u_scale);
+            
+            // Sharper shoreline logic:
+            // Add a fractal perturbation to elevation specifically for the land/water boundary
+            float shoreNoise = (fbm_high(wxwy * 0.5) - 0.5) * 0.05 * clamp(u_scale * 0.1, 0.0, 1.0);
+            float renderedElevation = elevation + shoreNoise;
 
             float e_noise = (fbm(wxwy * 1.5) - 0.5) * 0.05 * blendFactor;
             float t_noise = (fbm(wxwy * 1.5 + 10.0) - 0.5) * 0.15 * blendFactor;
@@ -151,13 +167,13 @@ const FRAGMENT_SHADER_SOURCE = `
 
             float detail = fbm(wxwy * 0.05);
 
-            if (elevation < 0.45) { 
-                float depth = clamp(elevation / 0.45, 0.0, 1.0);
+            if (renderedElevation < 0.45) { 
+                float depth = clamp(renderedElevation / 0.45, 0.0, 1.0);
                 vec3 deepOcean = vec3(0.05, 0.15, 0.3);
                 vec3 shallowOcean = vec3(0.1, 0.4, 0.6);
                 color = mix(deepOcean, shallowOcean, depth);
                 color += (detail - 0.5) * 0.05;
-                float distToLand = smoothstep(0.4, 0.45, elevation);
+                float distToLand = smoothstep(0.4, 0.45, renderedElevation);
                 color = mix(color, color + vec3(0.1, 0.2, 0.2), distToLand * 0.5);
 
             } else { 
@@ -185,8 +201,8 @@ const FRAGMENT_SHADER_SOURCE = `
 
                 color *= shade;
 
-                if (elevation < 0.48) {
-                    float beachBlend = smoothstep(0.45, 0.48, elevation);
+                if (renderedElevation < 0.48) {
+                    float beachBlend = smoothstep(0.45, 0.48, renderedElevation);
                     color = mix(vec3(0.83, 0.8, 0.63) * shade, color, beachBlend);
                 }
             }
@@ -227,9 +243,9 @@ const FRAGMENT_SHADER_SOURCE = `
                     if (isBorder) {
                         color = mix(color, nationColor.rgb * 0.75, 0.5);
                     } else {
-                        color = mix(color, nationColor.rgb, 0.25); 
+                        color = mix(color, nationColor.rgb, 0.35); 
                         if (distance(nationColor.rgb, u_hoverColor) < 0.01) {
-                            color = mix(color, nationColor.rgb, 0.3) + vec3(0.15); 
+                            color = mix(color, nationColor.rgb, 0.8) + vec3(0.15); 
                         }
                     }
                 }
@@ -250,173 +266,293 @@ const FRAGMENT_SHADER_SOURCE = `
 `;
 
 export class GPURenderer {
-    private gl: WebGLRenderingContext;
-    private program: WebGLProgram;
-    private texture: WebGLTexture | null = null;
-    private nationsTexture: WebGLTexture | null = null;
-    private buffer: WebGLBuffer | null = null;
-    private biomeColors: Float32Array;
+  private gl: WebGLRenderingContext;
+  private program: WebGLProgram;
+  private texture: WebGLTexture | null = null;
+  private nationsTexture: WebGLTexture | null = null;
+  private buffer: WebGLBuffer | null = null;
+  private biomeColors: Float32Array;
 
-    constructor(canvas: HTMLCanvasElement) {
-        const gl = canvas.getContext('webgl', {
-            alpha: false,
-            antialias: false,
-            preserveDrawingBuffer: true
-        });
-        if (!gl) throw new Error('WebGL not supported');
-        this.gl = gl;
+  constructor(canvas: HTMLCanvasElement) {
+    const gl = canvas.getContext("webgl", {
+      alpha: false,
+      antialias: false,
+      preserveDrawingBuffer: true,
+    });
+    if (!gl) throw new Error("WebGL not supported");
+    this.gl = gl;
 
-        this.program = this.createProgram(VERTEX_SHADER_SOURCE, FRAGMENT_SHADER_SOURCE);
-        this.setupQuad();
-        this.biomeColors = this.prepareBiomeColors();
+    this.program = this.createProgram(
+      VERTEX_SHADER_SOURCE,
+      FRAGMENT_SHADER_SOURCE,
+    );
+    this.setupQuad();
+    this.biomeColors = this.prepareBiomeColors();
+  }
+
+  private createShader(type: number, source: string): WebGLShader {
+    const shader = this.gl.createShader(type)!;
+    this.gl.shaderSource(shader, source);
+    this.gl.compileShader(shader);
+    if (!this.gl.getShaderParameter(shader, this.gl.COMPILE_STATUS)) {
+      throw new Error(
+        `Shader compilation error: ${this.gl.getShaderInfoLog(shader)}`,
+      );
+    }
+    return shader;
+  }
+
+  private createProgram(vsSource: string, fsSource: string): WebGLProgram {
+    const vs = this.createShader(this.gl.VERTEX_SHADER, vsSource);
+    const fs = this.createShader(this.gl.FRAGMENT_SHADER, fsSource);
+    const program = this.gl.createProgram()!;
+    this.gl.attachShader(program, vs);
+    this.gl.attachShader(program, fs);
+    this.gl.linkProgram(program);
+    if (!this.gl.getProgramParameter(program, this.gl.LINK_STATUS)) {
+      throw new Error(
+        `Program link error: ${this.gl.getProgramInfoLog(program)}`,
+      );
+    }
+    return program;
+  }
+
+  private setupQuad() {
+    this.buffer = this.gl.createBuffer();
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.buffer);
+    const positions = new Float32Array([
+      -1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1,
+    ]);
+    this.gl.bufferData(this.gl.ARRAY_BUFFER, positions, this.gl.STATIC_DRAW);
+  }
+
+  private prepareBiomeColors(): Float32Array {
+    const colors = new Float32Array(24 * 3);
+    const typeToIndex: Record<string, number> = {
+      [BiomeType.OCEAN]: 0,
+      [BiomeType.SHALLOW_WATER]: 1,
+      [BiomeType.BEACH]: 2,
+      [BiomeType.SCORCHED]: 4,
+      [BiomeType.BARE]: 5,
+      [BiomeType.TUNDRA]: 6,
+      [BiomeType.SNOW]: 7,
+      [BiomeType.TEMPERATE_DESERT]: 8,
+      [BiomeType.SHRUBLAND]: 9,
+      [BiomeType.GRASSLAND]: 10,
+      [BiomeType.TEMPERATE_DECIDUOUS_FOREST]: 11,
+      [BiomeType.TEMPERATE_RAIN_FOREST]: 12,
+      [BiomeType.SUBTROPICAL_DESERT]: 13,
+      [BiomeType.TROPICAL_SEASONAL_FOREST]: 14,
+      [BiomeType.TROPICAL_RAIN_FOREST]: 15,
+      [BiomeType.DEEP_OCEAN]: 20,
+      [BiomeType.MARSH]: 21,
+      [BiomeType.SAVANNA]: 22,
+      [BiomeType.STEPPE]: 23,
+      [BiomeType.TAIGA]: 19, // Using 19 for Taiga to avoid out of bounds if array is 24
+    };
+    for (const [type, colorHex] of Object.entries(BIOME_COLORS)) {
+      const idx = typeToIndex[type];
+      if (idx === undefined) continue;
+      colors[idx * 3] = parseInt(colorHex.slice(1, 3), 16) / 255;
+      colors[idx * 3 + 1] = parseInt(colorHex.slice(3, 5), 16) / 255;
+      colors[idx * 3 + 2] = parseInt(colorHex.slice(5, 7), 16) / 255;
+    }
+    return colors;
+  }
+
+  public updateWorldTexture(world: WorldData) {
+    if (!world || !world.grid) return;
+    if (this.texture) this.gl.deleteTexture(this.texture);
+    this.texture = this.gl.createTexture();
+    this.gl.bindTexture(this.gl.TEXTURE_2D, this.texture);
+
+    const data = new Uint8Array(world.width * world.height * 4);
+    for (let y = 0; y < world.height; y++) {
+      for (let x = 0; x < world.width; x++) {
+        const cell = world.grid[x][y];
+        const idx = (y * world.width + x) * 4;
+        if (!cell) continue;
+        data[idx] = Math.floor((cell.elevation || 0) * 255);
+        data[idx + 1] = Math.floor((cell.moisture || 0) * 255);
+        data[idx + 2] = Math.floor((cell.temperature || 0) * 255);
+        data[idx + 3] = 255;
+      }
     }
 
-    private createShader(type: number, source: string): WebGLShader {
-        const shader = this.gl.createShader(type)!;
-        this.gl.shaderSource(shader, source);
-        this.gl.compileShader(shader);
-        if (!this.gl.getShaderParameter(shader, this.gl.COMPILE_STATUS)) {
-            throw new Error(`Shader compilation error: ${this.gl.getShaderInfoLog(shader)}`);
-        }
-        return shader;
-    }
+    this.gl.texImage2D(
+      this.gl.TEXTURE_2D,
+      0,
+      this.gl.RGBA,
+      world.width,
+      world.height,
+      0,
+      this.gl.RGBA,
+      this.gl.UNSIGNED_BYTE,
+      data,
+    );
+    this.gl.texParameteri(
+      this.gl.TEXTURE_2D,
+      this.gl.TEXTURE_MIN_FILTER,
+      this.gl.LINEAR,
+    );
+    this.gl.texParameteri(
+      this.gl.TEXTURE_2D,
+      this.gl.TEXTURE_MAG_FILTER,
+      this.gl.LINEAR,
+    );
+    this.gl.texParameteri(
+      this.gl.TEXTURE_2D,
+      this.gl.TEXTURE_WRAP_S,
+      this.gl.CLAMP_TO_EDGE,
+    );
+    this.gl.texParameteri(
+      this.gl.TEXTURE_2D,
+      this.gl.TEXTURE_WRAP_T,
+      this.gl.CLAMP_TO_EDGE,
+    );
 
-    private createProgram(vsSource: string, fsSource: string): WebGLProgram {
-        const vs = this.createShader(this.gl.VERTEX_SHADER, vsSource);
-        const fs = this.createShader(this.gl.FRAGMENT_SHADER, fsSource);
-        const program = this.gl.createProgram()!;
-        this.gl.attachShader(program, vs);
-        this.gl.attachShader(program, fs);
-        this.gl.linkProgram(program);
-        if (!this.gl.getProgramParameter(program, this.gl.LINK_STATUS)) {
-            throw new Error(`Program link error: ${this.gl.getProgramInfoLog(program)}`);
-        }
-        return program;
-    }
+    console.log(`Texture updated for ${world.width}x${world.height}`);
+  }
 
-    private setupQuad() {
-        this.buffer = this.gl.createBuffer();
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.buffer);
-        const positions = new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]);
-        this.gl.bufferData(this.gl.ARRAY_BUFFER, positions, this.gl.STATIC_DRAW);
-    }
+  public updateNationsDataTexture(world: WorldData) {
+    if (!world || !world.grid) return;
+    if (this.nationsTexture) this.gl.deleteTexture(this.nationsTexture);
+    this.nationsTexture = this.gl.createTexture();
+    this.gl.bindTexture(this.gl.TEXTURE_2D, this.nationsTexture);
 
-    private prepareBiomeColors(): Float32Array {
-        const colors = new Float32Array(24 * 3);
-        const typeToIndex: Record<string, number> = {
-            [BiomeType.OCEAN]: 0, [BiomeType.SHALLOW_WATER]: 1, [BiomeType.BEACH]: 2,
-            [BiomeType.SCORCHED]: 4, [BiomeType.BARE]: 5, [BiomeType.TUNDRA]: 6,
-            [BiomeType.SNOW]: 7, [BiomeType.TEMPERATE_DESERT]: 8, [BiomeType.SHRUBLAND]: 9,
-            [BiomeType.GRASSLAND]: 10, [BiomeType.TEMPERATE_DECIDUOUS_FOREST]: 11,
-            [BiomeType.TEMPERATE_RAIN_FOREST]: 12, [BiomeType.SUBTROPICAL_DESERT]: 13,
-            [BiomeType.TROPICAL_SEASONAL_FOREST]: 14, [BiomeType.TROPICAL_RAIN_FOREST]: 15,
-            [BiomeType.DEEP_OCEAN]: 20, [BiomeType.MARSH]: 21, [BiomeType.SAVANNA]: 22,
-            [BiomeType.STEPPE]: 23, [BiomeType.TAIGA]: 19 // Using 19 for Taiga to avoid out of bounds if array is 24
-        };
-        for (const [type, colorHex] of Object.entries(BIOME_COLORS)) {
-            const idx = typeToIndex[type];
-            if (idx === undefined) continue;
-            colors[idx * 3] = parseInt(colorHex.slice(1, 3), 16) / 255;
-            colors[idx * 3 + 1] = parseInt(colorHex.slice(3, 5), 16) / 255;
-            colors[idx * 3 + 2] = parseInt(colorHex.slice(5, 7), 16) / 255;
-        }
-        return colors;
-    }
+    const data = new Uint8Array(world.width * world.height * 4);
+    for (let y = 0; y < world.height; y++) {
+      for (let x = 0; x < world.width; x++) {
+        const cell = world.grid[x][y];
+        const idx = (y * world.width + x) * 4;
+        const nIdx = cell.nationIndex ?? -1;
 
-    public updateWorldTexture(world: WorldData) {
-        if (!world || !world.grid) return;
-        if (this.texture) this.gl.deleteTexture(this.texture);
-        this.texture = this.gl.createTexture();
-        this.gl.bindTexture(this.gl.TEXTURE_2D, this.texture);
-
-        const data = new Uint8Array(world.width * world.height * 4);
-        for (let y = 0; y < world.height; y++) {
-            for (let x = 0; x < world.width; x++) {
-                const cell = world.grid[x][y];
-                const idx = (y * world.width + x) * 4;
-                if (!cell) continue;
-                data[idx] = Math.floor((cell.elevation || 0) * 255);
-                data[idx + 1] = Math.floor((cell.moisture || 0) * 255);
-                data[idx + 2] = Math.floor((cell.temperature || 0) * 255);
-                data[idx + 3] = 255;
-            }
-        }
-
-        this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, world.width, world.height, 0, this.gl.RGBA, this.gl.UNSIGNED_BYTE, data);
-        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.LINEAR);
-        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.LINEAR);
-        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
-        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
-
-        console.log(`Texture updated for ${world.width}x${world.height}`);
-    }
-
-    public updateNationsDataTexture(world: WorldData) {
-        if (!world || !world.grid) return;
-        if (this.nationsTexture) this.gl.deleteTexture(this.nationsTexture);
-        this.nationsTexture = this.gl.createTexture();
-        this.gl.bindTexture(this.gl.TEXTURE_2D, this.nationsTexture);
-
-        const data = new Uint8Array(world.width * world.height * 4);
-        for (let y = 0; y < world.height; y++) {
-            for (let x = 0; x < world.width; x++) {
-                const cell = world.grid[x][y];
-                const idx = (y * world.width + x) * 4;
-                const nIdx = cell.nationIndex ?? -1;
-
-                if (nIdx >= 0 && nIdx < world.nations.length) {
-                    const hex = world.nations[nIdx].color;
-                    data[idx] = parseInt(hex.slice(1, 3), 16);
-                    data[idx + 1] = parseInt(hex.slice(3, 5), 16);
-                    data[idx + 2] = parseInt(hex.slice(5, 7), 16);
-                    data[idx + 3] = 255;
-                } else {
-                    data[idx] = 0;
-                    data[idx + 1] = 0;
-                    data[idx + 2] = 0;
-                    data[idx + 3] = 0; // Ocean/Water
-                }
-            }
-        }
-
-        this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, world.width, world.height, 0, this.gl.RGBA, this.gl.UNSIGNED_BYTE, data);
-        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.NEAREST);
-        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.NEAREST);
-        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
-        this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
-    }
-
-    public render(width: number, height: number, worldWidth: number, worldHeight: number, scale: number, offsetX: number, offsetY: number, layer: number, hoverColor?: number[]) {
-        this.gl.viewport(0, 0, width, height);
-        this.gl.useProgram(this.program);
-        this.gl.activeTexture(this.gl.TEXTURE0);
-        this.gl.bindTexture(this.gl.TEXTURE_2D, this.texture);
-        this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_mapTexture'), 0);
-
-        if (this.nationsTexture) {
-            this.gl.activeTexture(this.gl.TEXTURE1);
-            this.gl.bindTexture(this.gl.TEXTURE_2D, this.nationsTexture);
-            this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_nationsTexture'), 1);
-        }
-
-        const posLoc = this.gl.getAttribLocation(this.program, 'a_position');
-        this.gl.enableVertexAttribArray(posLoc);
-        this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.buffer);
-        this.gl.vertexAttribPointer(posLoc, 2, this.gl.FLOAT, false, 0, 0);
-
-        this.gl.uniform2f(this.gl.getUniformLocation(this.program, 'u_resolution'), width, height);
-        this.gl.uniform2f(this.gl.getUniformLocation(this.program, 'u_worldSize'), worldWidth, worldHeight);
-        this.gl.uniform1f(this.gl.getUniformLocation(this.program, 'u_scale'), scale);
-        this.gl.uniform2f(this.gl.getUniformLocation(this.program, 'u_offset'), offsetX, offsetY);
-        this.gl.uniform1i(this.gl.getUniformLocation(this.program, 'u_layer'), layer);
-        this.gl.uniform3fv(this.gl.getUniformLocation(this.program, 'u_biomeColors'), this.biomeColors);
-
-        if (hoverColor) {
-            this.gl.uniform3f(this.gl.getUniformLocation(this.program, 'u_hoverColor'), hoverColor[0], hoverColor[1], hoverColor[2]);
+        if (nIdx >= 0 && nIdx < world.nations.length) {
+          const hex = world.nations[nIdx].color;
+          data[idx] = parseInt(hex.slice(1, 3), 16);
+          data[idx + 1] = parseInt(hex.slice(3, 5), 16);
+          data[idx + 2] = parseInt(hex.slice(5, 7), 16);
+          data[idx + 3] = 255;
         } else {
-            this.gl.uniform3f(this.gl.getUniformLocation(this.program, 'u_hoverColor'), -1.0, -1.0, -1.0);
+          data[idx] = 0;
+          data[idx + 1] = 0;
+          data[idx + 2] = 0;
+          data[idx + 3] = 0; // Ocean/Water
         }
-
-        this.gl.drawArrays(this.gl.TRIANGLES, 0, 6);
+      }
     }
+
+    this.gl.texImage2D(
+      this.gl.TEXTURE_2D,
+      0,
+      this.gl.RGBA,
+      world.width,
+      world.height,
+      0,
+      this.gl.RGBA,
+      this.gl.UNSIGNED_BYTE,
+      data,
+    );
+    this.gl.texParameteri(
+      this.gl.TEXTURE_2D,
+      this.gl.TEXTURE_MIN_FILTER,
+      this.gl.NEAREST,
+    );
+    this.gl.texParameteri(
+      this.gl.TEXTURE_2D,
+      this.gl.TEXTURE_MAG_FILTER,
+      this.gl.NEAREST,
+    );
+    this.gl.texParameteri(
+      this.gl.TEXTURE_2D,
+      this.gl.TEXTURE_WRAP_S,
+      this.gl.CLAMP_TO_EDGE,
+    );
+    this.gl.texParameteri(
+      this.gl.TEXTURE_2D,
+      this.gl.TEXTURE_WRAP_T,
+      this.gl.CLAMP_TO_EDGE,
+    );
+  }
+
+  public render(
+    width: number,
+    height: number,
+    worldWidth: number,
+    worldHeight: number,
+    scale: number,
+    offsetX: number,
+    offsetY: number,
+    layer: number,
+    hoverColor?: number[],
+  ) {
+    this.gl.viewport(0, 0, width, height);
+    this.gl.useProgram(this.program);
+    this.gl.activeTexture(this.gl.TEXTURE0);
+    this.gl.bindTexture(this.gl.TEXTURE_2D, this.texture);
+    this.gl.uniform1i(
+      this.gl.getUniformLocation(this.program, "u_mapTexture"),
+      0,
+    );
+
+    if (this.nationsTexture) {
+      this.gl.activeTexture(this.gl.TEXTURE1);
+      this.gl.bindTexture(this.gl.TEXTURE_2D, this.nationsTexture);
+      this.gl.uniform1i(
+        this.gl.getUniformLocation(this.program, "u_nationsTexture"),
+        1,
+      );
+    }
+
+    const posLoc = this.gl.getAttribLocation(this.program, "a_position");
+    this.gl.enableVertexAttribArray(posLoc);
+    this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.buffer);
+    this.gl.vertexAttribPointer(posLoc, 2, this.gl.FLOAT, false, 0, 0);
+
+    this.gl.uniform2f(
+      this.gl.getUniformLocation(this.program, "u_resolution"),
+      width,
+      height,
+    );
+    this.gl.uniform2f(
+      this.gl.getUniformLocation(this.program, "u_worldSize"),
+      worldWidth,
+      worldHeight,
+    );
+    this.gl.uniform1f(
+      this.gl.getUniformLocation(this.program, "u_scale"),
+      scale,
+    );
+    this.gl.uniform2f(
+      this.gl.getUniformLocation(this.program, "u_offset"),
+      offsetX,
+      offsetY,
+    );
+    this.gl.uniform1i(
+      this.gl.getUniformLocation(this.program, "u_layer"),
+      layer,
+    );
+    this.gl.uniform3fv(
+      this.gl.getUniformLocation(this.program, "u_biomeColors"),
+      this.biomeColors,
+    );
+
+    if (hoverColor) {
+      this.gl.uniform3f(
+        this.gl.getUniformLocation(this.program, "u_hoverColor"),
+        hoverColor[0],
+        hoverColor[1],
+        hoverColor[2],
+      );
+    } else {
+      this.gl.uniform3f(
+        this.gl.getUniformLocation(this.program, "u_hoverColor"),
+        -1.0,
+        -1.0,
+        -1.0,
+      );
+    }
+
+    this.gl.drawArrays(this.gl.TRIANGLES, 0, 6);
+  }
 }
