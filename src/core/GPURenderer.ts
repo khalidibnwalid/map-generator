@@ -24,6 +24,7 @@ const FRAGMENT_SHADER_SOURCE = `
     uniform bool u_showHeatmap;
     uniform bool u_showMoisture;
     uniform bool u_showNations;
+    uniform bool u_showBorders;
 
     uniform vec3 u_biomeColors[24];
     uniform vec3 u_hoverColor;
@@ -275,6 +276,65 @@ const FRAGMENT_SHADER_SOURCE = `
             }
         }
 
+        // --- 3.5 Borders (Independent, Smooth Scaling Thin White) ---
+        if (u_showBorders) {
+            float landMask = smoothstep(0.448, 0.452, renderedElevation);
+            if (landMask > 0.01) {
+                // Bilinear sampling for smooth boundaries
+                vec2 pos = vec2(nx, ny) * u_worldSize - 0.5;
+                vec2 ixy = floor(pos);
+                vec2 fxy = fract(pos);
+                
+                vec4 c00 = texture2D(u_nationsTexture, (ixy + vec2(0.5, 0.5)) / u_worldSize);
+                vec4 c10 = texture2D(u_nationsTexture, (ixy + vec2(1.5, 0.5)) / u_worldSize);
+                vec4 c01 = texture2D(u_nationsTexture, (ixy + vec2(0.5, 1.5)) / u_worldSize);
+                vec4 c11 = texture2D(u_nationsTexture, (ixy + vec2(1.5, 1.5)) / u_worldSize);
+                
+                vec4 blended = mix(mix(c00, c10, fxy.x), mix(c01, c11, fxy.x), fxy.y);
+                
+                float d00 = distance(blended, c00);
+                float d10 = distance(blended, c10);
+                float d01 = distance(blended, c01);
+                float d11 = distance(blended, c11);
+                
+                float minDist = min(min(d00, d10), min(d01, d11));
+                float maxDist = max(max(d00, d10), max(d01, d11));
+
+                // We are on a border if the samples are different
+                // maxDist > 0.01 means at least one neighbor is different from the blend
+                if (maxDist > 0.01) {
+                    // Distance field proxy: how far are we from a "pure" cell?
+                    // minDist is 0 at cell centers, and grows towards boundaries
+                    
+                    // Anti-aliasing threshold based on zoom scale
+                    // 1.5 pixels wide in screen space
+                    float aa = 1.0 / u_scale; 
+                    
+                    // The boundary exists where minDist starts increasing rapidly
+                    // We can use the difference between the closest and second closest for even better precision
+                    float secondMin = 1.0;
+                    if (d00 > minDist + 0.001) secondMin = min(secondMin, d00);
+                    if (d10 > minDist + 0.001) secondMin = min(secondMin, d10);
+                    if (d01 > minDist + 0.001) secondMin = min(secondMin, d01);
+                    if (d11 > minDist + 0.001) secondMin = min(secondMin, d11);
+
+                    // Border mask: sharpest at the halfway point between nations
+                    float borderMask = smoothstep(aa * 1.5, aa * 0.5, secondMin - minDist);
+                    
+                    // Additional check for coastline borders (where nations meet nothing/water on the data texture)
+                    if (minDist > 0.5 && maxDist > 0.5) {
+                         // Likely near a transition to a 0.0 alpha cell
+                         // This ensures coastline borders are also smoothed
+                         borderMask = max(borderMask, smoothstep(aa * 2.0, aa * 1.0, 1.0 - maxDist));
+                    }
+
+                    if (borderMask > 0.0) {
+                        color = mix(color, vec3(1.0), borderMask * 0.9 * landMask);
+                    }
+                }
+            }
+        }
+
         gl_FragColor = vec4(color, 1.0);
     }
 `;
@@ -503,6 +563,7 @@ export class GPURenderer {
       heatmap: boolean;
       moisture: boolean;
       nations: boolean;
+      borders: boolean;
     },
     hoverColor?: number[],
   ) {
@@ -569,6 +630,10 @@ export class GPURenderer {
     this.gl.uniform1i(
       this.gl.getUniformLocation(this.program, "u_showNations"),
       layers.nations ? 1 : 0,
+    );
+    this.gl.uniform1i(
+      this.gl.getUniformLocation(this.program, "u_showBorders"),
+      layers.borders ? 1 : 0,
     );
 
     this.gl.uniform3fv(

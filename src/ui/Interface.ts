@@ -14,7 +14,8 @@ export type ViewLayer =
   | "Elevation"
   | "Heatmap"
   | "Moisture"
-  | "Nations";
+  | "Nations"
+  | "Borders";
 
 export class Interface {
   private generator: MapGenerator;
@@ -25,6 +26,7 @@ export class Interface {
     heatmap: false,
     moisture: false,
     nations: true,
+    borders: true,
     roads: true,
     labels: true,
     cities: true,
@@ -120,7 +122,6 @@ export class Interface {
         this.nationsManager.isEditingNations &&
         e.button === 0
       ) {
-
         if (this.nationsManager.selectedNationIndex !== -1) {
           isAttemptingPaint = true;
           mousedownX = e.clientX;
@@ -234,6 +235,7 @@ export class Interface {
     // --- Overlays (Checkboxes) ---
     const overlays = [
       "nations",
+      "borders",
       "heatmap",
       "moisture",
       "roads",
@@ -270,10 +272,15 @@ export class Interface {
 
           // Force Nations layer ON when editing
           this.activeLayers.nations = true;
+          this.activeLayers.borders = true;
           const cb = document.getElementById(
             "layer-nations",
           ) as HTMLInputElement;
+          const cbB = document.getElementById(
+            "layer-borders",
+          ) as HTMLInputElement;
           if (cb) cb.checked = true;
+          if (cbB) cbB.checked = true;
 
           this.canvasManager.scheduleRender();
         } else {
@@ -376,7 +383,7 @@ export class Interface {
       offsetY = height - mapPixelHeight;
     }
 
-    if (this.activeLayers.nations) {
+    if (this.activeLayers.nations || this.activeLayers.borders) {
       if (this.nationsManager.nationsStateDirty) {
         this.nationsManager.buildCache();
         this.gpuRenderer.updateNationsDataTexture(world);
@@ -391,7 +398,7 @@ export class Interface {
 
     let hoverColor: number[] | undefined = undefined;
     if (
-      this.activeLayers.nations &&
+      (this.activeLayers.nations || this.activeLayers.borders) &&
       this.nationsManager.hoveredNationIndex >= 0 &&
       this.nationsManager.hoveredNationIndex < world.nations.length
     ) {
@@ -416,7 +423,10 @@ export class Interface {
     ctx.drawImage(this.gpuCanvas, 0, 0);
 
     // 1. Render Nation Capitals Circles (at low zoom)
-    if (this.activeLayers.nations && scale < 10) {
+    if (
+      (this.activeLayers.nations || this.activeLayers.borders) &&
+      scale < 10
+    ) {
       ctx.save();
       ctx.translate(offsetX, offsetY);
       ctx.scale(scale, scale);

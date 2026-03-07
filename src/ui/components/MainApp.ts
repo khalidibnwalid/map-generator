@@ -92,6 +92,11 @@ export default function renderMainApp() {
                   <span class="label-text">NATIONS</span>
                 </label>
                 <label class="overlay-item">
+                  <input type="checkbox" id="layer-borders" checked />
+                  <span class="checkbox-box"></span>
+                  <span class="label-text">BORDERS</span>
+                </label>
+                <label class="overlay-item">
                   <input type="checkbox" id="layer-heatmap" />
                   <span class="checkbox-box"></span>
                   <span class="label-text">HEATMAP</span>
