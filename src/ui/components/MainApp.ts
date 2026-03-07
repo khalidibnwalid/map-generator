@@ -18,6 +18,7 @@ export default function renderMainApp() {
 
         <div class="panel-tabs">
           <button id="tab-generate" class="tab-btn active">GENERATE</button>
+          <button id="tab-layers" class="tab-btn">LAYERS</button>
           <button id="tab-nations" class="tab-btn">NATIONS</button>
         </div>
 
@@ -59,21 +60,62 @@ export default function renderMainApp() {
                 <button id="generate" class="btn-primary">GENERATE</button>
               </div>
             </div>
+          </div>
 
-            <div class="control-group layers-group">
-              <label>[VIEW] LAYERS [■■■■]</label>
-              <div class="layers">
-                <button id="layer-biomes" class="layer-btn active">
-                  BIOMES
-                </button>
-                <button id="layer-elevation" class="layer-btn">
-                  ELEVATION
-                </button>
-                <button id="layer-heatmap" class="layer-btn">HEATMAP</button>
-                <button id="layer-moisture" class="layer-btn">MOISTURE</button>
-                <button id="layer-nations" class="layer-btn layer-btn--full">
-                  NATIONS
-                </button>
+          <!-- Layers Tab -->
+          <div id="content-layers" class="tab-content">
+            <div class="control-group">
+              <label>[VIEW] BASE LAYER</label>
+              <div class="radio-group">
+                <label class="radio-btn">
+                  <input
+                    type="radio"
+                    name="base-layer"
+                    value="Biomes"
+                    checked
+                  />
+                  <span>BIOMES</span>
+                </label>
+                <label class="radio-btn">
+                  <input type="radio" name="base-layer" value="Elevation" />
+                  <span>ELEVATION</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="control-group">
+              <label>[VIEW] OVERLAYS</label>
+              <div class="overlay-list">
+                <label class="overlay-item">
+                  <input type="checkbox" id="layer-nations" checked />
+                  <span class="checkbox-box"></span>
+                  <span class="label-text">NATIONS</span>
+                </label>
+                <label class="overlay-item">
+                  <input type="checkbox" id="layer-heatmap" />
+                  <span class="checkbox-box"></span>
+                  <span class="label-text">HEATMAP</span>
+                </label>
+                <label class="overlay-item">
+                  <input type="checkbox" id="layer-moisture" />
+                  <span class="checkbox-box"></span>
+                  <span class="label-text">MOISTURE</span>
+                </label>
+                <label class="overlay-item">
+                  <input type="checkbox" id="layer-roads" checked />
+                  <span class="checkbox-box"></span>
+                  <span class="label-text">ROADS</span>
+                </label>
+                <label class="overlay-item">
+                  <input type="checkbox" id="layer-cities" checked />
+                  <span class="checkbox-box"></span>
+                  <span class="label-text">CITIES</span>
+                </label>
+                <label class="overlay-item">
+                  <input type="checkbox" id="layer-labels" checked />
+                  <span class="checkbox-box"></span>
+                  <span class="label-text">LABELS</span>
+                </label>
               </div>
             </div>
           </div>

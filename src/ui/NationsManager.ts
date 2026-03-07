@@ -146,23 +146,25 @@ export class NationsManager {
 
         if (lx * lx + ly * ly > radiusSq + 0.25) continue;
 
-        const tx = (wx + (lx % world.width) + world.width) % world.width;
+        const tx = wx + lx;
         const ty = wy + ly;
 
         if (ty >= 0 && ty < world.height) {
-          const cell = world.grid[tx][ty];
-          if (!cell.isWater && cell.nationIndex !== this.selectedNationIndex) {
+          const wrappedX = ((tx % world.width) + world.width) % world.width;
+          const cell = world.grid[wrappedX][ty];
+
+          if (cell.nationIndex !== this.selectedNationIndex) {
             const oldIdx = cell.nationIndex ?? -1;
             cell.nationIndex = this.selectedNationIndex;
 
             if (oldIdx !== -1) {
               const oldList = this.nationCellsList[oldIdx];
-              const flatIdx = ty * world.width + tx;
+              const flatIdx = ty * world.width + wrappedX;
               const listIdx = oldList.indexOf(flatIdx);
               if (listIdx > -1) oldList.splice(listIdx, 1);
             }
             this.nationCellsList[this.selectedNationIndex].push(
-              ty * world.width + tx,
+              ty * world.width + wrappedX,
             );
 
             this.updateLocalBorders(tx, ty);
@@ -172,15 +174,16 @@ export class NationsManager {
     }
   }
 
-  private updateLocalBorders(x: number, y: number) {
+  private updateLocalBorders(wx: number, wy: number) {
     const world = this.generator.getWorld();
     for (let dx = -1; dx <= 1; dx++) {
       for (let dy = -1; dy <= 1; dy++) {
-        const tx = (((x + dx) % world.width) + world.width) % world.width;
-        const ty = y + dy;
+        const nwx = wx + dx;
+        const nwy = wy + dy;
 
-        if (ty >= 0 && ty < world.height) {
-          const cell = world.grid[tx][ty];
+        if (nwy >= 0 && nwy < world.height) {
+          const wrappedX = ((nwx % world.width) + world.width) % world.width;
+          const cell = world.grid[wrappedX][nwy];
           if (cell.isWater) continue;
 
           let isBorder = false;
@@ -188,11 +191,12 @@ export class NationsManager {
           neighborLoop: for (let nxd = -1; nxd <= 1; nxd++) {
             for (let nyd = -1; nyd <= 1; nyd++) {
               if (nxd === 0 && nyd === 0) continue;
-              const nx =
-                (((tx + nxd) % world.width) + world.width) % world.width;
-              const ny = ty + nyd;
-              if (ny >= 0 && ny < world.height) {
-                const nb = world.grid[nx][ny];
+              const nnwx = nwx + nxd;
+              const nnwy = nwy + nyd;
+              if (nnwy >= 0 && nnwy < world.height) {
+                const nnwrappedX =
+                  ((nnwx % world.width) + world.width) % world.width;
+                const nb = world.grid[nnwrappedX][nnwy];
                 if (nb.isWater || (nb.nationIndex ?? -1) !== nid) {
                   isBorder = true;
                   break neighborLoop;

@@ -19,8 +19,17 @@ export type ViewLayer =
 export class Interface {
   private generator: MapGenerator;
   private canvasManager: CanvasManager;
-  private currentLayer: ViewLayer = "Biomes";
-  private activeTab: "generate" | "nations" = "generate";
+  private activeLayers = {
+    biomes: true,
+    elevation: false,
+    heatmap: false,
+    moisture: false,
+    nations: true,
+    roads: true,
+    labels: true,
+    cities: true,
+  };
+  private activeTab: "generate" | "layers" | "nations" = "generate";
 
   // Sub-managers
   private tooltipManager!: TooltipManager;
@@ -62,6 +71,7 @@ export class Interface {
         .then(() => {
           const world = this.generator.getWorld();
           this.gpuRenderer.updateWorldTexture(world);
+          this.nationsManager.nationsStateDirty = true;
           this.uiManager.hideLoadingModal();
           this.nationsManager.buildCache();
           this.canvasManager.scheduleRender();
@@ -83,10 +93,7 @@ export class Interface {
 
     const canvas = this.canvasManager.canvas;
     canvas.addEventListener("mousemove", (e) => {
-      if (
-        this.currentLayer === "Nations" &&
-        !this.nationsManager.isEditingNations
-      ) {
+      if (this.activeLayers.nations && !this.nationsManager.isEditingNations) {
         this.updateHover(e.clientX, e.clientY);
       } else if (
         this.activeTab === "nations" &&
@@ -113,28 +120,6 @@ export class Interface {
         this.nationsManager.isEditingNations &&
         e.button === 0
       ) {
-        const world = this.generator.getWorld();
-        const cm = this.canvasManager;
-        const rect = cm.canvas.getBoundingClientRect();
-        const sx = e.clientX - rect.left;
-        const sy = e.clientY - rect.top;
-        const wx = Math.floor((sx - cm.offsetX) / cm.scale);
-        const wy = Math.floor((sy - cm.offsetY) / cm.scale);
-        const x = ((wx % world.width) + world.width) % world.width;
-
-        if (wy >= 0 && wy < world.height) {
-          const cell = world.grid[x][wy];
-          if (cell.isWater) {
-            this.nationsManager.isEditingNations = false;
-            document
-              .getElementById("btn-edit-nations")
-              ?.parentElement?.classList.remove("edit-mode-active");
-            this.canvasManager.panningLocked = false;
-            this.canvasManager.canvas.style.cursor = "grab";
-            this.canvasManager.scheduleRender();
-            return;
-          }
-        }
 
         if (this.nationsManager.selectedNationIndex !== -1) {
           isAttemptingPaint = true;
@@ -163,8 +148,9 @@ export class Interface {
 
         if (wy >= 0 && wy < world.height) {
           const cell = world.grid[x][wy];
+          // Use a slightly more generous check for picking to ensure we can hit coastlines
           if (
-            !cell.isWater &&
+            cell.elevation >= 0.4 &&
             cell.nationIndex !== undefined &&
             cell.nationIndex !== -1 &&
             cell.nationIndex !== this.nationsManager.selectedNationIndex
@@ -187,7 +173,7 @@ export class Interface {
     });
 
     canvas.addEventListener("mouseleave", () => {
-      if (this.currentLayer === "Nations") {
+      if (this.activeLayers.nations) {
         this.nationsManager.hoveredNationIndex = -1;
         this.tooltipManager.hide();
         this.canvasManager.scheduleRender();
@@ -215,50 +201,56 @@ export class Interface {
       });
     }
 
-    const layers = [
-      "Biomes",
-      "Elevation",
-      "Heatmap",
-      "Moisture",
-      "Nations",
-    ] as ViewLayer[];
-    layers.forEach((layer) => {
-      const btn = document.getElementById(`layer-${layer.toLowerCase()}`);
-      if (btn) {
+    // --- Tab Handling ---
+    const tabs = ["generate", "layers", "nations"] as const;
+    tabs.forEach((tab) => {
+      const btn = document.getElementById(`tab-${tab}`);
+      const content = document.getElementById(`content-${tab}`);
+      if (btn && content) {
         btn.addEventListener("click", () => {
-          this.currentLayer = layer;
-          document
-            .querySelectorAll(".layer-btn")
-            .forEach((b) => b.classList.remove("active"));
+          this.activeTab = tab;
+          tabs.forEach((t) => {
+            document.getElementById(`tab-${t}`)?.classList.remove("active");
+            document.getElementById(`content-${t}`)?.classList.remove("active");
+          });
           btn.classList.add("active");
-          this.canvasManager.scheduleRender();
+          content.classList.add("active");
+          if (tab === "nations") this.nationsManager.renderList();
         });
       }
     });
 
-    const tabGenerate = document.getElementById("tab-generate");
-    const tabNations = document.getElementById("tab-nations");
-    const contentGenerate = document.getElementById("content-generate");
-    const contentNations = document.getElementById("content-nations");
-
-    if (tabGenerate && tabNations && contentGenerate && contentNations) {
-      tabGenerate.addEventListener("click", () => {
-        this.activeTab = "generate";
-        tabGenerate.classList.add("active");
-        tabNations.classList.remove("active");
-        contentGenerate.classList.add("active");
-        contentNations.classList.remove("active");
+    // --- Base Layer (Radios) ---
+    const baseRadios = document.querySelectorAll('input[name="base-layer"]');
+    baseRadios.forEach((radio) => {
+      radio.addEventListener("change", (e) => {
+        const val = (e.target as HTMLInputElement).value;
+        this.activeLayers.biomes = val === "Biomes";
+        this.activeLayers.elevation = val === "Elevation";
+        this.canvasManager.scheduleRender();
       });
+    });
 
-      tabNations.addEventListener("click", () => {
-        this.activeTab = "nations";
-        tabNations.classList.add("active");
-        tabGenerate.classList.remove("active");
-        contentNations.classList.add("active");
-        contentGenerate.classList.remove("active");
-        this.nationsManager.renderList();
-      });
-    }
+    // --- Overlays (Checkboxes) ---
+    const overlays = [
+      "nations",
+      "heatmap",
+      "moisture",
+      "roads",
+      "cities",
+      "labels",
+    ] as const;
+    overlays.forEach((overlay) => {
+      const cb = document.getElementById(
+        `layer-${overlay}`,
+      ) as HTMLInputElement;
+      if (cb) {
+        cb.addEventListener("change", () => {
+          (this.activeLayers as any)[overlay] = cb.checked;
+          this.canvasManager.scheduleRender();
+        });
+      }
+    });
 
     const btnEditNations = document.getElementById(
       "btn-edit-nations",
@@ -275,11 +267,14 @@ export class Interface {
         if (this.nationsManager.isEditingNations) {
           this.canvasManager.panningLocked = true;
           this.canvasManager.canvas.style.cursor = "default";
-          this.currentLayer = "Nations";
-          document
-            .querySelectorAll(".layer-btn")
-            .forEach((b) => b.classList.remove("active"));
-          document.getElementById("layer-nations")?.classList.add("active");
+
+          // Force Nations layer ON when editing
+          this.activeLayers.nations = true;
+          const cb = document.getElementById(
+            "layer-nations",
+          ) as HTMLInputElement;
+          if (cb) cb.checked = true;
+
           this.canvasManager.scheduleRender();
         } else {
           this.canvasManager.panningLocked = false;
@@ -381,15 +376,7 @@ export class Interface {
       offsetY = height - mapPixelHeight;
     }
 
-    const layerMap: Record<ViewLayer, number> = {
-      Biomes: 0,
-      Elevation: 1,
-      Heatmap: 2,
-      Moisture: 3,
-      Nations: 4,
-    };
-
-    if (this.currentLayer === "Nations") {
+    if (this.activeLayers.nations) {
       if (this.nationsManager.nationsStateDirty) {
         this.nationsManager.buildCache();
         this.gpuRenderer.updateNationsDataTexture(world);
@@ -404,7 +391,7 @@ export class Interface {
 
     let hoverColor: number[] | undefined = undefined;
     if (
-      this.currentLayer === "Nations" &&
+      this.activeLayers.nations &&
       this.nationsManager.hoveredNationIndex >= 0 &&
       this.nationsManager.hoveredNationIndex < world.nations.length
     ) {
@@ -422,14 +409,14 @@ export class Interface {
       scale,
       offsetX,
       offsetY,
-      layerMap[this.currentLayer],
+      this.activeLayers,
       hoverColor,
     );
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.drawImage(this.gpuCanvas, 0, 0);
 
     // 1. Render Nation Capitals Circles (at low zoom)
-    if (this.currentLayer === "Nations" && scale < 10) {
+    if (this.activeLayers.nations && scale < 10) {
       ctx.save();
       ctx.translate(offsetX, offsetY);
       ctx.scale(scale, scale);
@@ -463,18 +450,24 @@ export class Interface {
       ctx.restore();
     }
 
-    this.cityRenderer.render(
-      ctx,
-      world,
-      width,
-      height,
-      scale,
-      offsetX,
-      offsetY,
-    );
+    if (this.activeLayers.cities) {
+      this.cityRenderer.render(
+        ctx,
+        world,
+        width,
+        height,
+        scale,
+        offsetX,
+        offsetY,
+      );
+    }
 
     // 3. Render World Roads (AFTER city geometry for better connectivity)
-    if (world.worldRoads && world.worldRoads.length > 0) {
+    if (
+      this.activeLayers.roads &&
+      world.worldRoads &&
+      world.worldRoads.length > 0
+    ) {
       ctx.save();
       const mapPixelWidth = world.width * scale;
       const startCopy = Math.floor(-offsetX / mapPixelWidth);
@@ -603,18 +596,20 @@ export class Interface {
       ctx.restore();
     }
 
-    this.labelRenderer.render(
-      ctx,
-      world,
-      width,
-      height,
-      scale,
-      offsetX,
-      offsetY,
-      isInteracting,
-      this.nationsManager.nationSizes,
-      this.nationsManager.nationCentroids,
-    );
+    if (this.activeLayers.labels) {
+      this.labelRenderer.render(
+        ctx,
+        world,
+        width,
+        height,
+        scale,
+        offsetX,
+        offsetY,
+        isInteracting,
+        this.nationsManager.nationSizes,
+        this.nationsManager.nationCentroids,
+      );
+    }
 
     this.updateMapRuler(scale);
   }
@@ -678,7 +673,7 @@ export class Interface {
     if (wy >= 0 && wy < world.height) {
       const cell = world.grid[x][wy];
       if (
-        !cell.isWater &&
+        cell.elevation >= 0.4 &&
         cell.nationIndex !== undefined &&
         cell.nationIndex >= 0
       )

@@ -17,7 +17,14 @@ const FRAGMENT_SHADER_SOURCE = `
     uniform vec2 u_worldSize;
     uniform float u_scale;
     uniform vec2 u_offset;
-    uniform int u_layer;
+    
+    // Layer visibility flags
+    uniform bool u_showBiomes;
+    uniform bool u_showElevation;
+    uniform bool u_showHeatmap;
+    uniform bool u_showMoisture;
+    uniform bool u_showNations;
+
     uniform vec3 u_biomeColors[24];
     uniform vec3 u_hoverColor;
 
@@ -131,6 +138,9 @@ const FRAGMENT_SHADER_SOURCE = `
         float moisture = data.g;
         float temperature = data.b;
 
+        float shoreNoise = (fbm_high(wxwy * 0.5) - 0.5) * 0.05 * clamp(u_scale * 0.1, 0.0, 1.0);
+        float renderedElevation = elevation + shoreNoise;
+
         float eps = 1.0 / u_worldSize.x; 
         float hL = texture2D(u_mapTexture, vec2(nx - eps, ny)).r;
         float hR = texture2D(u_mapTexture, vec2(nx + eps, ny)).r;
@@ -146,14 +156,9 @@ const FRAGMENT_SHADER_SOURCE = `
 
         vec3 color = vec3(0.0);
         
-        if (u_layer == 0 || u_layer == 4) { 
+        // --- 1. Base Layers ---
+        if (u_showBiomes) {
             float blendFactor = smoothstep(3.0, 8.0, u_scale);
-            
-            // Sharper shoreline logic:
-            // Add a fractal perturbation to elevation specifically for the land/water boundary
-            float shoreNoise = (fbm_high(wxwy * 0.5) - 0.5) * 0.05 * clamp(u_scale * 0.1, 0.0, 1.0);
-            float renderedElevation = elevation + shoreNoise;
-
             float e_noise = (fbm(wxwy * 1.5) - 0.5) * 0.05 * blendFactor;
             float t_noise = (fbm(wxwy * 1.5 + 10.0) - 0.5) * 0.15 * blendFactor;
             float m_noise = (fbm(wxwy * 1.5 + 20.0) - 0.5) * 0.15 * blendFactor;
@@ -164,7 +169,6 @@ const FRAGMENT_SHADER_SOURCE = `
             
             int bIdx = getBiome(query_e, query_t, query_m);
             vec3 biomeBase = getBiomeColor(bIdx);
-
             float detail = fbm(wxwy * 0.05);
 
             if (renderedElevation < 0.45) { 
@@ -175,7 +179,6 @@ const FRAGMENT_SHADER_SOURCE = `
                 color += (detail - 0.5) * 0.05;
                 float distToLand = smoothstep(0.4, 0.45, renderedElevation);
                 color = mix(color, color + vec3(0.1, 0.2, 0.2), distToLand * 0.5);
-
             } else { 
                 color = biomeBase;
                 float dirtNoise = fbm(wxwy * 2.0);
@@ -206,58 +209,69 @@ const FRAGMENT_SHADER_SOURCE = `
                     color = mix(vec3(0.83, 0.8, 0.63) * shade, color, beachBlend);
                 }
             }
+        } else if (u_showElevation) {
+            bool isWater = renderedElevation < 0.45;
+            color = isWater ? vec3(0.0, 0.0, renderedElevation) : vec3(renderedElevation) * shade;
+        }
 
-            if (u_layer == 4) {
-                vec2 pos = vec2(nx, ny) * u_worldSize - 0.5;
-                vec2 ixy = floor(pos);
-                vec2 fxy = fract(pos);
-                
-                vec2 uv00 = (ixy + vec2(0.5, 0.5)) / u_worldSize;
-                vec2 uv10 = (ixy + vec2(1.5, 0.5)) / u_worldSize;
-                vec2 uv01 = (ixy + vec2(0.5, 1.5)) / u_worldSize;
-                vec2 uv11 = (ixy + vec2(1.5, 1.5)) / u_worldSize;
+        // --- 2. Overlays ---
+        if (u_showHeatmap) color = mix(color, vec3(temperature, 0.0, 1.0 - temperature), 0.4);
+        if (u_showMoisture) color = mix(color, vec3(1.0 - moisture, 1.0 - moisture, moisture), 0.4);
 
-                vec4 c00 = texture2D(u_nationsTexture, uv00);
-                vec4 c10 = texture2D(u_nationsTexture, uv10);
-                vec4 c01 = texture2D(u_nationsTexture, uv01);
-                vec4 c11 = texture2D(u_nationsTexture, uv11);
-                
-                vec4 blended = mix(mix(c00, c10, fxy.x), mix(c01, c11, fxy.x), fxy.y);
-                
-                float d00 = distance(blended, c00);
-                float d10 = distance(blended, c10);
-                float d01 = distance(blended, c01);
-                float d11 = distance(blended, c11);
-                
-                float minDist = min(min(d00, d10), min(d01, d11));
-                vec4 nationColor;
-                if (minDist == d00) nationColor = c00;
-                else if (minDist == d10) nationColor = c10;
-                else if (minDist == d01) nationColor = c01;
-                else nationColor = c11;
+        // --- 3. Nations ---
+        if (u_showNations) {
+            vec2 pos = vec2(nx, ny) * u_worldSize - 0.5;
+            vec2 ixy = floor(pos);
+            vec2 fxy = fract(pos);
+            
+            vec4 c00 = texture2D(u_nationsTexture, (ixy + vec2(0.5, 0.5)) / u_worldSize);
+            vec4 c10 = texture2D(u_nationsTexture, (ixy + vec2(1.5, 0.5)) / u_worldSize);
+            vec4 c01 = texture2D(u_nationsTexture, (ixy + vec2(0.5, 1.5)) / u_worldSize);
+            vec4 c11 = texture2D(u_nationsTexture, (ixy + vec2(1.5, 1.5)) / u_worldSize);
+            
+            vec4 blended = mix(mix(c00, c10, fxy.x), mix(c01, c11, fxy.x), fxy.y);
+            
+            float d00 = distance(blended, c00);
+            float d10 = distance(blended, c10);
+            float d01 = distance(blended, c01);
+            float d11 = distance(blended, c11);
+            
+            float minDist = min(min(d00, d10), min(d01, d11));
+            vec4 nationColor;
+            if (minDist == d00) nationColor = c00;
+            else if (minDist == d10) nationColor = c10;
+            else if (minDist == d01) nationColor = c01;
+            else nationColor = c11;
 
-                if (nationColor.a < 0.5) {
-                    color *= 0.7; 
+            if (nationColor.a > 0.1) {
+                float aa = 1.6 / u_scale; // Slightly wider AA
+                float landMask = smoothstep(0.448, 0.452, renderedElevation);
+                
+                // --- Smooth Border Logic (No More Grid!) ---
+                // We find the second minimum distance to detect boundaries between nations
+                float d2 = 1.0;
+                if (minDist != d00) d2 = min(d2, d00);
+                if (minDist != d10) d2 = min(d2, d10);
+                if (minDist != d01) d2 = min(d2, d01);
+                if (minDist != d11) d2 = min(d2, d11);
+                
+                // Border is where the difference between two closest samples is small
+                // Using distance from blended to neighbors is a proxy for how "mixed" we are
+                float border = smoothstep(0.1, 0.05, d2 - minDist); 
+                
+                // If it's a border between a nation and "nothing" (ocean on CPU), handle separately
+                // but with global coverage, alpha is 1 everywhere.
+                
+                vec3 finalNationColor = mix(nationColor.rgb, nationColor.rgb * 0.5, border * 0.7);
+                float alpha = 0.4 * landMask;
+                
+                if (distance(nationColor.rgb, u_hoverColor) < 0.01) {
+                    color = mix(color, finalNationColor + vec3(0.2), alpha * 1.5);
                 } else {
-                    bool isBorder = (distance(nationColor, c00) > 0.01 || distance(nationColor, c10) > 0.01 || distance(nationColor, c01) > 0.01 || distance(nationColor, c11) > 0.01) && (minDist > 0.005);
-                    if (isBorder) {
-                        color = mix(color, nationColor.rgb * 0.75, 0.5);
-                    } else {
-                        color = mix(color, nationColor.rgb, 0.35); 
-                        if (distance(nationColor.rgb, u_hoverColor) < 0.01) {
-                            color = mix(color, nationColor.rgb, 0.8) + vec3(0.15); 
-                        }
-                    }
+                    color = mix(color, finalNationColor, alpha);
                 }
-            }
-        } else {
-            if (u_layer == 1) { 
-                bool isWater = elevation < 0.45;
-                color = isWater ? vec3(0.0, 0.0, elevation) : vec3(elevation) * shade;
-            } else if (u_layer == 2) { 
-                color = vec3(temperature, 0.0, 1.0 - temperature);
-            } else if (u_layer == 3) { 
-                color = vec3(1.0 - moisture, 1.0 - moisture, moisture);
+            } else if (u_showBiomes || u_showElevation) {
+                color *= 0.85;
             }
         }
 
@@ -483,7 +497,13 @@ export class GPURenderer {
     scale: number,
     offsetX: number,
     offsetY: number,
-    layer: number,
+    layers: {
+      biomes: boolean;
+      elevation: boolean;
+      heatmap: boolean;
+      moisture: boolean;
+      nations: boolean;
+    },
     hoverColor?: number[],
   ) {
     this.gl.viewport(0, 0, width, height);
@@ -528,10 +548,29 @@ export class GPURenderer {
       offsetX,
       offsetY,
     );
+
+    // Set layer uniforms
     this.gl.uniform1i(
-      this.gl.getUniformLocation(this.program, "u_layer"),
-      layer,
+      this.gl.getUniformLocation(this.program, "u_showBiomes"),
+      layers.biomes ? 1 : 0,
     );
+    this.gl.uniform1i(
+      this.gl.getUniformLocation(this.program, "u_showElevation"),
+      layers.elevation ? 1 : 0,
+    );
+    this.gl.uniform1i(
+      this.gl.getUniformLocation(this.program, "u_showHeatmap"),
+      layers.heatmap ? 1 : 0,
+    );
+    this.gl.uniform1i(
+      this.gl.getUniformLocation(this.program, "u_showMoisture"),
+      layers.moisture ? 1 : 0,
+    );
+    this.gl.uniform1i(
+      this.gl.getUniformLocation(this.program, "u_showNations"),
+      layers.nations ? 1 : 0,
+    );
+
     this.gl.uniform3fv(
       this.gl.getUniformLocation(this.program, "u_biomeColors"),
       this.biomeColors,
