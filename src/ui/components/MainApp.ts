@@ -150,10 +150,17 @@ export default function renderMainApp() {
                   type="range"
                   id="brush-size"
                   min="1"
-                  max="10"
+                  max="20"
                   value="2"
                 />
-                <span id="brush-size-value" class="brush-value-overlay">2</span>
+                <input
+                  type="number"
+                  id="brush-size-input"
+                  class="brush-number-input"
+                  min="1"
+                  max="100"
+                  value="2"
+                />
               </div>
             </div>
             <div id="nations-list" class="nations-list">

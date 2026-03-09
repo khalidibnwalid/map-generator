@@ -44,9 +44,24 @@ export class NationsManager {
       item.className = `nation-item ${this.selectedNationIndex === idx ? "selected" : ""}`;
       item.dataset.index = idx.toString();
 
-      const swatch = document.createElement("div");
-      swatch.className = "nation-color-swatch";
-      swatch.style.backgroundColor = nation.color;
+      const swatchContainer = document.createElement("div");
+      swatchContainer.className = "nation-color-swatch-container";
+
+      const colorInput = document.createElement("input");
+      colorInput.type = "color";
+      colorInput.className = "nation-color-input";
+      colorInput.value = nation.color;
+      colorInput.addEventListener("input", (e) => {
+        nation.color = (e.target as HTMLInputElement).value;
+        swatchContainer.style.backgroundColor = nation.color;
+        this.nationsStateDirty = true;
+        this.canvasManager.scheduleRender();
+      });
+      colorInput.addEventListener("mousedown", (e) => e.stopPropagation());
+      colorInput.addEventListener("click", (e) => e.stopPropagation());
+
+      swatchContainer.style.backgroundColor = nation.color;
+      swatchContainer.appendChild(colorInput);
 
       const nameInput = document.createElement("input");
       nameInput.type = "text";
@@ -66,7 +81,7 @@ export class NationsManager {
       const areaKm2 = areaPx * 25;
       territoryCount.textContent = `${areaKm2.toLocaleString()} km²`;
 
-      item.appendChild(swatch);
+      item.appendChild(swatchContainer);
       item.appendChild(nameInput);
       item.appendChild(territoryCount);
 

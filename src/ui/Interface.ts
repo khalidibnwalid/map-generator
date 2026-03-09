@@ -95,6 +95,9 @@ export class Interface {
 
     const canvas = this.canvasManager.canvas;
     canvas.addEventListener("mousemove", (e) => {
+      this.lastMouseX = e.clientX;
+      this.lastMouseY = e.clientY;
+
       if (this.activeLayers.nations && !this.nationsManager.isEditingNations) {
         this.updateHover(e.clientX, e.clientY);
       } else if (
@@ -113,6 +116,7 @@ export class Interface {
         if (this.nationsManager.isPainting) {
           this.nationsManager.handlePainting(e.clientX, e.clientY);
         }
+        this.canvasManager.scheduleRender(); // Force overlay update
       }
     });
 
@@ -120,7 +124,8 @@ export class Interface {
       if (
         this.activeTab === "nations" &&
         this.nationsManager.isEditingNations &&
-        e.button === 0
+        e.button === 0 &&
+        !e.shiftKey
       ) {
         if (this.nationsManager.selectedNationIndex !== -1) {
           isAttemptingPaint = true;
@@ -178,6 +183,22 @@ export class Interface {
         this.nationsManager.hoveredNationIndex = -1;
         this.tooltipManager.hide();
         this.canvasManager.scheduleRender();
+      }
+    });
+
+    window.addEventListener("keydown", (e) => {
+      if (
+        e.key === "Shift" &&
+        this.nationsManager.isEditingNations &&
+        this.canvasManager.canvas.style.cursor !== "grabbing"
+      ) {
+        this.canvasManager.canvas.style.cursor = "grab";
+      }
+    });
+
+    window.addEventListener("keyup", (e) => {
+      if (e.key === "Shift" && this.nationsManager.isEditingNations) {
+        this.canvasManager.canvas.style.cursor = "default";
       }
     });
   }
@@ -293,11 +314,27 @@ export class Interface {
     const brushSlider = document.getElementById(
       "brush-size",
     ) as HTMLInputElement;
-    const brushValueDisp = document.getElementById("brush-size-value");
-    if (brushSlider && brushValueDisp) {
+    const brushInput = document.getElementById(
+      "brush-size-input",
+    ) as HTMLInputElement;
+
+    if (brushSlider && brushInput) {
+      const updateBrush = (val: number) => {
+        this.nationsManager.brushSize = val;
+        brushSlider.value = val.toString();
+        brushInput.value = val.toString();
+        this.canvasManager.scheduleRender();
+      };
+
       brushSlider.addEventListener("input", () => {
-        this.nationsManager.brushSize = parseInt(brushSlider.value);
-        brushValueDisp.textContent = this.nationsManager.brushSize.toString();
+        updateBrush(parseInt(brushSlider.value));
+      });
+
+      brushInput.addEventListener("change", () => {
+        let val = parseInt(brushInput.value);
+        if (isNaN(val) || val < 1) val = 1;
+        if (val > 100) val = 100;
+        updateBrush(val);
       });
     }
 
@@ -621,8 +658,38 @@ export class Interface {
       );
     }
 
+    // --- Brush Overlay ---
+    if (this.nationsManager.isEditingNations && !this.canvasManager.isInteracting && !this.tooltipManager.isVisible) {
+      const rect = this.canvasManager.canvas.getBoundingClientRect();
+      // We need the latest mouse position. Since we don't have it here, 
+      // let's ensure we track it in setupEventListeners or use a local variable.
+      if (this.lastMouseX !== undefined && this.lastMouseY !== undefined) {
+        const sx = this.lastMouseX - rect.left;
+        const sy = this.lastMouseY - rect.top;
+
+        ctx.save();
+        ctx.beginPath();
+        const radius = (this.nationsManager.brushSize * scale) / 2;
+        ctx.arc(sx, sy, radius, 0, Math.PI * 2);
+        ctx.strokeStyle = "rgba(0, 255, 170, 0.8)";
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        ctx.stroke();
+
+        // Inner solid circle
+        ctx.beginPath();
+        ctx.arc(sx, sy, 2, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(0, 255, 170, 0.8)";
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
     this.updateMapRuler(scale);
   }
+
+  private lastMouseX: number | undefined;
+  private lastMouseY: number | undefined;
 
   private updateMapRuler(scale: number) {
     // 1 cell (pixel) = 5 km
@@ -743,10 +810,10 @@ export class Interface {
     const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
     return result
       ? [
-          parseInt(result[1], 16),
-          parseInt(result[2], 16),
-          parseInt(result[3], 16),
-        ]
+        parseInt(result[1], 16),
+        parseInt(result[2], 16),
+        parseInt(result[3], 16),
+      ]
       : [0, 0, 0];
   }
 }

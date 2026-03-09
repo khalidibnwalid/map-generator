@@ -24,4 +24,8 @@ export class TooltipManager {
             this.tooltip.style.display = 'none';
         }
     }
+
+    public get isVisible(): boolean {
+        return this.tooltip?.style.display === 'block';
+    }
 }

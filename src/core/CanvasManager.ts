@@ -58,7 +58,8 @@ export class CanvasManager {
 
         this.canvas.addEventListener('mousedown', (e) => {
             // allowing right-click (2) or middle-click (1) to pan even if locked
-            if (this.panningLocked && e.button === 0) return;
+            // Also allow left-click (0) with Shift key to pan even if locked
+            if (this.panningLocked && e.button === 0 && !e.shiftKey) return;
 
             this.isDragging = true;
             this.lastX = e.clientX;
