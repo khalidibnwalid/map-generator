@@ -488,65 +488,107 @@ export class GPURenderer {
     console.log(`Texture updated for ${world.width}x${world.height}`);
   }
 
-  public updateNationsDataTexture(world: WorldData) {
+  public updateNationsDataTexture(world: WorldData, dirtyRect?: { x: number, y: number, w: number, h: number }) {
     if (!world || !world.grid) return;
-    if (this.nationsTexture) this.gl.deleteTexture(this.nationsTexture);
-    this.nationsTexture = this.gl.createTexture();
-    this.gl.bindTexture(this.gl.TEXTURE_2D, this.nationsTexture);
 
-    const data = new Uint8Array(world.width * world.height * 4);
-    for (let y = 0; y < world.height; y++) {
-      for (let x = 0; x < world.width; x++) {
-        const cell = world.grid[x][y];
-        const idx = (y * world.width + x) * 4;
-        const nIdx = cell.nationIndex ?? -1;
+    const gl = this.gl;
+    const W = world.width;
+    const H = world.height;
 
-        if (nIdx >= 0 && nIdx < world.nations.length) {
-          const hex = world.nations[nIdx].color;
-          data[idx] = parseInt(hex.slice(1, 3), 16);
-          data[idx + 1] = parseInt(hex.slice(3, 5), 16);
-          data[idx + 2] = parseInt(hex.slice(5, 7), 16);
-          data[idx + 3] = 255;
-        } else {
-          data[idx] = 0;
-          data[idx + 1] = 0;
-          data[idx + 2] = 0;
-          data[idx + 3] = 0; // Ocean/Water
-        }
-      }
+    if (!this.nationsTexture) {
+      this.nationsTexture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, this.nationsTexture);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+      const emptyData = new Uint8Array(W * H * 4);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, emptyData);
     }
 
-    this.gl.texImage2D(
-      this.gl.TEXTURE_2D,
-      0,
-      this.gl.RGBA,
-      world.width,
-      world.height,
-      0,
-      this.gl.RGBA,
-      this.gl.UNSIGNED_BYTE,
-      data,
-    );
-    this.gl.texParameteri(
-      this.gl.TEXTURE_2D,
-      this.gl.TEXTURE_MIN_FILTER,
-      this.gl.NEAREST,
-    );
-    this.gl.texParameteri(
-      this.gl.TEXTURE_2D,
-      this.gl.TEXTURE_MAG_FILTER,
-      this.gl.NEAREST,
-    );
-    this.gl.texParameteri(
-      this.gl.TEXTURE_2D,
-      this.gl.TEXTURE_WRAP_S,
-      this.gl.CLAMP_TO_EDGE,
-    );
-    this.gl.texParameteri(
-      this.gl.TEXTURE_2D,
-      this.gl.TEXTURE_WRAP_T,
-      this.gl.CLAMP_TO_EDGE,
-    );
+    gl.bindTexture(gl.TEXTURE_2D, this.nationsTexture);
+
+    if (dirtyRect) {
+      this.partialUpdateRegion(world, dirtyRect);
+    } else {
+      const data = new Uint8Array(W * H * 4);
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const cell = world.grid[x][y];
+          const idx = (y * W + x) * 4;
+          const nIdx = cell.nationIndex ?? -1;
+
+          if (nIdx >= 0 && nIdx < world.nations.length) {
+            const hex = world.nations[nIdx].color;
+            data[idx] = parseInt(hex.slice(1, 3), 16);
+            data[idx + 1] = parseInt(hex.slice(3, 5), 16);
+            data[idx + 2] = parseInt(hex.slice(5, 7), 16);
+            data[idx + 3] = 255;
+          } else {
+            data[idx] = 0;
+            data[idx + 1] = 0;
+            data[idx + 2] = 0;
+            data[idx + 3] = 0;
+          }
+        }
+      }
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    }
+  }
+
+  private partialUpdateRegion(world: WorldData, rect: { x: number, y: number, w: number, h: number }) {
+    const gl = this.gl;
+    const W = world.width;
+    const H = world.height;
+
+    const startX = rect.x;
+    const startY = Math.max(0, rect.y);
+    const endY = Math.min(H, rect.y + rect.h);
+    const rectH = endY - startY;
+
+    if (rectH <= 0) return;
+
+    // Handle X-wrapping by splitting into up to 3 chunks: [left-overflow, main, right-overflow]
+    const chunks: { x: number, w: number }[] = [];
+
+    // Normalize startX to be within [0, W)
+    let normalizedX = ((startX % W) + W) % W;
+    let remainingW = rect.w;
+
+    while (remainingW > 0) {
+      const chunkW = Math.min(remainingW, W - normalizedX);
+      chunks.push({ x: normalizedX, w: chunkW });
+      remainingW -= chunkW;
+      normalizedX = 0; // Next chunk starts at 0
+    }
+
+    chunks.forEach(chunk => {
+      const subData = new Uint8Array(chunk.w * rectH * 4);
+      for (let ly = 0; ly < rectH; ly++) {
+        const gy = startY + ly;
+        for (let lx = 0; lx < chunk.w; lx++) {
+          const gx = chunk.x + lx;
+          const cell = world.grid[gx][gy];
+          const nIdx = cell.nationIndex ?? -1;
+          const subIdx = (ly * chunk.w + lx) * 4;
+
+          if (nIdx >= 0 && nIdx < world.nations.length) {
+            const hex = world.nations[nIdx].color;
+            subData[subIdx] = parseInt(hex.slice(1, 3), 16);
+            subData[subIdx + 1] = parseInt(hex.slice(3, 5), 16);
+            subData[subIdx + 2] = parseInt(hex.slice(5, 7), 16);
+            subData[subIdx + 3] = 255;
+          } else {
+            subData[subIdx] = 0;
+            subData[subIdx + 1] = 0;
+            subData[subIdx + 2] = 0;
+            subData[subIdx + 3] = 0;
+          }
+        }
+      }
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, chunk.x, startY, chunk.w, rectH, gl.RGBA, gl.UNSIGNED_BYTE, subData);
+    });
   }
 
   public render(

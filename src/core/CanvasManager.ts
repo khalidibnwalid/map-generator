@@ -127,6 +127,13 @@ export class CanvasManager {
         }
     }
 
+    public lookAt(worldX: number, worldY: number, targetScale: number = this.scale) {
+        this.scale = targetScale;
+        this.offsetX = this.canvas.width / 2 - worldX * this.scale;
+        this.offsetY = this.canvas.height / 2 - worldY * this.scale;
+        this.scheduleRender();
+    }
+
     public getWidth() { return this.canvas.width; }
     public getHeight() { return this.canvas.height; }
 }

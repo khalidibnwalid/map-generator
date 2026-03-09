@@ -8,10 +8,12 @@ export class NationsManager {
   public isEditingNations: boolean = false;
   public isPainting: boolean = false;
   public brushSize: number = 2;
-  public nationCellsList: number[][] = [];
+  public nationCellsList: Set<number>[] = [];
   public nationCentroids: { x: number; y: number }[] = [];
   public nationSizes: number[] = [];
   public nationsStateDirty: boolean = true;
+  private expandedNations: Set<number> = new Set();
+  private cityMap: Map<number, any> = new Map();
 
   private lastPaintedX: number | null = null;
   private lastPaintedY: number | null = null;
@@ -43,6 +45,23 @@ export class NationsManager {
       const item = document.createElement("div");
       item.className = `nation-item ${this.selectedNationIndex === idx ? "selected" : ""}`;
       item.dataset.index = idx.toString();
+
+      const toggleBtn = document.createElement("button");
+      toggleBtn.className = `nation-toggle-btn ${this.expandedNations.has(idx) ? "expanded" : ""}`;
+      toggleBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+          <path d="M8.59,16.59L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.59Z"/>
+        </svg>
+      `;
+      toggleBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (this.expandedNations.has(idx)) {
+          this.expandedNations.delete(idx);
+        } else {
+          this.expandedNations.add(idx);
+        }
+        this.renderList();
+      });
 
       const swatchContainer = document.createElement("div");
       swatchContainer.className = "nation-color-swatch-container";
@@ -76,17 +95,22 @@ export class NationsManager {
 
       const territoryCount = document.createElement("span");
       territoryCount.className = "nation-territory-count";
-      const areaPx = this.nationCellsList[idx]?.length || 0;
-      // 1 px = 5km, so 1 px² = 25 km²
+      territoryCount.id = `nation-territory-count-${idx}`;
+      const areaPx = this.nationCellsList[idx]?.size || 0;
       const areaKm2 = areaPx * 25;
       territoryCount.textContent = `${areaKm2.toLocaleString()} km²`;
 
+      item.appendChild(toggleBtn);
       item.appendChild(swatchContainer);
       item.appendChild(nameInput);
       item.appendChild(territoryCount);
 
       item.addEventListener("click", () => {
         this.selectedNationIndex = idx;
+        const target = world.nations[idx];
+        if (target) {
+          this.canvasManager.lookAt(target.capitalX, target.capitalY);
+        }
         this.renderList();
       });
 
@@ -103,11 +127,99 @@ export class NationsManager {
       });
 
       listContainer.appendChild(item);
+
+      // Render city list if expanded
+      const cityListContainer = document.createElement("div");
+      cityListContainer.id = `city-list-container-${idx}`;
+      listContainer.appendChild(cityListContainer);
+
+      if (this.expandedNations.has(idx)) {
+        this.renderCityList(idx, cityListContainer);
+      }
+    });
+  }
+
+  private renderCityList(idx: number, container: HTMLElement) {
+    const world = this.generator.getWorld();
+    container.innerHTML = "";
+    container.className = "city-sub-list";
+
+    const nationCities = world.cities.filter((c) => c.nationIndex === idx);
+    nationCities.sort((a, b) => b.size - a.size);
+
+    nationCities.forEach((city) => {
+      const cityItem = document.createElement("div");
+      cityItem.className = "city-item";
+
+      const cityName = document.createElement("span");
+      cityName.className = "city-name";
+      cityName.textContent = `${city.isCapital ? "★ " : "• "}${city.name}`;
+
+      const locateBtn = document.createElement("button");
+      locateBtn.className = "city-locate-btn";
+      locateBtn.innerHTML = `
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+              <path d="M12,2c-4.42,0-8,3.58-8,8c0,5.25,8,12,8,12s8-6.75,8-12C20,5.58,16.42,2,12,2z M12,13c-1.66,0-3-1.34-3-3s1.34-3,3-3s3,1.34,3,3S13.66,13,12,13z"/>
+            </svg>
+          `;
+      locateBtn.title = "Locate City";
+      locateBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.canvasManager.lookAt(
+          city.x,
+          city.y,
+          Math.max(this.canvasManager.scale, 8),
+        );
+      });
+
+      cityItem.appendChild(cityName);
+      cityItem.appendChild(locateBtn);
+      container.appendChild(cityItem);
+    });
+
+    if (nationCities.length === 0) {
+      const emptyMsg = document.createElement("div");
+      emptyMsg.className = "city-empty-msg";
+      emptyMsg.textContent = "No cities founded yet";
+      container.appendChild(emptyMsg);
+    }
+  }
+
+  private updateNationUI(idx: number) {
+    if (idx < 0) return;
+    const territoryCount = document.getElementById(
+      `nation-territory-count-${idx}`,
+    );
+    if (territoryCount) {
+      const areaPx = this.nationCellsList[idx]?.size || 0;
+      const areaKm2 = areaPx * 25;
+      territoryCount.textContent = `${areaKm2.toLocaleString()} km²`;
+    }
+
+    if (this.expandedNations.has(idx)) {
+      const container = document.getElementById(`city-list-container-${idx}`);
+      if (container) {
+        this.renderCityList(idx, container);
+      }
+    }
+  }
+
+  private buildCityMap() {
+    this.cityMap.clear();
+    const world = this.generator.getWorld();
+    world.cities.forEach(city => {
+      const flatIdx = city.y * world.width + city.x;
+      this.cityMap.set(flatIdx, city);
     });
   }
 
   public handlePainting(clientX: number, clientY: number) {
     if (!this.isPainting || this.selectedNationIndex === -1) return;
+
+    // Ensure city map is built before painting starts
+    if (this.cityMap.size === 0) {
+      this.buildCityMap();
+    }
 
     const cm = this.canvasManager;
     const rect = cm.canvas.getBoundingClientRect();
@@ -117,8 +229,24 @@ export class NationsManager {
     const wx = Math.floor((sx - cm.offsetX) / cm.scale);
     const wy = Math.floor((sy - cm.offsetY) / cm.scale);
 
+    const affectedCells = new Set<number>();
+    const affectedNations = new Set<number>();
+    affectedNations.add(this.selectedNationIndex);
+
+    let minX = wx, maxX = wx, minY = wy, maxY = wy;
+
+    const updateDirtyRect = (px: number, py: number) => {
+      const bSize = this.brushSize;
+      const offset = Math.floor(bSize / 2);
+      minX = Math.min(minX, px - offset);
+      maxX = Math.max(maxX, px + offset);
+      minY = Math.min(minY, py - offset);
+      maxY = Math.max(maxY, py + offset);
+    };
+
     if (this.lastPaintedX === null || this.lastPaintedY === null) {
-      this.paintAt(wx, wy);
+      updateDirtyRect(wx, wy);
+      this.paintAt(wx, wy, affectedCells, affectedNations);
     } else {
       const dx = wx - this.lastPaintedX;
       const dy = wy - this.lastPaintedY;
@@ -126,16 +254,36 @@ export class NationsManager {
       for (let i = 0; i <= steps; i++) {
         const px = Math.floor(this.lastPaintedX + (dx * i) / steps);
         const py = Math.floor(this.lastPaintedY + (dy * i) / steps);
-        this.paintAt(px, py);
+        updateDirtyRect(px, py);
+        this.paintAt(px, py, affectedCells, affectedNations);
       }
     }
 
     this.lastPaintedX = wx;
     this.lastPaintedY = wy;
 
-    this.gpuRenderer.updateNationsDataTexture(this.generator.getWorld());
+    // Batch border updates
+    this.updateBatchBorders(affectedCells);
+
+    // Partial texture update with padding for bilinear neighbors
+    const world = this.generator.getWorld();
+    const padding = 2;
+    const dirtyX = minX - padding;
+    const dirtyY = minY - padding;
+    const dirtyW = (maxX - minX + 1) + padding * 2;
+    const dirtyH = (maxY - minY + 1) + padding * 2;
+
+    if (dirtyW > 0 && dirtyH > 0) {
+      this.gpuRenderer.updateNationsDataTexture(world, {
+        x: dirtyX,
+        y: dirtyY,
+        w: dirtyW,
+        h: dirtyH
+      });
+    }
+
     this.canvasManager.scheduleRender();
-    this.renderList();
+    affectedNations.forEach((idx) => this.updateNationUI(idx));
   }
 
   public stopPainting() {
@@ -148,7 +296,7 @@ export class NationsManager {
     }
   }
 
-  private paintAt(wx: number, wy: number) {
+  private paintAt(wx: number, wy: number, affectedCells: Set<number>, affectedNations: Set<number>) {
     const world = this.generator.getWorld();
     const brushSize = this.brushSize;
     const radiusSq = (brushSize / 2) * (brushSize / 2);
@@ -172,64 +320,74 @@ export class NationsManager {
             const oldIdx = cell.nationIndex ?? -1;
             cell.nationIndex = this.selectedNationIndex;
 
+            const flatIdx = ty * world.width + wrappedX;
             if (oldIdx !== -1) {
-              const oldList = this.nationCellsList[oldIdx];
-              const flatIdx = ty * world.width + wrappedX;
-              const listIdx = oldList.indexOf(flatIdx);
-              if (listIdx > -1) oldList.splice(listIdx, 1);
+              this.nationCellsList[oldIdx].delete(flatIdx);
+              affectedNations.add(oldIdx);
             }
-            this.nationCellsList[this.selectedNationIndex].push(
-              ty * world.width + wrappedX,
-            );
+            this.nationCellsList[this.selectedNationIndex].add(flatIdx);
 
-            this.updateLocalBorders(tx, ty);
-          }
-        }
-      }
-    }
-  }
+            // Update city ownership if a city exists at this coordinate
+            const city = this.cityMap.get(flatIdx);
+            if (city) {
+              city.nationIndex = this.selectedNationIndex;
+            }
 
-  private updateLocalBorders(wx: number, wy: number) {
-    const world = this.generator.getWorld();
-    for (let dx = -1; dx <= 1; dx++) {
-      for (let dy = -1; dy <= 1; dy++) {
-        const nwx = wx + dx;
-        const nwy = wy + dy;
-
-        if (nwy >= 0 && nwy < world.height) {
-          const wrappedX = ((nwx % world.width) + world.width) % world.width;
-          const cell = world.grid[wrappedX][nwy];
-          if (cell.isWater) continue;
-
-          let isBorder = false;
-          const nid = cell.nationIndex;
-          neighborLoop: for (let nxd = -1; nxd <= 1; nxd++) {
-            for (let nyd = -1; nyd <= 1; nyd++) {
-              if (nxd === 0 && nyd === 0) continue;
-              const nnwx = nwx + nxd;
-              const nnwy = nwy + nyd;
-              if (nnwy >= 0 && nnwy < world.height) {
-                const nnwrappedX =
-                  ((nnwx % world.width) + world.width) % world.width;
-                const nb = world.grid[nnwrappedX][nnwy];
-                if (nb.isWater || (nb.nationIndex ?? -1) !== nid) {
-                  isBorder = true;
-                  break neighborLoop;
+            // Mark for border update later
+            for (let bdx = -1; bdx <= 1; bdx++) {
+              for (let bdy = -1; bdy <= 1; bdy++) {
+                const bwx = tx + bdx;
+                const bwy = ty + bdy;
+                if (bwy >= 0 && bwy < world.height) {
+                  const bwWrappedX = ((bwx % world.width) + world.width) % world.width;
+                  affectedCells.add(bwy * world.width + bwWrappedX);
                 }
               }
             }
           }
-          cell.isNationBorder = isBorder;
         }
       }
     }
   }
+
+  private updateBatchBorders(affectedCells: Set<number>) {
+    const world = this.generator.getWorld();
+    const W = world.width;
+    const H = world.height;
+
+    affectedCells.forEach(flatIdx => {
+      const x = flatIdx % W;
+      const y = Math.floor(flatIdx / W);
+      const cell = world.grid[x][y];
+      if (cell.isWater) return;
+
+      let isBorder = false;
+      const nid = cell.nationIndex;
+      neighborLoop: for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = x + dx;
+          const ny = y + dy;
+          if (ny >= 0 && ny < H) {
+            const wrappedX = ((nx % W) + W) % W;
+            const nb = world.grid[wrappedX][ny];
+            if (nb.isWater || (nb.nationIndex ?? -1) !== nid) {
+              isBorder = true;
+              break neighborLoop;
+            }
+          }
+        }
+      }
+      cell.isNationBorder = isBorder;
+    });
+  }
+
 
   public buildCache() {
     const world = this.generator.getWorld();
     const W = world.width;
     const H = world.height;
-    this.nationCellsList = world.nations.map(() => []);
+    this.nationCellsList = world.nations.map(() => new Set());
     this.nationCentroids = world.nations.map(() => ({ x: 0, y: 0 }));
     this.nationSizes = world.nations.map(() => 0);
 
@@ -241,7 +399,7 @@ export class NationsManager {
           cell.nationIndex !== undefined &&
           cell.nationIndex >= 0
         ) {
-          this.nationCellsList[cell.nationIndex].push(y * W + x);
+          this.nationCellsList[cell.nationIndex].add(y * W + x);
           this.nationCentroids[cell.nationIndex].x += x;
           this.nationCentroids[cell.nationIndex].y += y;
         }
@@ -258,16 +416,16 @@ export class NationsManager {
     let maxArea = 0;
     for (let i = 0; i < world.nations.length; i++) {
       const cells = this.nationCellsList[i];
-      const area = cells.length;
+      const area = cells.size;
       if (area > maxArea) maxArea = area;
 
       if (area > 0) {
         let sumX = 0;
         let sumY = 0;
-        for (const flatIdx of cells) {
+        cells.forEach((flatIdx) => {
           sumX += flatIdx % W;
           sumY += Math.floor(flatIdx / W);
-        }
+        });
         this.nationCentroids[i] = { x: sumX / area, y: sumY / area };
       } else {
         this.nationCentroids[i] = {
@@ -278,7 +436,7 @@ export class NationsManager {
     }
 
     for (let i = 0; i < world.nations.length; i++) {
-      const area = this.nationCellsList[i].length;
+      const area = this.nationCellsList[i].size;
       this.nationSizes[i] = maxArea > 0 ? Math.sqrt(area / maxArea) : 0.5;
     }
   }
