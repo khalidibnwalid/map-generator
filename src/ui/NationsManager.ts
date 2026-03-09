@@ -144,35 +144,90 @@ export class NationsManager {
     container.innerHTML = "";
     container.className = "city-sub-list";
 
+    const getPopulation = (city: any) => {
+      const cell = world.getCell(city.x, city.y);
+      const biome = cell?.biome || "Grassland";
+
+      let base = 1000;
+      if (city.size === 1) base = 15000;
+      if (city.size === 2) base = 120000;
+      if (city.isCapital) base *= 2.5;
+
+      const multipliers: Record<string, number> = {
+        "Snow": 0.05, "Tundra": 0.1, "Scorched": 0.02, "Bare": 0.1,
+        "Subtropical Desert": 0.2, "Temperate Desert": 0.3,
+        "Tropical Rain Forest": 0.4, "Marsh": 0.3,
+        "Taiga": 0.5, "Shrubland": 0.7, "Savanna": 0.8,
+        "Grassland": 1.2, "Temperate Deciduous Forest": 1.5,
+        "Temperate Rain Forest": 1.0
+      };
+
+      const mult = multipliers[biome] || 1.0;
+      const pop = base * mult * (0.8 + (city.id % 40) / 100);
+
+      if (pop >= 1000000) return (pop / 1000000).toFixed(1) + "M";
+      if (pop >= 1000) return (pop / 1000).toFixed(0) + "k";
+      return Math.floor(pop).toString();
+    };
+
     const nationCities = world.cities.filter((c) => c.nationIndex === idx);
     nationCities.sort((a, b) => b.size - a.size);
 
     nationCities.forEach((city) => {
       const cityItem = document.createElement("div");
-      cityItem.className = "city-item";
+      cityItem.className = `city-item ${city.isCapital ? "is-capital" : ""}`;
 
-      const cityName = document.createElement("span");
-      cityName.className = "city-name";
-      cityName.textContent = `${city.isCapital ? "★ " : "• "}${city.name}`;
+      const capitalBtn = document.createElement("button");
+      capitalBtn.className = `city-capital-btn ${city.isCapital ? "active" : ""}`;
+      capitalBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+          <path d="M12,17.27L18.18,21L16.54,13.97L22,9.24L14.81,8.62L12,2L9.19,8.62L2,9.24L7.45,13.97L5.82,21L12,17.27Z"/>
+        </svg>
+      `;
+      capitalBtn.title = city.isCapital ? "Capital City" : "Assign as Capital";
+      capitalBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (city.isCapital) return;
+        const oldCapital = nationCities.find(c => c.isCapital);
+        if (oldCapital) oldCapital.isCapital = false;
+        city.isCapital = true;
+        const nation = world.nations[idx];
+        if (nation) { nation.capitalX = city.x; nation.capitalY = city.y; }
+        this.updateNationUI(idx);
+        this.canvasManager.scheduleRender();
+      });
+
+      const nameInput = document.createElement("input");
+      nameInput.className = "city-name-input";
+      nameInput.value = city.name;
+      nameInput.spellcheck = false;
+      nameInput.addEventListener("change", (e) => {
+        city.name = (e.target as HTMLInputElement).value;
+        this.canvasManager.scheduleRender();
+      });
+      nameInput.addEventListener("mousedown", (e) => e.stopPropagation());
+      nameInput.addEventListener("click", (e) => e.stopPropagation());
+
+      const popInfo = document.createElement("span");
+      popInfo.className = "city-pop-info";
+      popInfo.textContent = getPopulation(city);
 
       const locateBtn = document.createElement("button");
       locateBtn.className = "city-locate-btn";
       locateBtn.innerHTML = `
-            <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
-              <path d="M12,2c-4.42,0-8,3.58-8,8c0,5.25,8,12,8,12s8-6.75,8-12C20,5.58,16.42,2,12,2z M12,13c-1.66,0-3-1.34-3-3s1.34-3,3-3s3,1.34,3,3S13.66,13,12,13z"/>
-            </svg>
-          `;
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+          <path d="M12,2c-4.42,0-8,3.58-8,8c0,5.25,8,12,8,12s8-6.75,8-12C20,5.58,16.42,2,12,2z M12,13c-1.66,0-3-1.34-3-3s1.34-3,3-3s3,1.34,3,3S13.66,13,12,13z"/>
+        </svg>
+      `;
       locateBtn.title = "Locate City";
       locateBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        this.canvasManager.lookAt(
-          city.x,
-          city.y,
-          Math.max(this.canvasManager.scale, 8),
-        );
+        this.canvasManager.lookAt(city.x, city.y, Math.max(this.canvasManager.scale, 8));
       });
 
-      cityItem.appendChild(cityName);
+      cityItem.appendChild(capitalBtn);
+      cityItem.appendChild(nameInput);
+      cityItem.appendChild(popInfo);
       cityItem.appendChild(locateBtn);
       container.appendChild(cityItem);
     });

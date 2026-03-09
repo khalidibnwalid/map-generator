@@ -329,10 +329,12 @@ body {
   align-items: center;
   justify-content: space-between;
   padding: 4px 8px;
-  background: rgba(0, 5, 10, 0.3);
+  background: rgba(0, 5, 10, 0.2);
   font-size: 0.8rem;
   color: var(--text-dim);
   transition: all 0.2s ease;
+  border-radius: 4px;
+  margin-bottom: 2px;
 }
 
 .city-item:hover {
@@ -340,28 +342,69 @@ body {
   color: var(--text-active);
 }
 
-.city-name {
+.city-name-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: inherit;
   font-family: inherit;
+  padding: 0;
+  margin-left: 6px;
+  outline: none;
   letter-spacing: 0.5px;
 }
 
+.city-name-input:focus {
+  color: #fff;
+}
+
+.city-pop-info {
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.35);
+  font-family: "JetBrains Mono", monospace;
+  margin-right: 8px;
+  min-width: 35px;
+  text-align: right;
+}
+
+.city-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.city-capital-btn,
 .city-locate-btn {
   background: transparent;
   border: none;
-  color: var(--text-dim);
-  padding: 0;
+  color: rgba(255, 255, 255, 0.2);
+  cursor: pointer;
+  padding: 2px;
   display: flex;
   align-items: center;
-  cursor: pointer;
-  transition: color 0.1s ease;
-  opacity: 0.6;
+  transition: all 0.2s;
 }
 
-.city-item:hover .city-locate-btn {
+.city-capital-btn.active {
+  color: #ffd700;
   opacity: 1;
 }
 
+.city-capital-btn:not(.active):hover {
+  color: rgba(255, 215, 0, 0.5);
+}
+
+.city-locate-btn {
+  opacity: 0;
+}
+
+.city-item:hover .city-locate-btn {
+  opacity: 0.6;
+}
+
 .city-locate-btn:hover {
+  opacity: 1;
   color: var(--accent-bright);
 }
 
