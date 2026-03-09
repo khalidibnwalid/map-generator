@@ -1,6 +1,9 @@
 import type { MapGenerator } from "../game/MapGenerator";
 import type { CanvasManager } from "../core/CanvasManager";
 import type { GPURenderer } from "../core/GPURenderer";
+import { generateRoads, generateCityGeometry } from "../game/generators";
+import { NoiseEngine } from "../core/NoiseEngine";
+import type { Preset } from "../game/MapGenerator";
 
 export class NationsManager {
   public hoveredNationIndex: number = -1;
@@ -12,6 +15,9 @@ export class NationsManager {
   public nationCentroids: { x: number; y: number }[] = [];
   public nationSizes: number[] = [];
   public nationsStateDirty: boolean = true;
+  public cityPlacementMode: number = -1; // Index of the nation being founded for
+  public nationPlacementMode: boolean = false;
+  public pendingCityIds: Set<number> = new Set();
   private expandedNations: Set<number> = new Set();
   private cityMap: Map<number, any> = new Map();
 
@@ -40,6 +46,22 @@ export class NationsManager {
 
     const world = this.generator.getWorld();
     listContainer.innerHTML = "";
+
+    const addNationBtn = document.createElement("button");
+    addNationBtn.className = `nation-add-btn ${this.nationPlacementMode ? "active" : ""}`;
+    addNationBtn.innerHTML = `
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+        <path d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z"/>
+      </svg>
+      <span>${this.nationPlacementMode ? "CANCEL CREATION" : "NEW NATION"}</span>
+    `;
+    addNationBtn.addEventListener("click", () => {
+      this.nationPlacementMode = !this.nationPlacementMode;
+      this.cityPlacementMode = -1;
+      this.renderList();
+      this.canvasManager.scheduleRender();
+    });
+    listContainer.appendChild(addNationBtn);
 
     world.nations.forEach((nation, idx) => {
       const item = document.createElement("div");
@@ -174,8 +196,24 @@ export class NationsManager {
     nationCities.sort((a, b) => b.size - a.size);
 
     nationCities.forEach((city) => {
+      const isPending = this.pendingCityIds.has(city.id);
       const cityItem = document.createElement("div");
-      cityItem.className = `city-item ${city.isCapital ? "is-capital" : ""}`;
+      cityItem.className = `city-item ${city.isCapital ? "is-capital" : ""} ${isPending ? "loading" : ""}`;
+
+      if (isPending) {
+        const spinner = document.createElement("div");
+        spinner.className = "spinner";
+        cityItem.appendChild(spinner);
+
+        const loadingText = document.createElement("span");
+        loadingText.className = "loading-text";
+        loadingText.textContent = " Founding...";
+        loadingText.style.fontSize = "0.7rem";
+        loadingText.style.color = "var(--accent-bright)";
+        cityItem.appendChild(loadingText);
+        container.appendChild(cityItem);
+        return;
+      }
 
       const capitalBtn = document.createElement("button");
       capitalBtn.className = `city-capital-btn ${city.isCapital ? "active" : ""}`;
@@ -237,6 +275,167 @@ export class NationsManager {
       emptyMsg.className = "city-empty-msg";
       emptyMsg.textContent = "No cities founded yet";
       container.appendChild(emptyMsg);
+    }
+
+    const addCityBtn = document.createElement("button");
+    addCityBtn.className = `city-add-btn ${this.cityPlacementMode === idx ? "active" : ""}`;
+    addCityBtn.innerHTML = `
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+        <path d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z"/>
+      </svg>
+      <span>${this.cityPlacementMode === idx ? "CANCEL CREATION" : "NEW CITY"}</span>
+    `;
+    addCityBtn.addEventListener("click", () => {
+      if (this.cityPlacementMode === idx) {
+        this.cityPlacementMode = -1;
+      } else {
+        this.cityPlacementMode = idx;
+      }
+      this.renderList();
+      this.canvasManager.scheduleRender();
+    });
+    container.appendChild(addCityBtn);
+  }
+
+  public async addNation(x: number, y: number) {
+    const world = this.generator.getWorld();
+    const startX = x;
+    const startY = y;
+
+    const newNation = {
+      id: 0,
+      name: `New Nation`,
+      color: this.hslToHex(Math.floor(Math.random() * 360), 70, 60),
+      capitalX: startX,
+      capitalY: startY
+    };
+
+    // 1. Shift existing nations and re-index them
+    world.nations.forEach(n => n.id++);
+    world.nations.unshift(newNation);
+
+    // 2. Re-index EVERY cell in the grid (including water, as it may have a nationIndex)
+    // This is safer than using nationCellsList which might miss certain areas.
+    for (let xPos = 0; xPos < world.width; xPos++) {
+      for (let yPos = 0; yPos < world.height; yPos++) {
+        const cell = world.grid[xPos][yPos];
+        if (cell.nationIndex !== undefined && cell.nationIndex !== -1) {
+          cell.nationIndex++;
+        }
+      }
+      // Yield periodically to keep UI responsive on massive maps
+      if (xPos % 200 === 0) await new Promise(r => requestAnimationFrame(r));
+    }
+
+    // 3. Update all nationIndex references in cities
+    world.cities.forEach(city => {
+      city.nationIndex++;
+    });
+
+    // 4. Update internal state lists
+    this.nationCellsList.unshift(new Set());
+    this.nationCentroids.unshift({ x: startX, y: startY });
+    this.nationSizes.unshift(0);
+
+    // 5. Shift expandedNations state
+    const newExpanded = new Set<number>();
+    this.expandedNations.forEach(idx => newExpanded.add(idx + 1));
+    this.expandedNations = newExpanded;
+
+    // 6. Adjust selected index
+    if (this.selectedNationIndex !== -1) {
+      this.selectedNationIndex++;
+    }
+
+    await new Promise(r => requestAnimationFrame(r));
+
+    // 7. Paint circular starting territory
+    const radius = 12;
+    for (let dx = -radius; dx <= radius; dx++) {
+      for (let dy = -radius; dy <= radius; dy++) {
+        if (dx * dx + dy * dy <= radius * radius) {
+          const px = ((startX + dx % world.width) + world.width) % world.width;
+          const py = startY + dy;
+          if (py >= 0 && py < world.height) {
+            const cell = world.grid[px][py];
+            if (!cell.isWater) {
+              const oldNationIdx = cell.nationIndex;
+              if (oldNationIdx !== undefined && oldNationIdx !== -1) {
+                this.nationCellsList[oldNationIdx]?.delete(py * world.width + px);
+              }
+              cell.nationIndex = 0;
+              this.nationCellsList[0].add(py * world.width + px);
+            }
+          }
+        }
+      }
+    }
+
+    this.nationPlacementMode = false;
+    this.nationsStateDirty = true;
+    this.buildCache();
+
+    // 8. Add capital city (async)
+    await this.addCity(0, startX, startY, true);
+
+    // Final UI refresh
+    this.renderList();
+    this.canvasManager.scheduleRender();
+
+    // Select the new nation
+    this.selectedNationIndex = 0;
+    this.expandedNations.add(0);
+    this.renderList();
+
+    setTimeout(() => {
+      const target = document.querySelector(`.nation-item[data-index="0"]`);
+      target?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }, 100);
+  }
+
+  public async addCity(nationIndex: number, x: number, y: number, isCapital: boolean = false) {
+    const world = this.generator.getWorld();
+    const nation = world.nations[nationIndex];
+    if (!nation) return;
+
+    const cityId = world.cities.length;
+    const newCity = {
+      id: cityId,
+      name: isCapital ? nation.name : "New Settlement",
+      x,
+      y,
+      nationIndex,
+      isCapital,
+      size: isCapital ? 1 : 0
+    };
+
+    world.cities.push(newCity);
+    this.pendingCityIds.add(cityId);
+    this.cityPlacementMode = -1; // Reset mode after placement
+
+    // Refresh UI to show loading state
+    this.renderList();
+    this.canvasManager.scheduleRender();
+
+    // Trigger on-demand generation
+    const ctx = {
+      world,
+      noise: new NoiseEngine(0), // Dummy noise for geometry
+      width: world.width,
+      height: world.height,
+      preset: "Realistic Continents" as Preset,
+      onProgress: (_p: number) => {
+        // Progress feedback could be added here if needed
+      }
+    };
+
+    try {
+      await generateRoads(ctx);
+      await generateCityGeometry(ctx);
+    } finally {
+      this.pendingCityIds.delete(cityId);
+      this.renderList();
+      this.canvasManager.scheduleRender();
     }
   }
 
@@ -494,5 +693,18 @@ export class NationsManager {
       const area = this.nationCellsList[i].size;
       this.nationSizes[i] = maxArea > 0 ? Math.sqrt(area / maxArea) : 0.5;
     }
+  }
+
+  private hslToHex(h: number, s: number, l: number): string {
+    l /= 100;
+    const a = (s * Math.min(l, 1 - l)) / 100;
+    const f = (n: number) => {
+      const k = (n + h / 30) % 12;
+      const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+      return Math.round(255 * color)
+        .toString(16)
+        .padStart(2, "0");
+    };
+    return `#${f(0)}${f(8)}${f(4)}`;
   }
 }

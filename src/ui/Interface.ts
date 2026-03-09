@@ -98,7 +98,10 @@ export class Interface {
       this.lastMouseX = e.clientX;
       this.lastMouseY = e.clientY;
 
-      if (this.activeLayers.nations && !this.nationsManager.isEditingNations) {
+      if (this.nationsManager.cityPlacementMode !== -1 || this.nationsManager.nationPlacementMode) {
+        this.canvasManager.canvas.style.cursor = "crosshair";
+        this.updateTooltipBar();
+      } else if (this.activeLayers.nations && !this.nationsManager.isEditingNations) {
         this.updateHover(e.clientX, e.clientY);
       } else if (
         this.activeTab === "nations" &&
@@ -117,6 +120,33 @@ export class Interface {
           this.nationsManager.handlePainting(e.clientX, e.clientY);
         }
         this.canvasManager.scheduleRender(); // Force overlay update
+      }
+    });
+
+    canvas.addEventListener("click", (e) => {
+      const world = this.generator.getWorld();
+      const cm = this.canvasManager;
+      const rect = cm.canvas.getBoundingClientRect();
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      const wx = Math.floor((sx - cm.offsetX) / cm.scale);
+      const wy = Math.floor((sy - cm.offsetY) / cm.scale);
+      const x = ((wx % world.width) + world.width) % world.width;
+
+      if (this.nationsManager.nationPlacementMode) {
+        if (wy >= 0 && wy < world.height) {
+          (async () => {
+            await this.nationsManager.addNation(x, wy);
+            this.updateTooltipBar();
+          })();
+        }
+      } else if (this.nationsManager.cityPlacementMode !== -1) {
+        if (wy >= 0 && wy < world.height) {
+          (async () => {
+            await this.nationsManager.addCity(this.nationsManager.cityPlacementMode, x, wy);
+            this.updateTooltipBar();
+          })();
+        }
       }
     });
 
@@ -686,6 +716,7 @@ export class Interface {
     }
 
     this.updateMapRuler(scale);
+    this.renderMapIndicators();
   }
 
   private lastMouseX: number | undefined;
@@ -734,6 +765,27 @@ export class Interface {
         rulerTextMid.textContent = formatKm(halfKm);
         rulerTextEnd.textContent = `${formatKm(niceKm)} km`;
       }
+    }
+  }
+
+  private updateTooltipBar() {
+    let overlay = document.getElementById("tooltip-bar");
+    if (!overlay) {
+      overlay = document.createElement("div");
+      overlay.id = "tooltip-bar";
+      overlay.className = "tooltip-bar";
+      document.body.appendChild(overlay);
+    }
+
+    if (this.nationsManager.nationPlacementMode) {
+      overlay.textContent = "CREATING NEW NATION... (CLICK ON MAP)";
+      overlay.style.display = "block";
+    } else if (this.nationsManager.cityPlacementMode !== -1) {
+      const nation = this.generator.getWorld().nations[this.nationsManager.cityPlacementMode];
+      overlay.textContent = `CREATING NEW CITY FOR ${nation?.name.toUpperCase()}... (CLICK ON MAP)`;
+      overlay.style.display = "block";
+    } else {
+      overlay.style.display = "none";
     }
   }
 
@@ -815,5 +867,34 @@ export class Interface {
         parseInt(result[3], 16),
       ]
       : [0, 0, 0];
+  }
+  private renderMapIndicators() {
+    // Remove existing indicators
+    document.querySelectorAll(".map-loading-indicator").forEach((el) => el.remove());
+
+    const world = this.generator.getWorld();
+    const cm = this.canvasManager;
+
+    this.nationsManager.pendingCityIds.forEach((cityId) => {
+      const city = world.cities[cityId];
+      if (!city) return;
+
+      // Calculate screen position
+      const sx = city.x * cm.scale + cm.offsetX;
+      const sy = city.y * cm.scale + cm.offsetY;
+
+      // Create indicator
+      const indicator = document.createElement("div");
+      indicator.className = "map-loading-indicator";
+      indicator.style.left = `${sx}px`;
+      indicator.style.top = `${sy}px`;
+
+      const label = document.createElement("div");
+      label.className = "map-loading-label";
+      label.innerHTML = `<span class="spinner"></span> Founding ${city.name.toUpperCase()}...`;
+      indicator.appendChild(label);
+
+      document.body.appendChild(indicator);
+    });
   }
 }

@@ -144,6 +144,8 @@ export default function renderMainApp() {
                   />
                 </svg>
               </button>
+                </svg>
+              </button>
               <div class="brush-size-control">
                 <span class="brush-label-overlay">BRUSH</span>
                 <input
