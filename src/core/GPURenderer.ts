@@ -13,6 +13,7 @@ const FRAGMENT_SHADER_SOURCE = `
     precision highp float;
     uniform sampler2D u_mapTexture;
     uniform sampler2D u_nationsTexture;
+    uniform sampler2D u_provincesTexture;
     uniform vec2 u_resolution;
     uniform vec2 u_worldSize;
     uniform float u_scale;
@@ -25,6 +26,7 @@ const FRAGMENT_SHADER_SOURCE = `
     uniform bool u_showMoisture;
     uniform bool u_showNations;
     uniform bool u_showBorders;
+    uniform bool u_showProvinces;
 
     uniform vec3 u_biomeColors[24];
     uniform vec3 u_hoverColor;
@@ -119,6 +121,62 @@ const FRAGMENT_SHADER_SOURCE = `
         vec2 f = fract(q);
         float cell = rand(floor(q));
         return (f.x < 0.95 && f.y < 0.95) ? cell : -1.0;
+    }
+
+    bool isSame(vec4 a, vec4 b) {
+        return distance(a, b) < 0.001;
+    }
+
+    float getBorderStrength(vec4 c00, vec4 c10, vec4 c01, vec4 c11, vec2 fxy, float thickness, float aa) {
+        // Bilinear weights for the 4 corners
+        float w00 = (1.0 - fxy.x) * (1.0 - fxy.y);
+        float w10 = fxy.x * (1.0 - fxy.y);
+        float w01 = (1.0 - fxy.x) * fxy.y;
+        float w11 = fxy.x * fxy.y;
+        
+        // Analytical gradients of the bilinear weights
+        vec2 g00 = vec2(fxy.y - 1.0, fxy.x - 1.0);
+        vec2 g10 = vec2(1.0 - fxy.y, -fxy.x);
+        vec2 g01 = vec2(-fxy.y, 1.0 - fxy.x);
+        vec2 g11 = vec2(fxy.y, fxy.x);
+        
+        // Sum weights and gradients for unique IDs
+        float s00 = w00; vec2 gs00 = g00;
+        float s10 = w10; vec2 gs10 = g10;
+        float s01 = w01; vec2 gs01 = g01;
+        float s11 = w11; vec2 gs11 = g11;
+
+        if (isSame(c10, c00)) { s00 += s10; gs00 += gs10; s10 = 0.0; }
+        if (isSame(c01, c00)) { s00 += s01; gs00 += gs01; s01 = 0.0; }
+        if (isSame(c11, c00)) { s00 += s11; gs00 += gs11; s11 = 0.0; }
+        
+        if (s10 > 0.0) {
+            if (isSame(c01, c10)) { s10 += s01; gs10 += gs01; s01 = 0.0; }
+            if (isSame(c11, c10)) { s10 += s11; gs10 += gs11; s11 = 0.0; }
+        }
+        
+        if (s01 > 0.0) {
+            if (isSame(c11, c01)) { s01 += s11; gs01 += gs11; s11 = 0.0; }
+        }
+        
+        // Find top two sums and their gradients
+        float m1 = s00; vec2 q1 = gs00;
+        float m2 = 0.0; vec2 q2 = vec2(0.0);
+        
+        if (s10 > m1) { m2 = m1; q2 = q1; m1 = s10; q1 = gs10; } else if (s10 > m2) { m2 = s10; q2 = gs10; }
+        if (s01 > m1) { m2 = m1; q2 = q1; m1 = s01; q1 = gs01; } else if (s01 > m2) { m2 = s01; q2 = gs01; }
+        if (s11 > m1) { m2 = m1; q2 = q1; m1 = s11; q1 = gs11; } else if (s11 > m2) { m2 = s11; q2 = gs11; }
+        
+        // Gradient of the field difference (m1 - m2)
+        vec2 grad = q1 - q2;
+        float gradMag = length(grad);
+        
+        // Distance = (value) / (gradient magnitude)
+        // This makes the field a "true distance field" in coordinate space
+        float dist = (m1 - m2) / max(0.0001, gradMag);
+        
+        // Centered smoothstep for perfectly aligned borders
+        return smoothstep(thickness + aa * 0.5, thickness - aa * 0.5, dist);
     }
 
     void main() {
@@ -245,25 +303,10 @@ const FRAGMENT_SHADER_SOURCE = `
             else nationColor = c11;
 
             if (nationColor.a > 0.1) {
-                float aa = 1.6 / u_scale; // Slightly wider AA
+                float aa = 1.0 / u_scale;
                 float landMask = smoothstep(0.448, 0.452, renderedElevation);
                 
-                // --- Smooth Border Logic (No More Grid!) ---
-                // We find the second minimum distance to detect boundaries between nations
-                float d2 = 1.0;
-                if (minDist != d00) d2 = min(d2, d00);
-                if (minDist != d10) d2 = min(d2, d10);
-                if (minDist != d01) d2 = min(d2, d01);
-                if (minDist != d11) d2 = min(d2, d11);
-                
-                // Border is where the difference between two closest samples is small
-                // Using distance from blended to neighbors is a proxy for how "mixed" we are
-                float border = smoothstep(0.1, 0.05, d2 - minDist); 
-                
-                // If it's a border between a nation and "nothing" (ocean on CPU), handle separately
-                // but with global coverage, alpha is 1 everywhere.
-                
-                vec3 finalNationColor = mix(nationColor.rgb, nationColor.rgb * 0.5, border * 0.7);
+                vec3 finalNationColor = nationColor.rgb;
                 float alpha = 0.4 * landMask;
                 
                 if (distance(nationColor.rgb, u_hoverColor) < 0.01) {
@@ -271,65 +314,66 @@ const FRAGMENT_SHADER_SOURCE = `
                 } else {
                     color = mix(color, finalNationColor, alpha);
                 }
-            } else if (u_showBiomes || u_showElevation) {
-                color *= 0.85;
             }
         }
 
-        // --- 3.5 Borders (Independent, Smooth Scaling Thin White) ---
-        if (u_showBorders) {
-            float landMask = smoothstep(0.448, 0.452, renderedElevation);
-            if (landMask > 0.01) {
-                // Bilinear sampling for smooth boundaries
-                vec2 pos = vec2(nx, ny) * u_worldSize - 0.5;
-                vec2 ixy = floor(pos);
-                vec2 fxy = fract(pos);
-                
-                vec4 c00 = texture2D(u_nationsTexture, (ixy + vec2(0.5, 0.5)) / u_worldSize);
-                vec4 c10 = texture2D(u_nationsTexture, (ixy + vec2(1.5, 0.5)) / u_worldSize);
-                vec4 c01 = texture2D(u_nationsTexture, (ixy + vec2(0.5, 1.5)) / u_worldSize);
-                vec4 c11 = texture2D(u_nationsTexture, (ixy + vec2(1.5, 1.5)) / u_worldSize);
-                
-                vec4 blended = mix(mix(c00, c10, fxy.x), mix(c01, c11, fxy.x), fxy.y);
-                
-                float d00 = distance(blended, c00);
-                float d10 = distance(blended, c10);
-                float d01 = distance(blended, c01);
-                float d11 = distance(blended, c11);
-                
-                float minDist = min(min(d00, d10), min(d01, d11));
-                float maxDist = max(max(d00, d10), max(d01, d11));
+        // --- 3.5 Borders (Nation & Province, with Smooth Bilinear Interpolation) ---
+        float natBorderStrength = 0.0;
+        if (u_showBorders || u_showProvinces) {
+            vec2 pos = vec2(nx, ny) * u_worldSize - 0.5;
+            vec2 ixy = floor(pos);
+            vec2 fxy = fract(pos);
+            
+            // Organic Wavy Warp
+            float warp_scale = 0.15;
+            float warp_amp = 0.15;
+            float warp_f = (fbm(wxwy * warp_scale) - 0.5) * warp_amp;
+            float warp_d = (fbm_high(wxwy * 1.5) - 0.5) * 0.05;
+            vec2 noisy_fxy = fxy + warp_f + warp_d;
 
-                // We are on a border if the samples are different
-                // maxDist > 0.01 means at least one neighbor is different from the blend
-                if (maxDist > 0.01) {
-                    // Distance field proxy: how far are we from a "pure" cell?
-                    // minDist is 0 at cell centers, and grows towards boundaries
-                    
-                    // Anti-aliasing threshold based on zoom scale
-                    // 1.5 pixels wide in screen space
-                    float aa = 1.0 / u_scale; 
-                    
-                    // The boundary exists where minDist starts increasing rapidly
-                    // We can use the difference between the closest and second closest for even better precision
-                    float secondMin = 1.0;
-                    if (d00 > minDist + 0.001) secondMin = min(secondMin, d00);
-                    if (d10 > minDist + 0.001) secondMin = min(secondMin, d10);
-                    if (d01 > minDist + 0.001) secondMin = min(secondMin, d01);
-                    if (d11 > minDist + 0.001) secondMin = min(secondMin, d11);
+            // Synchronized Land Mask: evaluate elevation at the warped position
+            vec2 warped_nxny = (ixy + 0.5 + noisy_fxy) / u_worldSize;
+            float warped_elevation = texture2D(u_mapTexture, warped_nxny).r;
+            float borderLandMask = smoothstep(0.448, 0.452, warped_elevation);
 
-                    // Border mask: sharpest at the halfway point between nations
-                    float borderMask = smoothstep(aa * 1.5, aa * 0.5, secondMin - minDist);
+            if (borderLandMask > 0.01) {
+                float field_per_pixel = 1.0 / max(0.01, u_scale);
+                
+                // Borders get thicker as we zoom out to remain visible
+                float zoomVisibility = clamp(1.6 / pow(u_scale, 0.4), 1.0, 2.5);
+                float aa = 1.2 * field_per_pixel; 
+
+                if (u_showBorders) {
+                    vec4 n00 = texture2D(u_nationsTexture, (ixy + vec2(0.5, 0.5)) / u_worldSize);
+                    vec4 n10 = texture2D(u_nationsTexture, (ixy + vec2(1.5, 0.5)) / u_worldSize);
+                    vec4 n01 = texture2D(u_nationsTexture, (ixy + vec2(0.5, 1.5)) / u_worldSize);
+                    vec4 n11 = texture2D(u_nationsTexture, (ixy + vec2(1.5, 1.5)) / u_worldSize);
                     
-                    // Additional check for coastline borders (where nations meet nothing/water on the data texture)
-                    if (minDist > 0.5 && maxDist > 0.5) {
-                         // Likely near a transition to a 0.0 alpha cell
-                         // This ensures coastline borders are also smoothed
-                         borderMask = max(borderMask, smoothstep(aa * 2.0, aa * 1.0, 1.0 - maxDist));
+                    // Nation: target ~2.4 screen pixels (centered half-width = 1.2)
+                    float thickness = 1.2 * field_per_pixel * zoomVisibility; 
+                    natBorderStrength = getBorderStrength(n00, n10, n01, n11, noisy_fxy, thickness, aa);
+                    
+                    if (natBorderStrength > 0.01) {
+                        color = mix(color, vec3(1.0), natBorderStrength * 0.8 * borderLandMask);
                     }
+                }
 
-                    if (borderMask > 0.0) {
-                        color = mix(color, vec3(1.0), borderMask * 0.9 * landMask);
+                if (u_showProvinces) {
+                    vec4 p00 = texture2D(u_provincesTexture, (ixy + vec2(0.5, 0.5)) / u_worldSize);
+                    vec4 p10 = texture2D(u_provincesTexture, (ixy + vec2(1.5, 0.5)) / u_worldSize);
+                    vec4 p01 = texture2D(u_provincesTexture, (ixy + vec2(0.5, 1.5)) / u_worldSize);
+                    vec4 p11 = texture2D(u_provincesTexture, (ixy + vec2(1.5, 1.5)) / u_worldSize);
+                    
+                    // Province: target ~1.0 screen pixel (centered half-width = 0.5)
+                    float thickness = 0.5 * field_per_pixel * zoomVisibility; 
+                    float provBorderStrength = getBorderStrength(p00, p10, p01, p11, noisy_fxy, thickness, aa);
+                    
+                    // Suppress province borders where a national border exists
+                    provBorderStrength *= (1.0 - natBorderStrength);
+
+                    if (provBorderStrength > 0.01) {
+                        float dash = step(0.4, fract((wxwy.x + wxwy.y) * 1.5));
+                        color = mix(color, vec3(0.0), provBorderStrength * 0.4 * borderLandMask * (0.6 + 0.4 * dash));
                     }
                 }
             }
@@ -344,6 +388,7 @@ export class GPURenderer {
   private program: WebGLProgram;
   private texture: WebGLTexture | null = null;
   private nationsTexture: WebGLTexture | null = null;
+  private provincesTexture: WebGLTexture | null = null;
   private buffer: WebGLBuffer | null = null;
   private biomeColors: Float32Array;
 
@@ -488,7 +533,10 @@ export class GPURenderer {
     console.log(`Texture updated for ${world.width}x${world.height}`);
   }
 
-  public updateNationsDataTexture(world: WorldData, dirtyRect?: { x: number, y: number, w: number, h: number }) {
+  public updateNationsDataTexture(
+    world: WorldData,
+    dirtyRect?: { x: number; y: number; w: number; h: number },
+  ) {
     if (!world || !world.grid) return;
 
     const gl = this.gl;
@@ -504,7 +552,17 @@ export class GPURenderer {
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
       const emptyData = new Uint8Array(W * H * 4);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, emptyData);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        W,
+        H,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        emptyData,
+      );
     }
 
     gl.bindTexture(gl.TEXTURE_2D, this.nationsTexture);
@@ -533,11 +591,139 @@ export class GPURenderer {
           }
         }
       }
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, W, H, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        W,
+        H,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        data,
+      );
     }
   }
 
-  private partialUpdateRegion(world: WorldData, rect: { x: number, y: number, w: number, h: number }) {
+  public updateProvincesDataTexture(
+    world: WorldData,
+    dirtyRect?: { x: number; y: number; w: number; h: number },
+  ) {
+    if (!world || !world.grid) return;
+
+    const gl = this.gl;
+    const W = world.width;
+    const H = world.height;
+
+    if (!this.provincesTexture) {
+      this.provincesTexture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, this.provincesTexture);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    }
+
+    gl.bindTexture(gl.TEXTURE_2D, this.provincesTexture);
+    if (dirtyRect) {
+      this.partialUpdateRegionProvinces(world, dirtyRect);
+    } else {
+      const data = new Uint8Array(W * H * 4);
+      for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+          const cell = world.grid[x][y];
+          const idx = (y * W + x) * 4;
+          const pIdx = cell.provinceIndex ?? -1;
+
+          if (pIdx >= 0) {
+            data[idx] = pIdx & 0xff;
+            data[idx + 1] = (pIdx >> 8) & 0xff;
+            data[idx + 2] = (pIdx >> 16) & 0xff;
+            data[idx + 3] = 255;
+          } else {
+            data[idx] = 0;
+            data[idx + 1] = 0;
+            data[idx + 2] = 0;
+            data[idx + 3] = 0;
+          }
+        }
+      }
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        W,
+        H,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        data,
+      );
+    }
+  }
+
+  private partialUpdateRegionProvinces(
+    world: WorldData,
+    rect: { x: number; y: number; w: number; h: number },
+  ) {
+    const gl = this.gl;
+    const W = world.width;
+    const H = world.height;
+
+    const startX = rect.x;
+    const startY = Math.max(0, rect.y);
+    const endY = Math.min(H, rect.y + rect.h);
+    const rectH = endY - startY;
+
+    if (rectH <= 0) return;
+
+    let normalizedX = ((startX % W) + W) % W;
+    let remainingW = rect.w;
+
+    while (remainingW > 0) {
+      const chunkW = Math.min(remainingW, W - normalizedX);
+      const subData = new Uint8Array(chunkW * rectH * 4);
+      for (let ly = 0; ly < rectH; ly++) {
+        const gy = startY + ly;
+        for (let lx = 0; lx < chunkW; lx++) {
+          const gx = normalizedX + lx;
+          const cell = world.grid[gx][gy];
+          const pIdx = cell.provinceIndex ?? -1;
+          const subIdx = (ly * chunkW + lx) * 4;
+
+          if (pIdx >= 0) {
+            subData[subIdx] = pIdx & 0xff;
+            subData[subIdx + 1] = (pIdx >> 8) & 0xff;
+            subData[subIdx + 2] = (pIdx >> 16) & 0xff;
+            subData[subIdx + 3] = 255;
+          } else {
+            subData[subIdx] = 0;
+            subData[subIdx + 1] = 0;
+            subData[subIdx + 2] = 0;
+            subData[subIdx + 3] = 0;
+          }
+        }
+      }
+      gl.texSubImage2D(
+        gl.TEXTURE_2D,
+        0,
+        normalizedX,
+        startY,
+        chunkW,
+        rectH,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        subData,
+      );
+      remainingW -= chunkW;
+      normalizedX = 0;
+    }
+  }
+
+  private partialUpdateRegion(
+    world: WorldData,
+    rect: { x: number; y: number; w: number; h: number },
+  ) {
     const gl = this.gl;
     const W = world.width;
     const H = world.height;
@@ -550,7 +736,7 @@ export class GPURenderer {
     if (rectH <= 0) return;
 
     // Handle X-wrapping by splitting into up to 3 chunks: [left-overflow, main, right-overflow]
-    const chunks: { x: number, w: number }[] = [];
+    const chunks: { x: number; w: number }[] = [];
 
     // Normalize startX to be within [0, W)
     let normalizedX = ((startX % W) + W) % W;
@@ -563,7 +749,7 @@ export class GPURenderer {
       normalizedX = 0; // Next chunk starts at 0
     }
 
-    chunks.forEach(chunk => {
+    chunks.forEach((chunk) => {
       const subData = new Uint8Array(chunk.w * rectH * 4);
       for (let ly = 0; ly < rectH; ly++) {
         const gy = startY + ly;
@@ -587,7 +773,17 @@ export class GPURenderer {
           }
         }
       }
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, chunk.x, startY, chunk.w, rectH, gl.RGBA, gl.UNSIGNED_BYTE, subData);
+      gl.texSubImage2D(
+        gl.TEXTURE_2D,
+        0,
+        chunk.x,
+        startY,
+        chunk.w,
+        rectH,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        subData,
+      );
     });
   }
 
@@ -606,6 +802,7 @@ export class GPURenderer {
       moisture: boolean;
       nations: boolean;
       borders: boolean;
+      provinces: boolean;
     },
     hoverColor?: number[],
   ) {
@@ -624,6 +821,15 @@ export class GPURenderer {
       this.gl.uniform1i(
         this.gl.getUniformLocation(this.program, "u_nationsTexture"),
         1,
+      );
+    }
+
+    if (this.provincesTexture) {
+      this.gl.activeTexture(this.gl.TEXTURE2);
+      this.gl.bindTexture(this.gl.TEXTURE_2D, this.provincesTexture);
+      this.gl.uniform1i(
+        this.gl.getUniformLocation(this.program, "u_provincesTexture"),
+        2,
       );
     }
 
@@ -676,6 +882,10 @@ export class GPURenderer {
     this.gl.uniform1i(
       this.gl.getUniformLocation(this.program, "u_showBorders"),
       layers.borders ? 1 : 0,
+    );
+    this.gl.uniform1i(
+      this.gl.getUniformLocation(this.program, "u_showProvinces"),
+      layers.provinces ? 1 : 0,
     );
 
     this.gl.uniform3fv(

@@ -31,6 +31,14 @@ export interface Nation {
   capitalY: number;
 }
 
+export interface Province {
+  id: number;
+  name: string;
+  color: string;
+  nationIndex: number;
+  capitalCityId: number;
+}
+
 export interface Point {
   x: number;
   y: number;
@@ -72,6 +80,7 @@ export interface City {
   x: number;
   y: number;
   nationIndex: number;
+  provinceIndex?: number;
   isCapital: boolean;
   size: number; // 0=village, 1=town, 2=city
   geometry?: CityGeometry;
@@ -87,6 +96,7 @@ export interface CellData {
   plateId: number;
   distanceToBoundary: number;
   nationIndex?: number;
+  provinceIndex?: number;
   isNationBorder?: boolean;
 }
 
@@ -97,6 +107,7 @@ export class WorldData {
   public rivers: { x: number; y: number }[][] = [];
   public worldRoads: Polygon[] = [];
   public nations: Nation[] = [];
+  public provinces: Province[] = [];
   public cities: City[] = [];
 
   constructor(width: number, height: number) {

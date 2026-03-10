@@ -1,7 +1,6 @@
 // use vscode extension 'es6-string-html' for your mental health :D
 export default function renderMainApp() {
-  document.querySelector<HTMLDivElement>("#app")!.innerHTML =
-    /* html */ `  
+  document.querySelector<HTMLDivElement>("#app")!.innerHTML = /* html */ `  
       <div id="ui-panel" class="tech-panel">
         <div class="tech-corner top-left"></div>
         <div class="tech-corner top-right"></div>
@@ -95,6 +94,11 @@ export default function renderMainApp() {
                   <input type="checkbox" id="layer-borders" checked />
                   <span class="checkbox-box"></span>
                   <span class="label-text">BORDERS</span>
+                </label>
+                <label class="overlay-item">
+                  <input type="checkbox" id="layer-provinces" checked />
+                  <span class="checkbox-box"></span>
+                  <span class="label-text">PROVINCES</span>
                 </label>
                 <label class="overlay-item">
                   <input type="checkbox" id="layer-heatmap" />

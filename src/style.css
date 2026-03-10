@@ -336,11 +336,74 @@ body {
 .city-sub-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-left: 28px;
-  margin-bottom: 8px;
-  border-left: 1px solid rgba(0, 255, 170, 0.15);
+  gap: 2px;
+  margin-left: 20px;
+  margin-bottom: 4px;
   padding-left: 8px;
+  border-left: 1px dashed rgba(0, 255, 170, 0.1);
+}
+
+.province-sub-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-left: 20px;
+  margin-bottom: 4px;
+  border-left: 1px solid rgba(0, 255, 170, 0.1);
+  padding-left: 8px;
+}
+
+.province-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  background: rgba(0, 10, 15, 0.3);
+  border: 1px solid rgba(30, 200, 150, 0.1);
+  transition: all 0.2s ease;
+  cursor: pointer;
+  font-size: 0.85rem;
+  border-radius: 2px;
+}
+
+.province-item:hover {
+  background: rgba(0, 20, 30, 0.5);
+  border-color: rgba(30, 200, 150, 0.25);
+}
+
+.province-item.selected {
+  border-color: var(--accent-bright);
+  background: rgba(0, 40, 50, 0.4);
+  box-shadow: inset 0 0 5px rgba(0, 255, 170, 0.2);
+}
+
+.province-name-input {
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid transparent;
+  padding: 1px 4px;
+  color: var(--text-active);
+  font-family: inherit;
+  font-size: 0.8rem;
+  font-style: italic;
+  width: 100%;
+  transition: all 0.2s ease;
+}
+
+.province-name-input:focus {
+  background: rgba(255, 255, 255, 0.05);
+  border-bottom-color: var(--border-neon);
+  outline: none;
+}
+
+.city-sub-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-left: 20px;
+  margin-bottom: 4px;
+  padding-left: 8px;
+  border-left: 1px dashed rgba(0, 255, 170, 0.1);
 }
 
 .city-item {
@@ -498,6 +561,83 @@ body {
   border-color: var(--accent-bright);
   color: #fff;
   transform: translateY(-1px);
+}
+
+.province-add-btn {
+  width: calc(100% - 16px);
+  margin: 4px 8px 8px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px;
+  background: rgba(0, 255, 170, 0.03);
+  border: 1px dashed rgba(0, 255, 170, 0.15);
+  border-radius: 2px;
+  color: var(--accent-bright);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.province-add-btn:hover {
+  background: rgba(0, 255, 170, 0.1);
+  border-color: var(--accent-bright);
+  color: #fff;
+}
+
+.province-add-btn.active {
+  background: rgba(255, 50, 80, 0.15);
+  border-color: #ff4d6d;
+  color: #ff4d6d;
+  border-style: solid;
+  animation: pulse-red 2s infinite;
+}
+
+.nation-sub-tabs {
+  display: flex;
+  gap: 4px;
+  margin: 4px 12px 8px 36px;
+  border-bottom: 1px solid rgba(0, 255, 170, 0.1);
+  padding-bottom: 2px;
+}
+
+.nation-sub-tab-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 1px;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.nation-sub-tab-btn:hover {
+  color: var(--text-active);
+  opacity: 1;
+}
+
+.nation-sub-tab-btn.active {
+  color: var(--accent-bright);
+  opacity: 1;
+}
+
+.nation-sub-tab-btn.active::after {
+  content: "";
+  position: absolute;
+  bottom: -3px;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: var(--accent-bright);
+  box-shadow: 0 0 8px var(--accent-bright);
 }
 
 .nation-add-btn {

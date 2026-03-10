@@ -27,6 +27,7 @@ export class Interface {
     moisture: false,
     nations: true,
     borders: true,
+    provinces: true,
     roads: true,
     labels: true,
     cities: true,
@@ -76,6 +77,7 @@ export class Interface {
           this.gpuRenderer.updateWorldTexture(world);
           this.nationsManager.nationsStateDirty = true;
           this.uiManager.hideLoadingModal();
+          this.gpuRenderer.updateProvincesDataTexture(world);
           this.nationsManager.buildCache();
           this.canvasManager.scheduleRender();
         });
@@ -101,6 +103,7 @@ export class Interface {
 
       if (
         this.nationsManager.cityPlacementMode !== -1 ||
+        this.nationsManager.provincePlacementMode !== -1 ||
         this.nationsManager.nationPlacementMode
       ) {
         this.canvasManager.canvas.style.cursor = "crosshair";
@@ -144,6 +147,17 @@ export class Interface {
         if (wy >= 0 && wy < world.height) {
           (async () => {
             await this.nationsManager.addNation(x, wy);
+            this.updateTooltipBar();
+          })();
+        }
+      } else if (this.nationsManager.provincePlacementMode !== -1) {
+        if (wy >= 0 && wy < world.height) {
+          (async () => {
+            await this.nationsManager.addProvince(
+              this.nationsManager.provincePlacementMode,
+              x,
+              wy,
+            );
             this.updateTooltipBar();
           })();
         }
@@ -302,6 +316,7 @@ export class Interface {
       "moisture",
       "roads",
       "cities",
+      "provinces",
       "labels",
     ] as const;
     overlays.forEach((overlay) => {
@@ -425,6 +440,7 @@ export class Interface {
 
         const world = this.generator.getWorld();
         this.gpuRenderer.updateWorldTexture(world);
+        this.gpuRenderer.updateProvincesDataTexture(world);
         this.nationsManager.nationsStateDirty = true;
         this.nationsManager.hoveredNationIndex = -1;
         this.nationsManager.buildCache();

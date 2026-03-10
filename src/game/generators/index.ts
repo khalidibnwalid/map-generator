@@ -8,3 +8,4 @@ export * from "./generateNations";
 export * from "./generateCities";
 export * from "./generateRoads";
 export * from "./generateCityGeometry";
+export * from "./generateProvinces";

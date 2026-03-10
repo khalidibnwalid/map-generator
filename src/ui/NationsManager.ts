@@ -9,6 +9,7 @@ import type { UIManager } from "./UIManager";
 export class NationsManager {
   public hoveredNationIndex: number = -1;
   public selectedNationIndex: number = -1;
+  public selectedProvinceIndex: number = -1;
   public isEditingNations: boolean = false;
   public isPainting: boolean = false;
   public brushSize: number = 2;
@@ -17,9 +18,12 @@ export class NationsManager {
   public nationSizes: number[] = [];
   public nationsStateDirty: boolean = true;
   public cityPlacementMode: number = -1; // Index of the nation being founded for
+  public provincePlacementMode: number = -1; // Index of the nation for new province
   public nationPlacementMode: boolean = false;
   public pendingCityIds: Set<number> = new Set();
   private expandedNations: Set<number> = new Set();
+  private expandedProvinces: Set<number> = new Set();
+  private nationSubTabs: Map<number, "cities" | "provinces"> = new Map();
   private cityMap: Map<number, any> = new Map();
 
   private lastPaintedX: number | null = null;
@@ -153,6 +157,7 @@ export class NationsManager {
 
       item.addEventListener("click", () => {
         this.selectedNationIndex = idx;
+        this.selectedProvinceIndex = -1; // Reset province selection when nation is clicked
         const target = world.nations[idx];
         if (target) {
           this.canvasManager.lookAt(target.capitalX, target.capitalY);
@@ -174,13 +179,44 @@ export class NationsManager {
 
       listContainer.appendChild(item);
 
-      // Render city list if expanded
-      const cityListContainer = document.createElement("div");
-      cityListContainer.id = `city-list-container-${idx}`;
-      listContainer.appendChild(cityListContainer);
-
+      // Render sub-tabs and list if expanded
       if (this.expandedNations.has(idx)) {
-        this.renderCityList(idx, cityListContainer);
+        const subTabs = document.createElement("div");
+        subTabs.className = "nation-sub-tabs";
+
+        const currentTab = this.nationSubTabs.get(idx) || "cities";
+
+        const citiesTab = document.createElement("button");
+        citiesTab.className = `nation-sub-tab-btn ${currentTab === "cities" ? "active" : ""}`;
+        citiesTab.textContent = "CITIES";
+        citiesTab.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.nationSubTabs.set(idx, "cities");
+          this.renderList();
+        });
+
+        const provincesTab = document.createElement("button");
+        provincesTab.className = `nation-sub-tab-btn ${currentTab === "provinces" ? "active" : ""}`;
+        provincesTab.textContent = "PROVINCES";
+        provincesTab.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.nationSubTabs.set(idx, "provinces");
+          this.renderList();
+        });
+
+        subTabs.appendChild(citiesTab);
+        subTabs.appendChild(provincesTab);
+        listContainer.appendChild(subTabs);
+
+        const contentContainer = document.createElement("div");
+        contentContainer.id = `nation-content-${idx}`;
+        listContainer.appendChild(contentContainer);
+
+        if (currentTab === "cities") {
+          this.renderCityList(idx, -1, contentContainer);
+        } else {
+          this.renderProvinceList(idx, contentContainer);
+        }
       }
     });
 
@@ -239,51 +275,230 @@ export class NationsManager {
       listContainer.appendChild(cityListContainer);
 
       if (this.expandedNations.has(idx)) {
-        this.renderCityList(idx, cityListContainer);
+        this.renderCityList(-1, -1, cityListContainer); // unaffiliated nation, no province
       }
     }
   }
 
-  private renderCityList(idx: number, container: HTMLElement) {
+  private renderProvinceList(nationIdx: number, container: HTMLElement) {
+    const world = this.generator.getWorld();
+    container.innerHTML = "";
+    container.className = "province-sub-list";
+
+    const nationProvinces = world.provinces.filter(
+      (p) => p.nationIndex === nationIdx,
+    );
+
+    // Add "Direct Rule" option if editing
+    if (this.isEditingNations) {
+      const directItem = document.createElement("div");
+      directItem.className = `province-item ${this.selectedProvinceIndex === -1 ? "selected" : ""}`;
+      directItem.style.paddingLeft = "24px";
+      directItem.innerHTML = `
+        <div class="province-header">
+           <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="opacity:0.5; margin-right:4px;">
+              <path d="M19,3H5C3.89,3 3,3.89 3,5V19C3,20.11 3.89,21 5,21H19C20.11,21 21,20.11 21,19V5C21,3.89 20.11,3 19,3M19,19H5V5H19V19Z"/>
+           </svg>
+           <span style="font-size: 10px; font-weight: bold; opacity: 0.7; letter-spacing: 0.05em;">DIRECT RULE</span>
+        </div>
+      `;
+      directItem.addEventListener("click", () => {
+        this.selectedProvinceIndex = -1;
+        this.renderList();
+      });
+      container.appendChild(directItem);
+    }
+
+    nationProvinces.forEach((province) => {
+      const pIdx = province.id;
+      const item = document.createElement("div");
+      item.className = `province-item ${this.selectedProvinceIndex === pIdx ? "selected" : ""}`;
+
+      const toggleBtn = document.createElement("button");
+      toggleBtn.className = `nation-toggle-btn ${this.expandedProvinces.has(pIdx) ? "expanded" : ""}`;
+      toggleBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+          <path d="M8.59,16.59L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.59Z"/>
+        </svg>
+      `;
+      toggleBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (this.expandedProvinces.has(pIdx)) {
+          this.expandedProvinces.delete(pIdx);
+        } else {
+          this.expandedProvinces.add(pIdx);
+        }
+        this.renderList();
+      });
+
+      const nameInput = document.createElement("input");
+      nameInput.type = "text";
+      nameInput.className = "province-name-input";
+      nameInput.value = province.name;
+      nameInput.addEventListener("change", (e) => {
+        province.name = (e.target as HTMLInputElement).value;
+        this.canvasManager.scheduleRender();
+      });
+      nameInput.addEventListener("mousedown", (e) => e.stopPropagation());
+      nameInput.addEventListener("click", (e) => e.stopPropagation());
+
+      const locateBtn = document.createElement("button");
+      locateBtn.className = "city-locate-btn";
+      locateBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+          <path d="M12,2c-4.42,0-8,3.58-8,8c0,5.25,8,12,8,12s8-6.75,8-12C20,5.58,16.42,2,12,2z M12,13c-1.66,0-3-1.34-3-3s1.34-3,3-3s3,1.34,3,3S13.66,13,12,13z"/>
+        </svg>
+      `;
+      locateBtn.style.opacity = "0.6";
+      locateBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const city = world.cities.find((c) => c.id === province.capitalCityId);
+        if (city) {
+          this.canvasManager.lookAt(
+            city.x,
+            city.y,
+            Math.max(this.canvasManager.scale, 5),
+          );
+        }
+      });
+
+      const deleteProvinceBtn = document.createElement("button");
+      deleteProvinceBtn.className = "city-delete-btn";
+      deleteProvinceBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+          <path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19V4Z M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z"/>
+        </svg>
+      `;
+      deleteProvinceBtn.title = "Abolish Province";
+      deleteProvinceBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const confirmed = await this.uiManager.confirm(
+          "ABOLISH PROVINCE",
+          `Are you sure you want to abolish ${province.name}? Its territories will revert to direct national control.`,
+        );
+        if (confirmed) {
+          this.deleteProvince(pIdx);
+        }
+      });
+
+      item.appendChild(toggleBtn);
+      item.appendChild(nameInput);
+      item.appendChild(locateBtn);
+      item.appendChild(deleteProvinceBtn);
+
+      item.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.selectedNationIndex = nationIdx;
+        this.selectedProvinceIndex = pIdx;
+        const city = world.cities.find((c) => c.id === province.capitalCityId);
+        if (city) {
+          this.canvasManager.lookAt(
+            city.x,
+            city.y,
+            Math.max(this.canvasManager.scale, 5),
+          );
+        }
+        this.renderList();
+      });
+
+      container.appendChild(item);
+
+      const cityListContainer = document.createElement("div");
+      cityListContainer.id = `city-list-container-p-${pIdx}`;
+      container.appendChild(cityListContainer);
+
+      if (this.expandedProvinces.has(pIdx)) {
+        this.renderCityList(nationIdx, pIdx, cityListContainer);
+      }
+    });
+
+    if (nationProvinces.length === 0) {
+      const emptyMsg = document.createElement("div");
+      emptyMsg.className = "city-empty-msg";
+      emptyMsg.textContent = "No provinces established";
+      container.appendChild(emptyMsg);
+    }
+
+    if (nationIdx !== -1) {
+      const addProvinceBtn = document.createElement("button");
+      addProvinceBtn.className = `province-add-btn ${this.provincePlacementMode === nationIdx ? "active" : ""}`;
+      addProvinceBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+          <path d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z"/>
+        </svg>
+        <span>${this.provincePlacementMode === nationIdx ? "CANCEL CREATION" : "NEW PROVINCE"}</span>
+      `;
+      addProvinceBtn.addEventListener("click", () => {
+        if (this.provincePlacementMode === nationIdx) {
+          this.provincePlacementMode = -1;
+        } else {
+          this.provincePlacementMode = nationIdx;
+          this.cityPlacementMode = -1;
+        }
+        this.renderList();
+        this.canvasManager.scheduleRender();
+      });
+      container.appendChild(addProvinceBtn);
+    }
+  }
+
+  private getPopulation(city: any): string {
+    const world = this.generator.getWorld();
+    const cell = world.getCell(city.x, city.y);
+    const biome = cell?.biome || "Grassland";
+
+    let base = 1000;
+    if (city.size === 1) base = 15000;
+    if (city.size === 2) base = 120000;
+    if (city.isCapital) base *= 2.5;
+
+    const multipliers: Record<string, number> = {
+      Snow: 0.05,
+      Tundra: 0.1,
+      Scorched: 0.02,
+      Bare: 0.1,
+      "Subtropical Desert": 0.2,
+      "Temperate Desert": 0.3,
+      "Tropical Rain Forest": 0.4,
+      Marsh: 0.3,
+      Taiga: 0.5,
+      Shrubland: 0.7,
+      Savanna: 0.8,
+      Grassland: 1.2,
+      "Temperate Deciduous Forest": 1.5,
+      "Temperate Rain Forest": 1.0,
+    };
+
+    const mult = multipliers[biome] || 1.0;
+    const pop = base * mult * (0.8 + (city.id % 40) / 100);
+
+    if (pop >= 1000000) return (pop / 1000000).toFixed(1) + "M";
+    if (pop >= 1000) return (pop / 1000).toFixed(0) + "k";
+    return Math.floor(pop).toString();
+  }
+
+  private renderCityList(
+    nationIdx: number,
+    provinceIdx: number,
+    container: HTMLElement,
+  ) {
     const world = this.generator.getWorld();
     container.innerHTML = "";
     container.className = "city-sub-list";
 
-    const getPopulation = (city: any) => {
-      const cell = world.getCell(city.x, city.y);
-      const biome = cell?.biome || "Grassland";
+    let nationCities = world.cities;
+    if (provinceIdx !== -1) {
+      nationCities = nationCities.filter(
+        (c) => c.provinceIndex === provinceIdx,
+      );
+    } else if (nationIdx !== -1) {
+      // Show ALL cities in the nation (Flat List)
+      nationCities = nationCities.filter((c) => c.nationIndex === nationIdx);
+    } else {
+      // Unaffiliated cities
+      nationCities = nationCities.filter((c) => c.nationIndex === -1);
+    }
 
-      let base = 1000;
-      if (city.size === 1) base = 15000;
-      if (city.size === 2) base = 120000;
-      if (city.isCapital) base *= 2.5;
-
-      const multipliers: Record<string, number> = {
-        Snow: 0.05,
-        Tundra: 0.1,
-        Scorched: 0.02,
-        Bare: 0.1,
-        "Subtropical Desert": 0.2,
-        "Temperate Desert": 0.3,
-        "Tropical Rain Forest": 0.4,
-        Marsh: 0.3,
-        Taiga: 0.5,
-        Shrubland: 0.7,
-        Savanna: 0.8,
-        Grassland: 1.2,
-        "Temperate Deciduous Forest": 1.5,
-        "Temperate Rain Forest": 1.0,
-      };
-
-      const mult = multipliers[biome] || 1.0;
-      const pop = base * mult * (0.8 + (city.id % 40) / 100);
-
-      if (pop >= 1000000) return (pop / 1000000).toFixed(1) + "M";
-      if (pop >= 1000) return (pop / 1000).toFixed(0) + "k";
-      return Math.floor(pop).toString();
-    };
-
-    const nationCities = world.cities.filter((c) => c.nationIndex === idx);
     nationCities.sort((a, b) => b.size - a.size);
 
     nationCities.forEach((city) => {
@@ -307,7 +522,7 @@ export class NationsManager {
       }
 
       let capitalBtn: HTMLButtonElement | null = null;
-      if (idx !== -1) {
+      if (nationIdx !== -1) {
         capitalBtn = document.createElement("button");
         capitalBtn.className = `city-capital-btn ${city.isCapital ? "active" : ""}`;
         capitalBtn.innerHTML = `
@@ -324,12 +539,12 @@ export class NationsManager {
           const oldCapital = nationCities.find((c) => c.isCapital);
           if (oldCapital) oldCapital.isCapital = false;
           city.isCapital = true;
-          const nation = world.nations[idx];
+          const nation = world.nations[nationIdx];
           if (nation) {
             nation.capitalX = city.x;
             nation.capitalY = city.y;
           }
-          this.updateNationUI(idx);
+          this.updateNationUI(nationIdx);
           this.canvasManager.scheduleRender();
         });
       }
@@ -347,7 +562,7 @@ export class NationsManager {
 
       const popInfo = document.createElement("span");
       popInfo.className = "city-pop-info";
-      popInfo.textContent = getPopulation(city);
+      popInfo.textContent = this.getPopulation(city);
 
       const locateBtn = document.createElement("button");
       locateBtn.className = "city-locate-btn";
@@ -400,26 +615,130 @@ export class NationsManager {
       container.appendChild(emptyMsg);
     }
 
-    if (idx !== -1) {
+    if (nationIdx !== -1) {
       const addCityBtn = document.createElement("button");
-      addCityBtn.className = `city-add-btn ${this.cityPlacementMode === idx ? "active" : ""}`;
+      addCityBtn.className = `city-add-btn ${this.cityPlacementMode === nationIdx ? "active" : ""}`;
       addCityBtn.innerHTML = `
         <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
           <path d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z"/>
         </svg>
-        <span>${this.cityPlacementMode === idx ? "CANCEL CREATION" : "NEW CITY"}</span>
+        <span>${this.cityPlacementMode === nationIdx ? "CANCEL CREATION" : "NEW CITY"}</span>
       `;
       addCityBtn.addEventListener("click", () => {
-        if (this.cityPlacementMode === idx) {
+        if (this.cityPlacementMode === nationIdx) {
           this.cityPlacementMode = -1;
         } else {
-          this.cityPlacementMode = idx;
+          this.cityPlacementMode = nationIdx;
+          this.provincePlacementMode = -1;
+          // Assign to province if one is selected
+          this.pendingProvinceIdx = provinceIdx;
         }
         this.renderList();
         this.canvasManager.scheduleRender();
       });
       container.appendChild(addCityBtn);
     }
+  }
+
+  private pendingProvinceIdx: number = -1;
+
+  public async addProvince(nationIndex: number, x: number, y: number) {
+    const world = this.generator.getWorld();
+    const nation = world.nations[nationIndex];
+    if (!nation) return;
+
+    const provinceId = world.provinces.length;
+    const newProvince = {
+      id: provinceId,
+      name: `New Province`,
+      color: nation.color,
+      nationIndex,
+      capitalCityId: -1, // Will be set after city creation
+    };
+
+    world.provinces.push(newProvince);
+    this.provincePlacementMode = -1;
+
+    // Refresh UI
+    this.renderList();
+
+    // Add city as capital
+    await this.addCity(nationIndex, x, y, false);
+    const lastCity = world.cities[world.cities.length - 1];
+    newProvince.capitalCityId = lastCity.id;
+    lastCity.provinceIndex = provinceId;
+    lastCity.name = `${lastCity.name} (Capital)`;
+
+    // Assign cells in radius
+    const radius = 8;
+    for (let dx = -radius; dx <= radius; dx++) {
+      for (let dy = -radius; dy <= radius; dy++) {
+        if (dx * dx + dy * dy <= radius * radius) {
+          const px = (x + dx + world.width) % world.width;
+          const py = y + dy;
+          if (py >= 0 && py < world.height) {
+            const cell = world.grid[px][py];
+            if (cell.nationIndex === nationIndex) {
+              cell.provinceIndex = provinceId;
+            }
+          }
+        }
+      }
+    }
+
+    this.nationsStateDirty = true;
+    this.gpuRenderer.updateProvincesDataTexture(world);
+    this.renderList();
+    this.canvasManager.scheduleRender();
+  }
+
+  public deleteProvince(provinceId: number) {
+    const world = this.generator.getWorld();
+    const provinceIdx = world.provinces.findIndex((p) => p.id === provinceId);
+    if (provinceIdx === -1) return;
+
+    // Clear cell references
+    for (let x = 0; x < world.width; x++) {
+      for (let y = 0; y < world.height; y++) {
+        if (world.grid[x][y].provinceIndex === provinceId) {
+          world.grid[x][y].provinceIndex = -1;
+        }
+      }
+    }
+
+    // Clear city references
+    world.cities.forEach((c) => {
+      if (c.provinceIndex === provinceId) {
+        c.provinceIndex = -1;
+      }
+    });
+
+    world.provinces.splice(provinceIdx, 1);
+
+    // Re-index remaining provinces
+    world.provinces.forEach((p, idx) => {
+      const oldId = p.id;
+      p.id = idx;
+      // Update cell and city references to the new ID
+      for (let x = 0; x < world.width; x++) {
+        for (let y = 0; y < world.height; y++) {
+          if (world.grid[x][y].provinceIndex === oldId) {
+            world.grid[x][y].provinceIndex = idx;
+          }
+        }
+      }
+      world.cities.forEach((c) => {
+        if (c.provinceIndex === oldId) c.provinceIndex = idx;
+      });
+    });
+
+    if (this.selectedProvinceIndex === provinceId) {
+      this.selectedProvinceIndex = -1;
+    }
+
+    this.gpuRenderer.updateProvincesDataTexture(world);
+    this.renderList();
+    this.canvasManager.scheduleRender();
   }
 
   public async addNation(x: number, y: number) {
@@ -542,9 +861,11 @@ export class NationsManager {
       x,
       y,
       nationIndex,
+      provinceIndex: this.pendingProvinceIdx,
       isCapital,
       size: isCapital ? 1 : 0,
     };
+    this.pendingProvinceIdx = -1; // Reset after assignment
 
     world.cities.push(newCity);
     this.pendingCityIds.add(cityId);
@@ -687,7 +1008,7 @@ export class NationsManager {
     if (this.expandedNations.has(idx)) {
       const container = document.getElementById(`city-list-container-${idx}`);
       if (container) {
-        this.renderCityList(idx, container);
+        this.renderProvinceList(idx, container);
       }
     }
   }
@@ -771,6 +1092,13 @@ export class NationsManager {
         w: dirtyW,
         h: dirtyH,
       });
+      // Also update provinces texture for borders
+      this.gpuRenderer.updateProvincesDataTexture(world, {
+        x: dirtyX,
+        y: dirtyY,
+        w: dirtyW,
+        h: dirtyH,
+      });
     }
 
     this.canvasManager.scheduleRender();
@@ -827,18 +1155,29 @@ export class NationsManager {
             const city = this.cityMap.get(flatIdx);
             if (city) {
               city.nationIndex = this.selectedNationIndex;
+              city.provinceIndex = -1; // Reset province when nation changes
             }
+          }
 
-            // Mark for border update later
-            for (let bdx = -1; bdx <= 1; bdx++) {
-              for (let bdy = -1; bdy <= 1; bdy++) {
-                const bwx = tx + bdx;
-                const bwy = ty + bdy;
-                if (bwy >= 0 && bwy < world.height) {
-                  const bwWrappedX =
-                    ((bwx % world.width) + world.width) % world.width;
-                  affectedCells.add(bwy * world.width + bwWrappedX);
-                }
+          // If painting inside the currently selected nation
+          if (cell.nationIndex === this.selectedNationIndex) {
+            cell.provinceIndex = this.selectedProvinceIndex;
+            const flatIdx = ty * world.width + wrappedX;
+            const city = this.cityMap.get(flatIdx);
+            if (city) {
+              city.provinceIndex = this.selectedProvinceIndex;
+            }
+          }
+
+          // Mark for border update later
+          for (let bdx = -1; bdx <= 1; bdx++) {
+            for (let bdy = -1; bdy <= 1; bdy++) {
+              const bwx = tx + bdx;
+              const bwy = ty + bdy;
+              if (bwy >= 0 && bwy < world.height) {
+                const bwWrappedX =
+                  ((bwx % world.width) + world.width) % world.width;
+                affectedCells.add(bwy * world.width + bwWrappedX);
               }
             }
           }
@@ -856,8 +1195,6 @@ export class NationsManager {
       const x = flatIdx % W;
       const y = Math.floor(flatIdx / W);
       const cell = world.grid[x][y];
-      if (cell.isWater) return;
-
       let isBorder = false;
       const nid = cell.nationIndex;
       neighborLoop: for (let dx = -1; dx <= 1; dx++) {
@@ -868,7 +1205,7 @@ export class NationsManager {
           if (ny >= 0 && ny < H) {
             const wrappedX = ((nx % W) + W) % W;
             const nb = world.grid[wrappedX][ny];
-            if (nb.isWater || (nb.nationIndex ?? -1) !== nid) {
+            if ((nb.nationIndex ?? -1) !== nid) {
               isBorder = true;
               break neighborLoop;
             }
@@ -890,11 +1227,7 @@ export class NationsManager {
     for (let x = 0; x < W; x++) {
       for (let y = 0; y < H; y++) {
         const cell = world.grid[x][y];
-        if (
-          !cell.isWater &&
-          cell.nationIndex !== undefined &&
-          cell.nationIndex >= 0
-        ) {
+        if (cell.nationIndex !== undefined && cell.nationIndex >= 0) {
           this.nationCellsList[cell.nationIndex].add(y * W + x);
           this.nationCentroids[cell.nationIndex].x += x;
           this.nationCentroids[cell.nationIndex].y += y;
@@ -910,19 +1243,41 @@ export class NationsManager {
     const W = world.width;
 
     let maxArea = 0;
+    const TAU = Math.PI * 2;
+
     for (let i = 0; i < world.nations.length; i++) {
       const cells = this.nationCellsList[i];
       const area = cells.size;
       if (area > maxArea) maxArea = area;
 
       if (area > 0) {
-        let sumX = 0;
-        let sumY = 0;
+        let sumSin = 0;
+        let sumCos = 0;
+        let sumYWeighted = 0;
+        let totalWeight = 0;
+
         cells.forEach((flatIdx) => {
-          sumX += flatIdx % W;
-          sumY += Math.floor(flatIdx / W);
+          const x = flatIdx % W;
+          const y = Math.floor(flatIdx / W);
+          const cell = world.grid[x][y];
+
+          // Land-Priority Weighting: Land cells influence label position 10x more than sea
+          const weight = cell.isWater ? 1.0 : 10.0;
+
+          // Circular Mean for X (handles cylindrical wraparound)
+          const angle = (x / W) * TAU;
+          sumSin += Math.sin(angle) * weight;
+          sumCos += Math.cos(angle) * weight;
+
+          sumYWeighted += y * weight;
+          totalWeight += weight;
         });
-        this.nationCentroids[i] = { x: sumX / area, y: sumY / area };
+
+        const avgAngle = Math.atan2(sumSin, sumCos);
+        let avgX = (avgAngle / TAU) * W;
+        if (avgX < 0) avgX += W;
+
+        this.nationCentroids[i] = { x: avgX, y: sumYWeighted / totalWeight };
       } else {
         this.nationCentroids[i] = {
           x: world.nations[i]?.capitalX || 0,
