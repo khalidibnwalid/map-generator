@@ -56,12 +56,13 @@ export class Interface {
       // Initialize Sub-managers
       this.tooltipManager = new TooltipManager();
       this.labelRenderer = new LabelRenderer();
+      this.uiManager = new UIManager();
       this.nationsManager = new NationsManager(
         this.generator,
         this.canvasManager,
         this.gpuRenderer,
+        this.uiManager,
       );
-      this.uiManager = new UIManager();
       this.cityRenderer = new CityRenderer();
 
       console.log("Starting initial generation...");
@@ -98,10 +99,16 @@ export class Interface {
       this.lastMouseX = e.clientX;
       this.lastMouseY = e.clientY;
 
-      if (this.nationsManager.cityPlacementMode !== -1 || this.nationsManager.nationPlacementMode) {
+      if (
+        this.nationsManager.cityPlacementMode !== -1 ||
+        this.nationsManager.nationPlacementMode
+      ) {
         this.canvasManager.canvas.style.cursor = "crosshair";
         this.updateTooltipBar();
-      } else if (this.activeLayers.nations && !this.nationsManager.isEditingNations) {
+      } else if (
+        this.activeLayers.nations &&
+        !this.nationsManager.isEditingNations
+      ) {
         this.updateHover(e.clientX, e.clientY);
       } else if (
         this.activeTab === "nations" &&
@@ -143,7 +150,11 @@ export class Interface {
       } else if (this.nationsManager.cityPlacementMode !== -1) {
         if (wy >= 0 && wy < world.height) {
           (async () => {
-            await this.nationsManager.addCity(this.nationsManager.cityPlacementMode, x, wy);
+            await this.nationsManager.addCity(
+              this.nationsManager.cityPlacementMode,
+              x,
+              wy,
+            );
             this.updateTooltipBar();
           })();
         }
@@ -689,9 +700,13 @@ export class Interface {
     }
 
     // --- Brush Overlay ---
-    if (this.nationsManager.isEditingNations && !this.canvasManager.isInteracting && !this.tooltipManager.isVisible) {
+    if (
+      this.nationsManager.isEditingNations &&
+      !this.canvasManager.isInteracting &&
+      !this.tooltipManager.isVisible
+    ) {
       const rect = this.canvasManager.canvas.getBoundingClientRect();
-      // We need the latest mouse position. Since we don't have it here, 
+      // We need the latest mouse position. Since we don't have it here,
       // let's ensure we track it in setupEventListeners or use a local variable.
       if (this.lastMouseX !== undefined && this.lastMouseY !== undefined) {
         const sx = this.lastMouseX - rect.left;
@@ -769,19 +784,17 @@ export class Interface {
   }
 
   private updateTooltipBar() {
-    let overlay = document.getElementById("tooltip-bar");
-    if (!overlay) {
-      overlay = document.createElement("div");
-      overlay.id = "tooltip-bar";
-      overlay.className = "tooltip-bar";
-      document.body.appendChild(overlay);
-    }
+    const overlay = document.getElementById("tooltip-bar");
+    if (!overlay) return;
 
     if (this.nationsManager.nationPlacementMode) {
       overlay.textContent = "CREATING NEW NATION... (CLICK ON MAP)";
       overlay.style.display = "block";
     } else if (this.nationsManager.cityPlacementMode !== -1) {
-      const nation = this.generator.getWorld().nations[this.nationsManager.cityPlacementMode];
+      const nation =
+        this.generator.getWorld().nations[
+          this.nationsManager.cityPlacementMode
+        ];
       overlay.textContent = `CREATING NEW CITY FOR ${nation?.name.toUpperCase()}... (CLICK ON MAP)`;
       overlay.style.display = "block";
     } else {
@@ -862,15 +875,17 @@ export class Interface {
     const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
     return result
       ? [
-        parseInt(result[1], 16),
-        parseInt(result[2], 16),
-        parseInt(result[3], 16),
-      ]
+          parseInt(result[1], 16),
+          parseInt(result[2], 16),
+          parseInt(result[3], 16),
+        ]
       : [0, 0, 0];
   }
   private renderMapIndicators() {
     // Remove existing indicators
-    document.querySelectorAll(".map-loading-indicator").forEach((el) => el.remove());
+    document
+      .querySelectorAll(".map-loading-indicator")
+      .forEach((el) => el.remove());
 
     const world = this.generator.getWorld();
     const cm = this.canvasManager;

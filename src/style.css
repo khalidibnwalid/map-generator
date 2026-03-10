@@ -313,6 +313,25 @@ body {
 .nation-toggle-btn:hover {
   color: var(--accent-bright);
 }
+.nation-delete-btn {
+  background: transparent;
+  border: none;
+  color: rgba(255, 100, 100, 0.3);
+  cursor: pointer;
+  padding: 0px;
+  display: flex;
+  align-items: center;
+  transition: all 0.2s;
+  opacity: 0;
+  margin-left: auto;
+}
+.nation-item:hover .nation-delete-btn {
+  opacity: 1;
+}
+.nation-delete-btn:hover {
+  color: #ff4d6d;
+  text-shadow: 0 0 8px rgba(255, 77, 109, 0.5);
+}
 
 .city-sub-list {
   display: flex;
@@ -406,6 +425,25 @@ body {
 .city-locate-btn:hover {
   opacity: 1;
   color: var(--accent-bright);
+}
+.city-delete-btn {
+  background: transparent;
+  border: none;
+  color: rgba(255, 100, 100, 0.3);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  transition: all 0.2s;
+  opacity: 0;
+}
+.city-item:hover .city-delete-btn {
+  opacity: 0.6;
+}
+.city-delete-btn:hover {
+  opacity: 1 !important;
+  color: #ff4d6d;
+  text-shadow: 0 0 8px rgba(255, 77, 109, 0.5);
 }
 
 .city-empty-msg {
@@ -787,6 +825,68 @@ select option {
   color: var(--text-active);
 }
 
+/* === Confirmation Modal === */
+.confirm-modal {
+  max-width: 400px;
+  border: 1px solid var(--accent-gold);
+  background: rgba(10, 20, 30, 0.95);
+}
+
+.confirm-modal .modal-header {
+  border-bottom: 1px solid rgba(220, 180, 50, 0.3);
+  margin-bottom: 20px;
+  padding-bottom: 10px;
+}
+
+.confirm-modal .modal-title {
+  color: var(--accent-gold);
+  font-family: "Rajdhani", sans-serif;
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+
+.confirm-modal .modal-message {
+  color: var(--text-active);
+  font-size: 0.95rem;
+  margin-bottom: 30px;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.confirm-modal .modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 15px;
+}
+
+.confirm-modal button {
+  padding: 8px 20px;
+  font-size: 0.85rem;
+}
+
+.btn-cancel {
+  border-color: rgba(255, 255, 255, 0.2);
+  color: var(--text-dim);
+}
+
+.btn-cancel:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+}
+
+.btn-ok {
+  border-color: var(--accent-gold);
+  color: var(--accent-gold);
+  background: rgba(220, 180, 50, 0.1);
+}
+
+.btn-ok:hover {
+  background: var(--accent-gold);
+  color: #000;
+  box-shadow: 0 0 15px rgba(220, 180, 50, 0.4);
+}
+
 /* === Buttons === */
 button {
   padding: 10px 16px;
@@ -1025,17 +1125,14 @@ button:active {
   width: 100vw;
   height: 100vh;
   background: rgba(3, 8, 12, 0.85);
-  /* Slightly more transparent */
   backdrop-filter: blur(15px);
   -webkit-backdrop-filter: blur(15px);
-  z-index: 5;
-  /* Lowered from 2000 to stay behind UI panels */
+  z-index: 2000;
   display: flex;
   align-items: center;
   justify-content: center;
   animation: modal-fade-in 0.4s ease-out;
-  pointer-events: none;
-  /* Allow interaction with panels behind/above it */
+  pointer-events: auto;
 }
 
 @keyframes modal-fade-in {
@@ -1054,6 +1151,7 @@ button:active {
   max-width: 450px;
   padding: 40px;
   position: relative;
+  pointer-events: auto;
 }
 
 .loader-icon {
@@ -1269,4 +1367,3 @@ button:active {
   white-space: nowrap;
   box-shadow: 0 0 10px rgba(0, 255, 170, 0.3);
 }
-

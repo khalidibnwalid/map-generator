@@ -4,6 +4,7 @@ import type { GPURenderer } from "../core/GPURenderer";
 import { generateRoads, generateCityGeometry } from "../game/generators";
 import { NoiseEngine } from "../core/NoiseEngine";
 import type { Preset } from "../game/MapGenerator";
+import type { UIManager } from "./UIManager";
 
 export class NationsManager {
   public hoveredNationIndex: number = -1;
@@ -27,15 +28,18 @@ export class NationsManager {
   private generator: MapGenerator;
   private canvasManager: CanvasManager;
   private gpuRenderer: GPURenderer;
+  private uiManager: UIManager;
 
   constructor(
     generator: MapGenerator,
     canvasManager: CanvasManager,
     gpuRenderer: GPURenderer,
+    uiManager: UIManager,
   ) {
     this.generator = generator;
     this.canvasManager = canvasManager;
     this.gpuRenderer = gpuRenderer;
+    this.uiManager = uiManager;
   }
 
   public renderList() {
@@ -122,10 +126,30 @@ export class NationsManager {
       const areaKm2 = areaPx * 25;
       territoryCount.textContent = `${areaKm2.toLocaleString()} km²`;
 
+      const deleteNationBtn = document.createElement("button");
+      deleteNationBtn.className = "nation-delete-btn";
+      deleteNationBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+          <path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19V4Z M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z"/>
+        </svg>
+      `;
+      deleteNationBtn.title = "Delete Nation";
+      deleteNationBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const confirmed = await this.uiManager.confirm(
+          "DISSOLVE NATION",
+          `Are you sure you want to dissolve ${nation.name}? Its territory will be cleared, but its cities will remain independent.`,
+        );
+        if (confirmed) {
+          this.deleteNation(idx);
+        }
+      });
+
       item.appendChild(toggleBtn);
       item.appendChild(swatchContainer);
       item.appendChild(nameInput);
       item.appendChild(territoryCount);
+      item.appendChild(deleteNationBtn);
 
       item.addEventListener("click", () => {
         this.selectedNationIndex = idx;
@@ -159,6 +183,65 @@ export class NationsManager {
         this.renderCityList(idx, cityListContainer);
       }
     });
+
+    // Add "Unaffiliated" section if there are orphan cities
+    const orphanCities = world.cities.filter((c) => c.nationIndex === -1);
+    if (orphanCities.length > 0) {
+      const idx = -1;
+      const item = document.createElement("div");
+      item.className = `nation-item unaffiliated ${this.selectedNationIndex === idx ? "selected" : ""}`;
+
+      const toggleBtn = document.createElement("button");
+      toggleBtn.className = `nation-toggle-btn ${this.expandedNations.has(idx) ? "expanded" : ""}`;
+      toggleBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+          <path d="M8.59,16.59L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.59Z"/>
+        </svg>
+      `;
+      toggleBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (this.expandedNations.has(idx)) {
+          this.expandedNations.delete(idx);
+        } else {
+          this.expandedNations.add(idx);
+        }
+        this.renderList();
+      });
+
+      const swatch = document.createElement("div");
+      swatch.className = "nation-color-swatch-container";
+      swatch.innerHTML = `<div class="nation-color-swatch" style="background: #666; box-shadow: 0 0 5px #666;"></div>`;
+
+      const nameLabel = document.createElement("span");
+      nameLabel.className = "nation-name-label";
+      nameLabel.textContent = "UNAFFILIATED";
+      nameLabel.style.color = "var(--text-dim)";
+      nameLabel.style.flex = "1";
+
+      const cityCount = document.createElement("span");
+      cityCount.className = "nation-territory-count";
+      cityCount.textContent = `${orphanCities.length} cities`;
+
+      item.appendChild(toggleBtn);
+      item.appendChild(swatch);
+      item.appendChild(nameLabel);
+      item.appendChild(cityCount);
+
+      item.addEventListener("click", () => {
+        this.selectedNationIndex = idx;
+        this.renderList();
+      });
+
+      const cityListContainer = document.createElement("div");
+      cityListContainer.id = `city-list-${idx}`;
+
+      listContainer.appendChild(item);
+      listContainer.appendChild(cityListContainer);
+
+      if (this.expandedNations.has(idx)) {
+        this.renderCityList(idx, cityListContainer);
+      }
+    }
   }
 
   private renderCityList(idx: number, container: HTMLElement) {
@@ -176,12 +259,20 @@ export class NationsManager {
       if (city.isCapital) base *= 2.5;
 
       const multipliers: Record<string, number> = {
-        "Snow": 0.05, "Tundra": 0.1, "Scorched": 0.02, "Bare": 0.1,
-        "Subtropical Desert": 0.2, "Temperate Desert": 0.3,
-        "Tropical Rain Forest": 0.4, "Marsh": 0.3,
-        "Taiga": 0.5, "Shrubland": 0.7, "Savanna": 0.8,
-        "Grassland": 1.2, "Temperate Deciduous Forest": 1.5,
-        "Temperate Rain Forest": 1.0
+        Snow: 0.05,
+        Tundra: 0.1,
+        Scorched: 0.02,
+        Bare: 0.1,
+        "Subtropical Desert": 0.2,
+        "Temperate Desert": 0.3,
+        "Tropical Rain Forest": 0.4,
+        Marsh: 0.3,
+        Taiga: 0.5,
+        Shrubland: 0.7,
+        Savanna: 0.8,
+        Grassland: 1.2,
+        "Temperate Deciduous Forest": 1.5,
+        "Temperate Rain Forest": 1.0,
       };
 
       const mult = multipliers[biome] || 1.0;
@@ -215,25 +306,33 @@ export class NationsManager {
         return;
       }
 
-      const capitalBtn = document.createElement("button");
-      capitalBtn.className = `city-capital-btn ${city.isCapital ? "active" : ""}`;
-      capitalBtn.innerHTML = `
-        <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
-          <path d="M12,17.27L18.18,21L16.54,13.97L22,9.24L14.81,8.62L12,2L9.19,8.62L2,9.24L7.45,13.97L5.82,21L12,17.27Z"/>
-        </svg>
-      `;
-      capitalBtn.title = city.isCapital ? "Capital City" : "Assign as Capital";
-      capitalBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        if (city.isCapital) return;
-        const oldCapital = nationCities.find(c => c.isCapital);
-        if (oldCapital) oldCapital.isCapital = false;
-        city.isCapital = true;
-        const nation = world.nations[idx];
-        if (nation) { nation.capitalX = city.x; nation.capitalY = city.y; }
-        this.updateNationUI(idx);
-        this.canvasManager.scheduleRender();
-      });
+      let capitalBtn: HTMLButtonElement | null = null;
+      if (idx !== -1) {
+        capitalBtn = document.createElement("button");
+        capitalBtn.className = `city-capital-btn ${city.isCapital ? "active" : ""}`;
+        capitalBtn.innerHTML = `
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+            <path d="M12,17.27L18.18,21L16.54,13.97L22,9.24L14.81,8.62L12,2L9.19,8.62L2,9.24L7.45,13.97L5.82,21L12,17.27Z"/>
+          </svg>
+        `;
+        capitalBtn.title = city.isCapital
+          ? "Capital City"
+          : "Assign as Capital";
+        capitalBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (city.isCapital) return;
+          const oldCapital = nationCities.find((c) => c.isCapital);
+          if (oldCapital) oldCapital.isCapital = false;
+          city.isCapital = true;
+          const nation = world.nations[idx];
+          if (nation) {
+            nation.capitalX = city.x;
+            nation.capitalY = city.y;
+          }
+          this.updateNationUI(idx);
+          this.canvasManager.scheduleRender();
+        });
+      }
 
       const nameInput = document.createElement("input");
       nameInput.className = "city-name-input";
@@ -260,13 +359,37 @@ export class NationsManager {
       locateBtn.title = "Locate City";
       locateBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        this.canvasManager.lookAt(city.x, city.y, Math.max(this.canvasManager.scale, 8));
+        this.canvasManager.lookAt(
+          city.x,
+          city.y,
+          Math.max(this.canvasManager.scale, 8),
+        );
       });
 
-      cityItem.appendChild(capitalBtn);
+      const deleteBtn = document.createElement("button");
+      deleteBtn.className = "city-delete-btn";
+      deleteBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="currentColor">
+          <path d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19V4Z M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z"/>
+        </svg>
+      `;
+      deleteBtn.title = "Delete City";
+      deleteBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        const confirmed = await this.uiManager.confirm(
+          "RAZE SETTLEMENT",
+          `Are you sure you want to raze ${city.name}? This action is permanent.`,
+        );
+        if (confirmed) {
+          this.deleteCity(city.id);
+        }
+      });
+
+      if (capitalBtn) cityItem.appendChild(capitalBtn);
       cityItem.appendChild(nameInput);
       cityItem.appendChild(popInfo);
       cityItem.appendChild(locateBtn);
+      cityItem.appendChild(deleteBtn);
       container.appendChild(cityItem);
     });
 
@@ -277,24 +400,26 @@ export class NationsManager {
       container.appendChild(emptyMsg);
     }
 
-    const addCityBtn = document.createElement("button");
-    addCityBtn.className = `city-add-btn ${this.cityPlacementMode === idx ? "active" : ""}`;
-    addCityBtn.innerHTML = `
-      <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
-        <path d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z"/>
-      </svg>
-      <span>${this.cityPlacementMode === idx ? "CANCEL CREATION" : "NEW CITY"}</span>
-    `;
-    addCityBtn.addEventListener("click", () => {
-      if (this.cityPlacementMode === idx) {
-        this.cityPlacementMode = -1;
-      } else {
-        this.cityPlacementMode = idx;
-      }
-      this.renderList();
-      this.canvasManager.scheduleRender();
-    });
-    container.appendChild(addCityBtn);
+    if (idx !== -1) {
+      const addCityBtn = document.createElement("button");
+      addCityBtn.className = `city-add-btn ${this.cityPlacementMode === idx ? "active" : ""}`;
+      addCityBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor">
+          <path d="M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z"/>
+        </svg>
+        <span>${this.cityPlacementMode === idx ? "CANCEL CREATION" : "NEW CITY"}</span>
+      `;
+      addCityBtn.addEventListener("click", () => {
+        if (this.cityPlacementMode === idx) {
+          this.cityPlacementMode = -1;
+        } else {
+          this.cityPlacementMode = idx;
+        }
+        this.renderList();
+        this.canvasManager.scheduleRender();
+      });
+      container.appendChild(addCityBtn);
+    }
   }
 
   public async addNation(x: number, y: number) {
@@ -307,11 +432,11 @@ export class NationsManager {
       name: `New Nation`,
       color: this.hslToHex(Math.floor(Math.random() * 360), 70, 60),
       capitalX: startX,
-      capitalY: startY
+      capitalY: startY,
     };
 
     // 1. Shift existing nations and re-index them
-    world.nations.forEach(n => n.id++);
+    world.nations.forEach((n) => n.id++);
     world.nations.unshift(newNation);
 
     // 2. Re-index EVERY cell in the grid (including water, as it may have a nationIndex)
@@ -324,12 +449,14 @@ export class NationsManager {
         }
       }
       // Yield periodically to keep UI responsive on massive maps
-      if (xPos % 200 === 0) await new Promise(r => requestAnimationFrame(r));
+      if (xPos % 200 === 0) await new Promise((r) => requestAnimationFrame(r));
     }
 
     // 3. Update all nationIndex references in cities
-    world.cities.forEach(city => {
-      city.nationIndex++;
+    world.cities.forEach((city) => {
+      if (city.nationIndex !== -1) {
+        city.nationIndex++;
+      }
     });
 
     // 4. Update internal state lists
@@ -339,7 +466,10 @@ export class NationsManager {
 
     // 5. Shift expandedNations state
     const newExpanded = new Set<number>();
-    this.expandedNations.forEach(idx => newExpanded.add(idx + 1));
+    this.expandedNations.forEach((idx) => {
+      if (idx === -1) newExpanded.add(-1);
+      else newExpanded.add(idx + 1);
+    });
     this.expandedNations = newExpanded;
 
     // 6. Adjust selected index
@@ -347,21 +477,23 @@ export class NationsManager {
       this.selectedNationIndex++;
     }
 
-    await new Promise(r => requestAnimationFrame(r));
+    await new Promise((r) => requestAnimationFrame(r));
 
     // 7. Paint circular starting territory
     const radius = 12;
     for (let dx = -radius; dx <= radius; dx++) {
       for (let dy = -radius; dy <= radius; dy++) {
         if (dx * dx + dy * dy <= radius * radius) {
-          const px = ((startX + dx % world.width) + world.width) % world.width;
+          const px = (startX + (dx % world.width) + world.width) % world.width;
           const py = startY + dy;
           if (py >= 0 && py < world.height) {
             const cell = world.grid[px][py];
             if (!cell.isWater) {
               const oldNationIdx = cell.nationIndex;
               if (oldNationIdx !== undefined && oldNationIdx !== -1) {
-                this.nationCellsList[oldNationIdx]?.delete(py * world.width + px);
+                this.nationCellsList[oldNationIdx]?.delete(
+                  py * world.width + px,
+                );
               }
               cell.nationIndex = 0;
               this.nationCellsList[0].add(py * world.width + px);
@@ -393,7 +525,12 @@ export class NationsManager {
     }, 100);
   }
 
-  public async addCity(nationIndex: number, x: number, y: number, isCapital: boolean = false) {
+  public async addCity(
+    nationIndex: number,
+    x: number,
+    y: number,
+    isCapital: boolean = false,
+  ) {
     const world = this.generator.getWorld();
     const nation = world.nations[nationIndex];
     if (!nation) return;
@@ -406,7 +543,7 @@ export class NationsManager {
       y,
       nationIndex,
       isCapital,
-      size: isCapital ? 1 : 0
+      size: isCapital ? 1 : 0,
     };
 
     world.cities.push(newCity);
@@ -426,7 +563,7 @@ export class NationsManager {
       preset: "Realistic Continents" as Preset,
       onProgress: (_p: number) => {
         // Progress feedback could be added here if needed
-      }
+      },
     };
 
     try {
@@ -437,6 +574,103 @@ export class NationsManager {
       this.renderList();
       this.canvasManager.scheduleRender();
     }
+  }
+
+  public deleteCity(cityId: number) {
+    const world = this.generator.getWorld();
+    const cityIndex = world.cities.findIndex((c) => c.id === cityId);
+    if (cityIndex === -1) return;
+
+    const city = world.cities[cityIndex];
+    const nationIndex = city.nationIndex;
+
+    world.cities.splice(cityIndex, 1);
+
+    // If it was capital, find another city in the same nation to be capital
+    if (city.isCapital) {
+      const nationCities = world.cities.filter(
+        (c) => c.nationIndex === nationIndex,
+      );
+      if (nationCities.length > 0) {
+        // Find largest city to be new capital
+        nationCities.sort((a, b) => b.size - a.size);
+        const newCapital = nationCities[0];
+        newCapital.isCapital = true;
+        const nation = world.nations[nationIndex];
+        if (nation) {
+          nation.capitalX = newCapital.x;
+          nation.capitalY = newCapital.y;
+        }
+      }
+    }
+
+    // Re-index city IDs to keep them sequential
+    world.cities.forEach((c, idx) => (c.id = idx));
+
+    this.renderList();
+    this.canvasManager.scheduleRender();
+  }
+
+  public async deleteNation(nationIndex: number) {
+    const world = this.generator.getWorld();
+    if (nationIndex < 0 || nationIndex >= world.nations.length) return;
+
+    // 1. Release cities of this nation (make them independent villages/towns)
+    world.cities.forEach((c) => {
+      if (c.nationIndex === nationIndex) {
+        c.nationIndex = -1;
+        c.isCapital = false;
+      } else if (c.nationIndex > nationIndex) {
+        c.nationIndex--;
+      }
+    });
+
+    // 2. Clear territory and re-index grid
+    for (let x = 0; x < world.width; x++) {
+      for (let y = 0; y < world.height; y++) {
+        const cell = world.grid[x][y];
+        if (cell.nationIndex === nationIndex) {
+          cell.nationIndex = -1;
+          cell.isNationBorder = false;
+        } else if (
+          cell.nationIndex !== undefined &&
+          cell.nationIndex > nationIndex
+        ) {
+          cell.nationIndex--;
+        }
+      }
+      if (x % 200 === 0) await new Promise((r) => requestAnimationFrame(r));
+    }
+
+    // 3. Re-index city IDs to keep them sequential
+    world.cities.forEach((c, idx) => (c.id = idx));
+
+    // 4. Remove from world.nations
+    world.nations.splice(nationIndex, 1);
+
+    // 5. Update internal state
+    this.nationCellsList.splice(nationIndex, 1);
+    this.nationCentroids.splice(nationIndex, 1);
+    this.nationSizes.splice(nationIndex, 1);
+
+    // 6. Shift expandedNations and selectedNationIndex
+    const newExpanded = new Set<number>();
+    this.expandedNations.forEach((idx) => {
+      if (idx < nationIndex) newExpanded.add(idx);
+      else if (idx > nationIndex) newExpanded.add(idx - 1);
+    });
+    this.expandedNations = newExpanded;
+
+    if (this.selectedNationIndex === nationIndex) {
+      this.selectedNationIndex = -1;
+    } else if (this.selectedNationIndex > nationIndex) {
+      this.selectedNationIndex--;
+    }
+
+    this.nationsStateDirty = true;
+    this.buildCache();
+    this.renderList();
+    this.canvasManager.scheduleRender();
   }
 
   private updateNationUI(idx: number) {
@@ -461,7 +695,7 @@ export class NationsManager {
   private buildCityMap() {
     this.cityMap.clear();
     const world = this.generator.getWorld();
-    world.cities.forEach(city => {
+    world.cities.forEach((city) => {
       const flatIdx = city.y * world.width + city.x;
       this.cityMap.set(flatIdx, city);
     });
@@ -487,7 +721,10 @@ export class NationsManager {
     const affectedNations = new Set<number>();
     affectedNations.add(this.selectedNationIndex);
 
-    let minX = wx, maxX = wx, minY = wy, maxY = wy;
+    let minX = wx,
+      maxX = wx,
+      minY = wy,
+      maxY = wy;
 
     const updateDirtyRect = (px: number, py: number) => {
       const bSize = this.brushSize;
@@ -524,15 +761,15 @@ export class NationsManager {
     const padding = 2;
     const dirtyX = minX - padding;
     const dirtyY = minY - padding;
-    const dirtyW = (maxX - minX + 1) + padding * 2;
-    const dirtyH = (maxY - minY + 1) + padding * 2;
+    const dirtyW = maxX - minX + 1 + padding * 2;
+    const dirtyH = maxY - minY + 1 + padding * 2;
 
     if (dirtyW > 0 && dirtyH > 0) {
       this.gpuRenderer.updateNationsDataTexture(world, {
         x: dirtyX,
         y: dirtyY,
         w: dirtyW,
-        h: dirtyH
+        h: dirtyH,
       });
     }
 
@@ -550,7 +787,12 @@ export class NationsManager {
     }
   }
 
-  private paintAt(wx: number, wy: number, affectedCells: Set<number>, affectedNations: Set<number>) {
+  private paintAt(
+    wx: number,
+    wy: number,
+    affectedCells: Set<number>,
+    affectedNations: Set<number>,
+  ) {
     const world = this.generator.getWorld();
     const brushSize = this.brushSize;
     const radiusSq = (brushSize / 2) * (brushSize / 2);
@@ -593,7 +835,8 @@ export class NationsManager {
                 const bwx = tx + bdx;
                 const bwy = ty + bdy;
                 if (bwy >= 0 && bwy < world.height) {
-                  const bwWrappedX = ((bwx % world.width) + world.width) % world.width;
+                  const bwWrappedX =
+                    ((bwx % world.width) + world.width) % world.width;
                   affectedCells.add(bwy * world.width + bwWrappedX);
                 }
               }
@@ -609,7 +852,7 @@ export class NationsManager {
     const W = world.width;
     const H = world.height;
 
-    affectedCells.forEach(flatIdx => {
+    affectedCells.forEach((flatIdx) => {
       const x = flatIdx % W;
       const y = Math.floor(flatIdx / W);
       const cell = world.grid[x][y];
@@ -635,7 +878,6 @@ export class NationsManager {
       cell.isNationBorder = isBorder;
     });
   }
-
 
   public buildCache() {
     const world = this.generator.getWorld();

@@ -1,30 +1,45 @@
 <!doctype html>
 <html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Procedural World Generator</title>
+  </head>
 
-<head>
-  <meta charset="UTF-8" />
-  <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Procedural World Generator</title>
-</head>
+  <body>
+    <div id="app"></div>
 
-<body>
-  <div id="app"></div>
-
-  <!-- Loading Modal -->
-  <div id="loading-modal" class="modal-overlay" style="display: none;">
-    <div class="modal-content">
-      <div class="loader-icon">⌬</div>
-      <div class="loader-text">GENERATING WORLD</div>
-      <div class="loader-subtext">Sculpting mountains and valleys...</div>
-      <div class="loader-progress-bar">
-        <div class="loader-progress-fill" style="width: 0%;"></div>
+    <!-- Loading Modal -->
+    <div id="loading-modal" class="modal-overlay" style="display: none">
+      <div class="modal-content">
+        <div class="loader-icon">⌬</div>
+        <div class="loader-text">GENERATING MAP</div>
+        <div class="loader-subtext">Generating mountains and valleys...</div>
+        <div class="loader-progress-bar">
+          <div class="loader-progress-fill" style="width: 0%"></div>
+        </div>
+        <div class="loader-percentage">0%</div>
       </div>
-      <div class="loader-percentage">0%</div>
     </div>
-  </div>
 
-  <script type="module" src="/src/main.ts"></script>
-</body>
+    <!-- Confirm Modal -->
+    <div id="game-confirm-modal" class="modal-overlay" style="display: none">
+      <div class="modal-content confirm-modal">
+        <div class="modal-header">
+          <span class="modal-title">CONFIRMATION</span>
+        </div>
+        <div class="modal-message">Are you sure you want to proceed?</div>
+        <div class="modal-actions">
+          <button id="confirm-cancel" class="btn-cancel">CANCEL</button>
+          <button id="confirm-ok" class="btn-ok">CONFIRM</button>
+        </div>
+      </div>
+    </div>
 
+    <!-- Tooltip Bar -->
+    <div id="tooltip-bar" class="tooltip-bar" style="display: none"></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
 </html>
