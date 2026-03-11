@@ -30,6 +30,7 @@ const FRAGMENT_SHADER_SOURCE = `
 
     uniform vec3 u_biomeColors[24];
     uniform vec3 u_hoverColor;
+    uniform float u_hoverProvinceIndex;
 
     int getBiome(float elevation, float temperature, float moisture) {
         if (elevation < 0.1) return 20; // DEEP_OCEAN
@@ -68,6 +69,10 @@ const FRAGMENT_SHADER_SOURCE = `
         if (moisture > 0.50) return 19; // TAIGA
         if (moisture > 0.33) return 9; // SHRUBLAND
         return 6; // TUNDRA
+    }
+
+    float decodeIdx(vec4 color) {
+        return color.r * 255.0 + color.g * 255.0 * 256.0 + color.b * 255.0 * 65536.0;
     }
 
     float rand(vec2 co) {
@@ -374,6 +379,19 @@ const FRAGMENT_SHADER_SOURCE = `
                     if (provBorderStrength > 0.01) {
                         float dash = step(0.4, fract((wxwy.x + wxwy.y) * 1.5));
                         color = mix(color, vec3(0.0), provBorderStrength * 0.4 * borderLandMask * (0.6 + 0.4 * dash));
+                    }
+
+                    // --- Province Highlight on Hover ---
+                    if (u_hoverProvinceIndex >= 0.0) {
+                        float h00 = step(abs(decodeIdx(texture2D(u_provincesTexture, (ixy + vec2(0.5, 0.5)) / u_worldSize)) - u_hoverProvinceIndex), 0.5);
+                        float h10 = step(abs(decodeIdx(texture2D(u_provincesTexture, (ixy + vec2(1.5, 0.5)) / u_worldSize)) - u_hoverProvinceIndex), 0.5);
+                        float h01 = step(abs(decodeIdx(texture2D(u_provincesTexture, (ixy + vec2(0.5, 1.5)) / u_worldSize)) - u_hoverProvinceIndex), 0.5);
+                        float h11 = step(abs(decodeIdx(texture2D(u_provincesTexture, (ixy + vec2(1.5, 1.5)) / u_worldSize)) - u_hoverProvinceIndex), 0.5);
+                        
+                        float hoverWeight = mix(mix(h00, h10, noisy_fxy.x), mix(h01, h11, noisy_fxy.x), noisy_fxy.y);
+                        if (hoverWeight > 0.01) {
+                            color += vec3(0.2) * borderLandMask * hoverWeight;
+                        }
                     }
                 }
             }
@@ -805,6 +823,7 @@ export class GPURenderer {
       provinces: boolean;
     },
     hoverColor?: number[],
+    hoverProvinceIndex: number = -1,
   ) {
     this.gl.viewport(0, 0, width, height);
     this.gl.useProgram(this.program);
@@ -892,7 +911,6 @@ export class GPURenderer {
       this.gl.getUniformLocation(this.program, "u_biomeColors"),
       this.biomeColors,
     );
-
     if (hoverColor) {
       this.gl.uniform3f(
         this.gl.getUniformLocation(this.program, "u_hoverColor"),
@@ -908,6 +926,11 @@ export class GPURenderer {
         -1.0,
       );
     }
+
+    this.gl.uniform1f(
+      this.gl.getUniformLocation(this.program, "u_hoverProvinceIndex"),
+      hoverProvinceIndex,
+    );
 
     this.gl.drawArrays(this.gl.TRIANGLES, 0, 6);
   }

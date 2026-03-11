@@ -512,6 +512,7 @@ export class Interface {
       offsetY,
       this.activeLayers,
       hoverColor,
+      this.nationsManager.hoveredProvinceIndex,
     );
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.drawImage(this.gpuCanvas, 0, 0);
@@ -809,7 +810,7 @@ export class Interface {
     } else if (this.nationsManager.cityPlacementMode !== -1) {
       const nation =
         this.generator.getWorld().nations[
-          this.nationsManager.cityPlacementMode
+        this.nationsManager.cityPlacementMode
         ];
       overlay.textContent = `CREATING NEW CITY FOR ${nation?.name.toUpperCase()}... (CLICK ON MAP)`;
       overlay.style.display = "block";
@@ -891,10 +892,10 @@ export class Interface {
     const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
     return result
       ? [
-          parseInt(result[1], 16),
-          parseInt(result[2], 16),
-          parseInt(result[3], 16),
-        ]
+        parseInt(result[1], 16),
+        parseInt(result[2], 16),
+        parseInt(result[3], 16),
+      ]
       : [0, 0, 0];
   }
   private renderMapIndicators() {

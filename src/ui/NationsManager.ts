@@ -8,6 +8,7 @@ import type { UIManager } from "./UIManager";
 
 export class NationsManager {
   public hoveredNationIndex: number = -1;
+  public hoveredProvinceIndex: number = -1;
   public selectedNationIndex: number = -1;
   public selectedProvinceIndex: number = -1;
   public isEditingNations: boolean = false;
@@ -401,6 +402,15 @@ export class NationsManager {
         this.renderList();
       });
 
+      item.addEventListener("mouseenter", () => {
+        this.hoveredProvinceIndex = pIdx;
+        this.canvasManager.scheduleRender();
+      });
+      item.addEventListener("mouseleave", () => {
+        this.hoveredProvinceIndex = -1;
+        this.canvasManager.scheduleRender();
+      });
+
       container.appendChild(item);
 
       const cityListContainer = document.createElement("div");
@@ -662,15 +672,8 @@ export class NationsManager {
     // Refresh UI
     this.renderList();
 
-    // Add city as capital
-    await this.addCity(nationIndex, x, y, false);
-    const lastCity = world.cities[world.cities.length - 1];
-    newProvince.capitalCityId = lastCity.id;
-    lastCity.provinceIndex = provinceId;
-    lastCity.name = `${lastCity.name} (Capital)`;
-
     // Assign cells in radius
-    const radius = 8;
+    const radius = 3;
     for (let dx = -radius; dx <= radius; dx++) {
       for (let dy = -radius; dy <= radius; dy++) {
         if (dx * dx + dy * dy <= radius * radius) {
