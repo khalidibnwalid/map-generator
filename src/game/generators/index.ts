@@ -9,3 +9,4 @@ export * from "./generateCities";
 export * from "./generateRoads";
 export * from "./generateCityGeometry";
 export * from "./generateProvinces";
+export * from "./generatePopulationDensity";

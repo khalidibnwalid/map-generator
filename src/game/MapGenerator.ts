@@ -11,6 +11,7 @@ import {
   generateRoads,
   generateCityGeometry,
   generateProvinces,
+  generatePopulationDensity,
   type GeneratorContext,
 } from "./generators";
 
@@ -97,7 +98,12 @@ export class MapGenerator {
     onProgress?.(90);
     await new Promise((r) => requestAnimationFrame(r));
 
-    ctx.onProgress = report(90, 95);
+    ctx.onProgress = report(90, 93);
+    await generatePopulationDensity(ctx);
+    onProgress?.(93);
+    await new Promise((r) => requestAnimationFrame(r));
+
+    ctx.onProgress = report(93, 95);
     await generateNations(ctx);
     onProgress?.(95);
     await new Promise((r) => requestAnimationFrame(r));

@@ -106,6 +106,11 @@ export default function renderMainApp() {
                   <span class="label-text">HEATMAP</span>
                 </label>
                 <label class="overlay-item">
+                  <input type="checkbox" id="layer-population" />
+                  <span class="checkbox-box"></span>
+                  <span class="label-text">POPULATION</span>
+                </label>
+                <label class="overlay-item">
                   <input type="checkbox" id="layer-moisture" />
                   <span class="checkbox-box"></span>
                   <span class="label-text">MOISTURE</span>

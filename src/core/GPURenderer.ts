@@ -23,6 +23,7 @@ const FRAGMENT_SHADER_SOURCE = `
     uniform bool u_showBiomes;
     uniform bool u_showElevation;
     uniform bool u_showHeatmap;
+    uniform bool u_showPopulation;
     uniform bool u_showMoisture;
     uniform bool u_showNations;
     uniform bool u_showBorders;
@@ -201,6 +202,7 @@ const FRAGMENT_SHADER_SOURCE = `
         float elevation = data.r;
         float moisture = data.g;
         float temperature = data.b;
+        float populationDensity = data.a;
 
         float shoreNoise = (fbm_high(wxwy * 0.5) - 0.5) * 0.05 * clamp(u_scale * 0.1, 0.0, 1.0);
         float renderedElevation = elevation + shoreNoise;
@@ -281,6 +283,20 @@ const FRAGMENT_SHADER_SOURCE = `
         // --- 2. Overlays ---
         if (u_showHeatmap) color = mix(color, vec3(temperature, 0.0, 1.0 - temperature), 0.4);
         if (u_showMoisture) color = mix(color, vec3(1.0 - moisture, 1.0 - moisture, moisture), 0.4);
+        if (u_showPopulation && renderedElevation >= 0.45) {
+            // Apply a cubic curve for smoother visual falloff
+            float p = populationDensity * populationDensity * (3.0 - 2.0 * populationDensity);
+            
+            // Heatmap gradient: Transparent -> Blue -> Green -> Yellow -> Red -> White
+            vec3 popColor = mix(vec3(0.0, 0.2, 0.6), vec3(0.0, 0.8, 0.2), smoothstep(0.0, 0.3, p));
+            popColor = mix(popColor, vec3(0.9, 0.9, 0.1), smoothstep(0.3, 0.6, p));
+            popColor = mix(popColor, vec3(1.0, 0.1, 0.1), smoothstep(0.6, 0.85, p));
+            popColor = mix(popColor, vec3(1.0, 1.0, 1.0), smoothstep(0.85, 1.0, p));
+            
+            float intensity = smoothstep(0.01, 0.9, p);
+            // Better additive blending to appear glowing
+            color = mix(color, popColor, intensity * 0.85);
+        }
 
         // --- 3. Nations ---
         if (u_showNations) {
@@ -512,7 +528,7 @@ export class GPURenderer {
         data[idx] = Math.floor((cell.elevation || 0) * 255);
         data[idx + 1] = Math.floor((cell.moisture || 0) * 255);
         data[idx + 2] = Math.floor((cell.temperature || 0) * 255);
-        data[idx + 3] = 255;
+        data[idx + 3] = Math.floor((cell.populationDensity || 0) * 255);
       }
     }
 
@@ -817,6 +833,7 @@ export class GPURenderer {
       biomes: boolean;
       elevation: boolean;
       heatmap: boolean;
+      population?: boolean;
       moisture: boolean;
       nations: boolean;
       borders: boolean;
@@ -889,6 +906,10 @@ export class GPURenderer {
     this.gl.uniform1i(
       this.gl.getUniformLocation(this.program, "u_showHeatmap"),
       layers.heatmap ? 1 : 0,
+    );
+    this.gl.uniform1i(
+      this.gl.getUniformLocation(this.program, "u_showPopulation"),
+      layers.population ? 1 : 0,
     );
     this.gl.uniform1i(
       this.gl.getUniformLocation(this.program, "u_showMoisture"),

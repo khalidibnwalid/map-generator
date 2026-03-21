@@ -95,6 +95,7 @@ export interface CellData {
   hasRiver: boolean;
   plateId: number;
   distanceToBoundary: number;
+  populationDensity: number;
   nationIndex?: number;
   provinceIndex?: number;
   isNationBorder?: boolean;
@@ -126,6 +127,7 @@ export class WorldData {
           hasRiver: false,
           plateId: -1,
           distanceToBoundary: 999,
+          populationDensity: 0,
         };
       }
     }

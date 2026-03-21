@@ -13,6 +13,7 @@ export type ViewLayer =
   | "Biomes"
   | "Elevation"
   | "Heatmap"
+  | "Population"
   | "Moisture"
   | "Nations"
   | "Borders";
@@ -24,6 +25,7 @@ export class Interface {
     biomes: true,
     elevation: false,
     heatmap: false,
+    population: false,
     moisture: false,
     nations: true,
     borders: true,
@@ -313,6 +315,7 @@ export class Interface {
       "nations",
       "borders",
       "heatmap",
+      "population",
       "moisture",
       "roads",
       "cities",
