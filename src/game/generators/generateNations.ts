@@ -5,7 +5,7 @@ export async function generateNations(ctx: GeneratorContext): Promise<void> {
   world.nations = [];
 
   // Base number of nations based on map scale
-  const numNations = Math.floor((width * height) / 12000);
+  const numNations = Math.floor((width * height) / 6000);
 
   const names = [
     "Aethelgard",
