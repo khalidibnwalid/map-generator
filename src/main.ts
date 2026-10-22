@@ -19,4 +19,7 @@ canvasManager.offsetX = (window.innerWidth - 800 * canvasManager.scale) / 2;
 canvasManager.offsetY = 0;
 
 // The Interface constructor now triggers the initial generation automatically (async)
-new Interface(generator, canvasManager);
+const ui = new Interface(generator, canvasManager);
+
+// Dev-only handle for debugging from the console
+if (import.meta.env.DEV) (window as unknown as Record<string, unknown>).__map = { generator, canvasManager, ui };
