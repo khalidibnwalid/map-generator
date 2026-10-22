@@ -61,7 +61,11 @@ export class MapGenerator {
 
   public async generate(onProgress?: (pct: number) => void) {
     onProgress?.(0);
-    await new Promise((r) => requestAnimationFrame(r)); // Yield to paint loading state
+    // Let the loading state paint (rAF never fires in background tabs, hence the timeout)
+    await new Promise((r) => {
+      requestAnimationFrame(r);
+      setTimeout(r, 50);
+    });
 
     this.noise = new NoiseEngine(this.currentSeed);
     this.world = new WorldData(this.width, this.height);

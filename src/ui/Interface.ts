@@ -74,13 +74,20 @@ export class Interface {
   // GPU rendering
   private gpuRenderer!: GPURenderer;
   private gpuCanvas: HTMLCanvasElement;
+  // Rivers, roads, lanes, resources and landmarks are drawn into this layer and
+  // reused (transformed) while panning/zooming or when only hover changed.
+  private vectorLayer = document.createElement("canvas");
+  private vectorState: { scale: number; offX: number; offY: number; key: string } | null = null;
 
   constructor(generator: MapGenerator, canvasManager: CanvasManager) {
     this.generator = generator;
     this.canvasManager = canvasManager;
 
-    // Initialize GPU Renderer with an offscreen canvas
+    // The WebGL terrain canvas lives in the page right under the 2D overlay,
+    // so frames are composited by the browser instead of copied each frame
     this.gpuCanvas = document.createElement("canvas");
+    this.gpuCanvas.id = "terrainCanvas";
+    this.canvasManager.canvas.parentElement?.insertBefore(this.gpuCanvas, this.canvasManager.canvas);
     try {
       this.gpuRenderer = new GPURenderer(this.gpuCanvas);
 
@@ -128,6 +135,7 @@ export class Interface {
     this.nationsManager.selectedNationIndex = -1;
     this.nationsManager.buildCache();
     this.cityRenderer.invalidateAll();
+    this.vectorState = null;
     this.thematicFocus = -2;
     this.updateLegend();
     this.canvasManager.scheduleRender();
@@ -680,29 +688,12 @@ export class Interface {
       hoveredNation >= 0
         ? (hexRgb(world.nations[hoveredNation].color).map((c) => c / 255) as [number, number, number])
         : [1, 1, 1],
+      isInteracting,
     );
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.drawImage(this.gpuCanvas, 0, 0);
 
     const theme = THEMES[this.theme];
-    if (this.activeLayers.rivers) {
-      this.networkRenderer.renderRivers(ctx, world, width, height, scale, offsetX, offsetY, theme);
-    }
-    if (this.activeLayers.currents) {
-      this.networkRenderer.renderCurrents(ctx, world, width, height, scale, offsetX, offsetY);
-    }
-    if (this.activeLayers.searoutes) {
-      this.networkRenderer.renderSeaRoutes(ctx, world, width, height, scale, offsetX, offsetY, theme);
-    }
-    if (this.activeLayers.roads) {
-      this.networkRenderer.renderRoads(ctx, world, width, height, scale, offsetX, offsetY, theme);
-    }
-    if (this.activeLayers.resources) {
-      this.networkRenderer.renderResources(ctx, world, width, height, scale, offsetX, offsetY, theme);
-    }
-    if (this.activeLayers.pois) {
-      this.poiRenderer.render(ctx, world, width, height, scale, offsetX, offsetY, this.theme);
-    }
+    this.drawVectorLayers(ctx, world, width, height, scale, offsetX, offsetY, isInteracting);
     if (this.activeLayers.cities) {
       this.cityRenderer.hoveredNationIndex = this.nationsManager.hoveredNationIndex;
       this.cityRenderer.render(ctx, world, width, height, scale, offsetX, offsetY, this.theme, isInteracting);
@@ -758,6 +749,48 @@ export class Interface {
 
     this.updateMapRuler(scale);
     this.renderMapIndicators();
+  }
+
+  private drawVectorLayers(
+    ctx: CanvasRenderingContext2D,
+    world: WorldData,
+    width: number,
+    height: number,
+    scale: number,
+    offsetX: number,
+    offsetY: number,
+    isInteracting: boolean,
+  ) {
+    const L = this.activeLayers;
+    const key = [
+      this.theme,
+      L.rivers, L.currents, L.searoutes, L.roads, L.resources, L.pois,
+      world.seed, world.width, world.worldRoads.length, world.cities.length, width, height,
+    ].join("|");
+    const st = this.vectorState;
+    const ratio = st ? scale / st.scale : 0;
+    const same = st && st.key === key;
+    const unchanged = same && st!.scale === scale && st!.offX === offsetX && st!.offY === offsetY;
+    if (same && (unchanged || (isInteracting && ratio > 0.4 && ratio < 2.5))) {
+      ctx.drawImage(this.vectorLayer, offsetX - st!.offX * ratio, offsetY - st!.offY * ratio, width * ratio, height * ratio);
+      return;
+    }
+    if (this.vectorLayer.width !== width || this.vectorLayer.height !== height) {
+      this.vectorLayer.width = width;
+      this.vectorLayer.height = height;
+    }
+    const v = this.vectorLayer.getContext("2d")!;
+    v.setTransform(1, 0, 0, 1, 0, 0);
+    v.clearRect(0, 0, width, height);
+    const theme = THEMES[this.theme];
+    if (L.rivers) this.networkRenderer.renderRivers(v, world, width, height, scale, offsetX, offsetY, theme);
+    if (L.currents) this.networkRenderer.renderCurrents(v, world, width, height, scale, offsetX, offsetY);
+    if (L.searoutes) this.networkRenderer.renderSeaRoutes(v, world, width, height, scale, offsetX, offsetY, theme);
+    if (L.roads) this.networkRenderer.renderRoads(v, world, width, height, scale, offsetX, offsetY, theme);
+    if (L.resources) this.networkRenderer.renderResources(v, world, width, height, scale, offsetX, offsetY, theme);
+    if (L.pois) this.poiRenderer.render(v, world, width, height, scale, offsetX, offsetY, this.theme);
+    ctx.drawImage(this.vectorLayer, 0, 0);
+    this.vectorState = { scale, offX: offsetX, offY: offsetY, key };
   }
 
   private lastMouseX: number | undefined;

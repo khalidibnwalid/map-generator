@@ -33,6 +33,17 @@ body {
   height: 100vh;
 }
 
+#terrainCanvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
+  background: #111;
+}
+
 #mapCanvas {
   flex-grow: 1;
   cursor: grab;
@@ -41,7 +52,7 @@ body {
   left: 0;
   width: 100%;
   height: 100%;
-  z-index: 0;
+  z-index: 1;
   filter: saturate(0.85) contrast(1.1) brightness(0.9);
   /* Subtly shift map colors to fit theme */
 }

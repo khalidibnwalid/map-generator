@@ -86,25 +86,34 @@ export class NetworkRenderer {
     ctx.lineJoin = "round";
     ctx.strokeStyle = theme.river;
     const CHUNK = 6;
+    // Batch chunks by (quantized width, alpha) so the whole network takes a
+    // handful of stroke calls instead of thousands
+    const batches = new Map<string, { w: number; a: number; chunks: { r: River; i: number; dx: number }[] }>();
     for (const r of world.rivers) {
       if (r.flow < minFlow) continue;
       const fade = minFlow > 0 ? Math.min(1, (r.flow - minFlow) / minFlow + 0.35) : 1;
+      const a = Math.round(fade * 4) / 4;
+      const minPx = theme.riverMinPx * Math.min(2.6, 0.55 + 0.3 * Math.log2(1 + r.flow));
       copies(boxOf(r), world.width, v, 1, (dx) => {
-        const tx = (x: number, y: number): [number, number] => [
-          (x + dx) * scale + offsetX,
-          y * scale + offsetY,
-        ];
-        ctx.globalAlpha = fade;
         for (let i = 0; i < r.points.length - 1; i += CHUNK) {
           const mid = Math.min(r.points.length - 1, i + (CHUNK >> 1));
-          const wm = r.widths[mid];
-          const minPx = theme.riverMinPx * Math.min(2.6, 0.55 + 0.3 * Math.log2(1 + r.flow));
-          ctx.lineWidth = Math.max(minPx * Math.min(1, 0.4 + 0.12 * scale), wm * ppm);
-          ctx.beginPath();
-          tracePieces(ctx, r.points, i, i + CHUNK + 1, tx);
-          ctx.stroke();
+          const w = Math.max(minPx * Math.min(1, 0.4 + 0.12 * scale), r.widths[mid] * ppm);
+          const wq = w < 4 ? Math.round(w * 4) / 4 : Math.round(w);
+          const key = wq + "|" + a;
+          let bt = batches.get(key);
+          if (!bt) batches.set(key, (bt = { w: wq, a, chunks: [] }));
+          bt.chunks.push({ r, i, dx });
         }
       });
+    }
+    for (const bt of batches.values()) {
+      ctx.globalAlpha = bt.a;
+      ctx.lineWidth = Math.max(0.3, bt.w);
+      ctx.beginPath();
+      for (const { r, i, dx } of bt.chunks) {
+        tracePieces(ctx, r.points, i, i + CHUNK + 1, (x, y) => [(x + dx) * scale + offsetX, y * scale + offsetY]);
+      }
+      ctx.stroke();
     }
     ctx.restore();
   }
@@ -314,7 +323,7 @@ export class NetworkRenderer {
     const v = viewRect(width, height, scale, offsetX, offsetY);
     const ppm = scale / CELL_METERS;
     // Highways only when zoomed out; local roads appear up close
-    const minTier = scale < 2 ? 2 : scale < 5.5 ? 1 : 0;
+    const minTier = scale < 3.5 ? 2 : scale < 6 ? 1 : 0;
     const widthM = [5, 8, 12];
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);

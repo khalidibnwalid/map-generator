@@ -51,7 +51,7 @@ export class GPURenderer {
     const gl = canvas.getContext("webgl2", {
       alpha: false,
       antialias: false,
-      preserveDrawingBuffer: true,
+      preserveDrawingBuffer: false,
     });
     if (!gl) throw new Error("WebGL2 not supported");
     this.gl = gl;
@@ -326,6 +326,7 @@ export class GPURenderer {
     theme: MapTheme = "Realistic",
     thematic: ThematicMode = "none",
     hoverNationColor: [number, number, number] = [1, 1, 1],
+    fast = false, // skip costly fine detail while the view is moving
   ) {
     const gl = this.gl;
     gl.viewport(0, 0, width, height);
@@ -383,6 +384,7 @@ export class GPURenderer {
     gl.uniform1f(this.u("u_hoverNationIndex"), hoverNationIndex);
     gl.uniform3f(this.u("u_hoverNationColor"), hoverNationColor[0], hoverNationColor[1], hoverNationColor[2]);
     gl.uniform1i(this.u("u_showIce"), layers.ice ? 1 : 0);
+    gl.uniform1i(this.u("u_fast"), fast ? 1 : 0);
     gl.uniform1f(this.u("u_hoverProvinceIndex"), hoverProvinceIndex);
 
     gl.drawArrays(gl.TRIANGLES, 0, 6);

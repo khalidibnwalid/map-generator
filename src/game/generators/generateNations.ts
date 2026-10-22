@@ -1,7 +1,7 @@
 import type { GeneratorContext } from "./types";
 import { hslHex } from "../names";
 import { growRegions, fillUnreached, warpOwnerArray } from "../util/regionGrow";
-import { distanceTransform, yieldFrame } from "../util/grid";
+import { distanceTransform, labelComponents, yieldFrame } from "../util/grid";
 
 // Territorial waters reach ~22 km (12 nautical miles) offshore.
 export const TERRITORIAL_WATERS_CELLS = 4.4;
@@ -104,6 +104,35 @@ export async function generateNations(ctx: GeneratorContext): Promise<void> {
       nearest[i] >= 0 && (isLake || dist[i] <= TERRITORIAL_WATERS_CELLS)
         ? owner[nearest[i]]
         : -1;
+  }
+
+  // Enclosed seas: unclaimed pockets cut off from the open ocean by claimed
+  // waters become internal waters (whole to a sole owner, else by proximity)
+  const free = new Uint8Array(N);
+  for (let i = 0; i < N; i++) if (world.waterType[i] !== 0 && owner[i] < 0) free[i] = 1;
+  const pockets = labelComponents(W, height, free);
+  const maxPocket = N * 0.01;
+  const members: number[][] = pockets.sizes.map(() => []);
+  for (let i = 0; i < N; i++) if (free[i] && pockets.sizes[pockets.labels[i]] <= maxPocket) members[pockets.labels[i]].push(i);
+  for (const cells of members) {
+    if (cells.length === 0) continue;
+    const owners = new Set<number>();
+    let open = false;
+    for (const c of cells) {
+      const x = c % W;
+      const y = (c - x) / W;
+      if (y === 0 || y === height - 1) open = true;
+      for (const n of [y * W + ((x + 1) % W), y * W + ((x - 1 + W) % W), y > 0 ? c - W : -1, y < height - 1 ? c + W : -1]) {
+        if (n >= 0 && !free[n] && owner[n] >= 0) owners.add(owner[n]);
+      }
+    }
+    if (open || owners.size === 0) continue;
+    if (owners.size === 1) {
+      const o = [...owners][0];
+      for (const c of cells) owner[c] = o;
+    } else {
+      for (const c of cells) if (nearest[c] >= 0) owner[c] = owner[nearest[c]];
+    }
   }
   onProgress?.(75);
   await yieldFrame();

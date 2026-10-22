@@ -23,7 +23,8 @@ export class CanvasManager {
             throw new Error(`Canvas with id ${canvasId} not found.`);
         }
         this.canvas = el;
-        this.ctx = this.canvas.getContext('2d', { alpha: false }) as CanvasRenderingContext2D; // optimization
+        // Transparent overlay: the WebGL terrain canvas sits underneath it
+        this.ctx = this.canvas.getContext('2d') as CanvasRenderingContext2D;
 
         this.resizeCanvas();
         this.setupEvents();
@@ -122,8 +123,8 @@ export class CanvasManager {
 
     private render() {
         // Clear canvas
-        this.ctx.fillStyle = '#111';
-        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+        this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
 
         if (this.onRender) {
             this.onRender(this.ctx, this.canvas.width, this.canvas.height, this.scale, this.offsetX, this.offsetY, this.isInteracting);

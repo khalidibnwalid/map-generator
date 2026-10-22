@@ -4,6 +4,20 @@ import { settlementFade } from "./CityRenderer";
 
 export class LabelRenderer {
   private occupiedRects: { x: number; y: number; w: number; h: number }[] = [];
+  private sortedCities: { key: string; list: WorldData["cities"] } | null = null;
+  private widths = new Map<string, number>();
+
+  // Text widths are cached per font+text; measureText dominates label cost
+  private textWidth(ctx: CanvasRenderingContext2D, text: string): number {
+    const key = ctx.font + "|" + text;
+    let w = this.widths.get(key);
+    if (w === undefined) {
+      if (this.widths.size > 20000) this.widths.clear();
+      w = ctx.measureText(text).width;
+      this.widths.set(key, w);
+    }
+    return w;
+  }
 
   public render(
     ctx: CanvasRenderingContext2D,
@@ -53,7 +67,7 @@ export class LabelRenderer {
             .split("")
             .join(sizeFactor > 0.5 && fontSize > 16 ? " " : "");
           ctx.font = font;
-          if (ctx.measureText(spacedName).width > extentPx * 1.15) continue;
+          if (this.textWidth(ctx, spacedName) > extentPx * 1.15) continue;
           ctx.globalAlpha = nationAlpha;
           this.drawLabelWithHalo(ctx, spacedName, sx, sy, font, theme.nationLabel, theme.nationHalo, 4);
         }
@@ -89,9 +103,16 @@ export class LabelRenderer {
     // City labels
     if (scale > 0.8) {
       const cityAlpha = Math.min(0.9, (scale - 0.8) * 2.5);
-      const sortedCities = [...world.cities].sort((a, b) =>
-        a.isCapital === b.isCapital ? b.population - a.population : a.isCapital ? -1 : 1,
-      );
+      const key = world.seed + "|" + world.cities.length;
+      if (!this.sortedCities || this.sortedCities.key !== key) {
+        this.sortedCities = {
+          key,
+          list: [...world.cities].sort((a, b) =>
+            a.isCapital === b.isCapital ? b.population - a.population : a.isCapital ? -1 : 1,
+          ),
+        };
+      }
+      const sortedCities = this.sortedCities.list;
       ctx.globalAlpha = isInteracting ? cityAlpha * 0.6 : cityAlpha;
       for (const city of sortedCities) {
         // Labels lag the dots a little so the map never gets crowded
@@ -149,8 +170,7 @@ export class LabelRenderer {
     haloWidth: number = 3,
   ) {
     ctx.font = font;
-    const metrics = ctx.measureText(text);
-    const textW = metrics.width;
+    const textW = this.textWidth(ctx, text);
     const fontSizeMatch = font.match(/(\d+)px/);
     const textH = fontSizeMatch ? parseInt(fontSizeMatch[1]) : 12;
     const lx = sx - textW / 2;
@@ -176,10 +196,9 @@ export class LabelRenderer {
     font: string,
   ) {
     ctx.font = font;
-    const metrics = ctx.measureText(text);
     const paddingX = 4;
     const paddingY = 2;
-    const textW = metrics.width;
+    const textW = this.textWidth(ctx, text);
     const fontSizeMatch = font.match(/(\d+)px/);
     const textH = fontSizeMatch ? parseInt(fontSizeMatch[1]) : 11;
 

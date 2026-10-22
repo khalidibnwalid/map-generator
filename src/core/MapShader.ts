@@ -48,6 +48,7 @@ uniform vec3 u_biomeColors[40];
 uniform float u_hoverNationIndex;
 uniform vec3 u_hoverNationColor;
 uniform bool u_showIce;
+uniform bool u_fast; // view is moving: skip fine detail, keep full resolution
 uniform float u_hoverProvinceIndex;
 
 out vec4 fragColor;
@@ -341,7 +342,9 @@ vec3 fieldPattern(vec2 l, vec3 base, out float edge) {
 }
 
 vec3 waterRealistic(float elevation, float coast, float lakeF, ivec2 ci, vec2 l) {
-  float e = min(elevation, 0.449);
+  // Lakes keep their basin's land elevation, so derive their depth from the
+  // distance to the shore instead (big inland seas then look like sea)
+  float e = mix(min(elevation, 0.449), 0.44 - clamp(-coast / 8.0, 0.0, 1.0) * 0.22, lakeF);
   float depth = clamp(e / 0.45, 0.0, 1.0);
   vec3 deepOcean = vec3(0.05, 0.15, 0.30);
   vec3 shallowOcean = vec3(0.10, 0.40, 0.60);
@@ -352,9 +355,9 @@ vec3 waterRealistic(float elevation, float coast, float lakeF, ivec2 ci, vec2 l)
   c = mix(c, vec3(0.14, 0.46, 0.62), shelfWide * 0.3);
   float shelf = smoothstep(-0.6, 0.0, coast);
   c = mix(c, vec3(0.20, 0.56, 0.66), shelf * 0.55);
-  c = mix(c, vec3(0.20, 0.47, 0.58), 0.7 * lakeF);
+  c = mix(c, vec3(0.20, 0.47, 0.58), 0.18 * lakeF);
   // Fine ripples once a cell spans many pixels
-  if (u_scale > 200.0) {
+  if (u_scale > 200.0 && !u_fast) {
     float r = detailNoise(ci, l, 256, 0x1234u) * 0.5 + detailNoise(ci, l, 1024, 0x2345u) * 0.25;
     c *= 1.0 + r * 0.06 * smoothstep(200.0, 800.0, u_scale);
   }
@@ -424,7 +427,7 @@ void main() {
   float m_noise = (fbm(wxwy * 1.5 + 20.0) - 0.5) * 0.15 * blendFactor;
   // Fine fractal detail so biome edges stay natural when zoomed in
   float fine = 0.0;
-  if (u_scale > 16.0) fine += detailNoise(ci, l, 16, 0xb1u) * 0.5 * smoothstep(16.0, 40.0, u_scale);
+  if (u_scale > 16.0 && !u_fast) fine += detailNoise(ci, l, 16, 0xb1u) * 0.5 * smoothstep(16.0, 40.0, u_scale);
   if (u_scale > 64.0) fine += detailNoise(ci, l, 64, 0xb2u) * 0.3 * smoothstep(64.0, 160.0, u_scale);
   if (u_scale > 256.0) fine += detailNoise(ci, l, 256, 0xb3u) * 0.2 * smoothstep(256.0, 640.0, u_scale);
   float qe = max(clamp(elevation + e_noise + fine * 0.012, 0.0, 1.0), 0.481);
@@ -434,7 +437,7 @@ void main() {
   float qw = waterD + fine * 0.35 + (fbm(wxwy * 4.0) - 0.5) * 0.3;
   int bIdx = classify(qe, qt, qm, slope, qw, coast);
   // A second, offset sample: where they disagree the two biomes interleave
-  int bIdx2 = classify(qe - fine * 0.01, qt - fine * 0.03, qm - fine * 0.04, slope, qw + 0.15, coast);
+  int bIdx2 = u_fast ? bIdx : classify(qe - fine * 0.01, qt - fine * 0.03, qm - fine * 0.04, slope, qw + 0.15, coast);
   float detail = fbm(wxwy * 0.05);
   float ppm = u_scale / CELL_M; // pixels per meter
 
@@ -556,7 +559,7 @@ void main() {
       }
 
       // Meter-scale ground texture when zoomed in
-      if (u_scale > 64.0) {
+      if (u_scale > 64.0 && !u_fast) {
         float g = 0.0;
         g += detailNoise(ci, l, 64, 0xa1u) * 0.5 * smoothstep(64.0, 128.0, u_scale);
         g += detailNoise(ci, l, 256, 0xa2u) * 0.3 * smoothstep(256.0, 512.0, u_scale);
@@ -573,7 +576,7 @@ void main() {
       else color = mix(color, vec3(0.62, 0.58, 0.52) * shade, sand * 0.35);
 
       // Individual trees at high zoom
-      if (ppm > 0.06) {
+      if (ppm > 0.06 && !u_fast) {
         float density = treeDensity(bIdx);
         if (density > 0.0) {
           vec4 t = trees(ci, l, density);
