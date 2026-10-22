@@ -36,9 +36,11 @@ export async function generatePopulationDensity(ctx: GeneratorContext) {
             }
 
             // 3. Moisture & Biomes: prefer moderate/high moisture, penalty for deserts and ice
-            if (cell.biome === BiomeType.SUBTROPICAL_DESERT || cell.biome === BiomeType.TEMPERATE_DESERT || cell.biome === BiomeType.SCORCHED) {
+            if (cell.biome === BiomeType.SUBTROPICAL_DESERT || cell.biome === BiomeType.TEMPERATE_DESERT || cell.biome === BiomeType.SCORCHED ||
+                cell.biome === BiomeType.DUNES || cell.biome === BiomeType.SALT_FLAT || cell.biome === BiomeType.BADLANDS || cell.biome === BiomeType.COLD_DESERT) {
                 score -= 1.0;
-            } else if (cell.biome === BiomeType.SNOW || cell.biome === BiomeType.BARE || cell.biome === BiomeType.TUNDRA) {
+            } else if (cell.biome === BiomeType.SNOW || cell.biome === BiomeType.BARE || cell.biome === BiomeType.TUNDRA ||
+                cell.biome === BiomeType.GLACIER || cell.biome === BiomeType.SCREE || cell.biome === BiomeType.BOG) {
                 score -= 0.8;
             } else if (cell.moisture > 0.4 && cell.moisture < 0.8) {
                 score += 0.5; // Ideal agricultural land

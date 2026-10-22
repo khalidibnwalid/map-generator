@@ -93,7 +93,8 @@ function astar(G: CoarseGrid, from: number, to: number, maxExpand: number): numb
     let dx = Math.abs(x - tx);
     if (dx > Wc / 2) dx = Wc - dx;
     const dy = Math.abs((c - x) / Wc - ty);
-    return 0.3 * Math.hypot(dx, dy);
+    // Weighted (inadmissible) heuristic: near-optimal routes, far fewer expansions
+    return 1.1 * Math.hypot(dx, dy);
   };
   stamp[from] = ep;
   g[from] = 0;
@@ -146,7 +147,7 @@ function buildRoad(world: WorldData, G: CoarseGrid, a: City, b: City, tier: numb
   const from = cityCell(G, world, a);
   const to = cityCell(G, world, b);
   if (from === to) return null;
-  const path = astar(G, from, to, 60000);
+  const path = astar(G, from, to, 25000);
   if (!path) return null;
   for (const c of path) G.onRoad[c] = 1;
 
@@ -165,13 +166,15 @@ function buildRoad(world: WorldData, G: CoarseGrid, a: City, b: City, tier: numb
   while (bx - prevX > world.width / 2) bx -= world.width;
   while (bx - prevX < -world.width / 2) bx += world.width;
   pts.push({ x: bx, y: b.y });
-  // Gentle sideways wander between waypoints (kept on land)
+  // Relax the grid path (moving average) so it flows instead of zig-zagging;
+  // the terrain costs already supply the large-scale curvature
   const sampler = world.sampler;
-  for (let i = 1; i < pts.length - 1; i++) {
-    const p = pts[i];
-    const ox = (hashU(Math.round(p.x * 3), Math.round(p.y * 3), world.seed ^ 0x77) - 0.5) * 0.5 * G.s;
-    const oy = (hashU(Math.round(p.y * 3), Math.round(p.x * 3), world.seed ^ 0x99) - 0.5) * 0.5 * G.s;
-    if (sampler.coastField(p.x + ox, p.y + oy, 4) > 0.15) pts[i] = { x: p.x + ox, y: p.y + oy };
+  for (let pass = 0; pass < 3; pass++) {
+    for (let i = 1; i < pts.length - 1; i++) {
+      const nx = (pts[i - 1].x + pts[i].x * 2 + pts[i + 1].x) / 4;
+      const ny = (pts[i - 1].y + pts[i].y * 2 + pts[i + 1].y) / 4;
+      if (sampler.coastField(nx, ny, 4) > 0.15) pts[i] = { x: nx, y: ny };
+    }
   }
   for (const c of path) {
     const x = (c % G.Wc) * G.s;
@@ -182,11 +185,10 @@ function buildRoad(world: WorldData, G: CoarseGrid, a: City, b: City, tier: numb
   return { points: sm.pts, tier, a: a.id, b: b.id };
 }
 
+// Road class follows the lesser endpoint: highways only join cities
 function tierFor(a: City, b: City): number {
-  const big = (c: City) => c.isCapital || c.size >= 1;
-  if (big(a) && big(b)) return 2;
-  if (big(a) || big(b)) return 1;
-  return 0;
+  const rank = (c: City) => (c.isCapital || c.size >= 2 ? 2 : c.size === 1 ? 1 : 0);
+  return Math.min(rank(a), rank(b));
 }
 
 function dist(world: WorldData, a: City, b: City) {

@@ -1,6 +1,9 @@
 import { TerrainSampler } from "../core/TerrainSampler";
 import type { Language } from "./names";
 import type { Poi } from "./generators/generatePOIs";
+import type { SeaRoute } from "./generators/generateSeaRoutes";
+import type { CurrentField } from "./generators/generateCurrents";
+import type { Resource } from "./generators/generateEconomy";
 
 export const BiomeType = {
   OCEAN: "Ocean",
@@ -24,7 +27,112 @@ export const BiomeType = {
   SAVANNA: "Savanna",
   TROPICAL_SEASONAL_FOREST: "Tropical Seasonal Forest",
   TROPICAL_RAIN_FOREST: "Tropical Rain Forest",
+  ALPINE_MEADOW: "Alpine Meadow",
+  SCREE: "Rock & Scree",
+  GLACIER: "Glacier",
+  MONTANE_FOREST: "Montane Forest",
+  CHAPARRAL: "Mediterranean Scrub",
+  MANGROVE: "Mangrove",
+  FLOODPLAIN: "Floodplain",
+  BOG: "Bog",
+  SALT_FLAT: "Salt Flat",
+  BADLANDS: "Badlands",
+  COLD_DESERT: "Cold Desert",
+  PRAIRIE: "Prairie",
+  CLOUD_FOREST: "Cloud Forest",
+  DUNES: "Sand Dunes",
 } as const;
+
+// GPU palette slot for every biome (see MapShader's classify()).
+export const BIOME_INDEX: Record<string, number> = {
+  Ocean: 0,
+  "Shallow Water": 1,
+  Beach: 2,
+  Lake: 3,
+  Scorched: 4,
+  Bare: 5,
+  Tundra: 6,
+  Snow: 7,
+  "Temperate Desert": 8,
+  Shrubland: 9,
+  Grassland: 10,
+  "Temperate Deciduous Forest": 11,
+  "Temperate Rain Forest": 12,
+  "Subtropical Desert": 13,
+  "Tropical Seasonal Forest": 14,
+  "Tropical Rain Forest": 15,
+  Taiga: 19,
+  "Deep Ocean": 20,
+  Marsh: 21,
+  Savanna: 22,
+  Steppe: 23,
+  "Alpine Meadow": 24,
+  "Rock & Scree": 25,
+  Glacier: 26,
+  "Montane Forest": 27,
+  "Mediterranean Scrub": 28,
+  Mangrove: 29,
+  Floodplain: 30,
+  Bog: 31,
+  "Salt Flat": 32,
+  Badlands: 33,
+  "Cold Desert": 34,
+  Prairie: 35,
+  "Cloud Forest": 36,
+  "Sand Dunes": 37,
+};
+const BIOME_BY_INDEX: string[] = [];
+for (const [k, v] of Object.entries(BIOME_INDEX)) BIOME_BY_INDEX[v] = k;
+
+// Land biome from climate, relief and water. slope: elevation change per
+// cell; water: distance (cells) to a river or lake; coast: distance to sea.
+// Keep in sync with classify() in MapShader.ts.
+export function classifyLandBiome(e: number, t: number, m: number, slope: number, water: number, coast: number): number {
+  if (e > 0.86) return t < 0.25 ? 26 : m > 0.45 ? 7 : 25;
+  if (slope > 0.06 && e > 0.62) return 25;
+  if (e > 0.78) {
+    if (t < 0.2) return 26;
+    return m > 0.3 ? 24 : 25;
+  }
+  if (e > 0.68) {
+    if (t > 0.6 && m > 0.6) return 36;
+    if (m > 0.4) return t < 0.35 ? 19 : 27;
+    if (m > 0.2) return 9;
+    return t > 0.55 ? 33 : 5;
+  }
+  if (water < 0.35) {
+    if (t < 0.3) return 31;
+    if (m < 0.25) return 30;
+    if (e < 0.53 && m > 0.55) return 21;
+    return 30;
+  }
+  if (coast < 0.12 && t > 0.68 && m > 0.45 && e < 0.52) return 29;
+  if (coast < 0.06 && m < 0.35 && e < 0.5) return 37;
+  if (t > 0.66) {
+    if (m < 0.08) return 37;
+    if (m < 0.16) return e < 0.5 && coast > 3 ? 32 : 13;
+    if (m < 0.3) return e > 0.58 ? 33 : 22;
+    if (m < 0.45) return 22;
+    if (m < 0.62) return 14;
+    return 15;
+  }
+  if (t > 0.33) {
+    if (m < 0.12) return 34;
+    if (m < 0.25) return t > 0.5 && coast < 10 ? 28 : 23;
+    if (m < 0.4) return t > 0.45 ? 35 : 10;
+    if (e < 0.53 && m > 0.75) return 21;
+    if (m < 0.8) return 11;
+    return 12;
+  }
+  if (m < 0.2) return 6;
+  if (m < 0.35) return 9;
+  if (e < 0.52 && m > 0.7) return 31;
+  return 19;
+}
+
+export function biomeFromIndex(i: number): BiomeType {
+  return (BIOME_BY_INDEX[i] ?? "Grassland") as BiomeType;
+}
 
 export type BiomeType = (typeof BiomeType)[keyof typeof BiomeType];
 
@@ -91,6 +199,9 @@ export interface City {
   radiusM: number; // radius of the built-up core, meters
   seed: number;
   isPort?: boolean;
+  wealth?: number; // income proxy from resources and trade
+  wealthTier?: number; // index into WEALTH_TIERS
+  resources?: string[]; // notable resource kinds nearby
 }
 
 export interface Culture {
@@ -151,6 +262,10 @@ export class WorldData {
   public religions: Religion[] = [];
   public languages: Language[] = []; // one per culture, runtime only
   public pois: Poi[] = [];
+  public seaRoutes: SeaRoute[] = [];
+  public currents: CurrentField | null = null;
+  public resources: Resource[] = [];
+  public roadsEdited = false; // roads differ from what the seed generates
   // relations[a][b], symmetric except Vassal/Overlord pairs
   public relations: RelationType[][] = [];
 
@@ -291,4 +406,18 @@ export const BIOME_COLORS: Record<BiomeType, string> = {
   [BiomeType.SAVANNA]: "#B9B05C",
   [BiomeType.TROPICAL_SEASONAL_FOREST]: "#66923C",
   [BiomeType.TROPICAL_RAIN_FOREST]: "#215325",
+  [BiomeType.ALPINE_MEADOW]: "#8FA067",
+  [BiomeType.SCREE]: "#8B8580",
+  [BiomeType.GLACIER]: "#EEF3F7",
+  [BiomeType.MONTANE_FOREST]: "#3D5E3E",
+  [BiomeType.CHAPARRAL]: "#A39A63",
+  [BiomeType.MANGROVE]: "#3E5B3A",
+  [BiomeType.FLOODPLAIN]: "#6E9E48",
+  [BiomeType.BOG]: "#5F6B4A",
+  [BiomeType.SALT_FLAT]: "#E6E0D2",
+  [BiomeType.BADLANDS]: "#B07650",
+  [BiomeType.COLD_DESERT]: "#B9AE8E",
+  [BiomeType.PRAIRIE]: "#9AAA5A",
+  [BiomeType.CLOUD_FOREST]: "#2E5A38",
+  [BiomeType.DUNES]: "#E1C48A",
 };

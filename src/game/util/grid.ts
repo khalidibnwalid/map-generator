@@ -244,6 +244,11 @@ let lastYield = 0;
 export async function yieldFrame(force = false): Promise<void> {
   const now = performance.now();
   if (!force && now - lastYield < 40) return;
-  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  // MessageChannel tasks are not throttled in background tabs (setTimeout is)
+  await new Promise<void>((resolve) => {
+    const ch = new MessageChannel();
+    ch.port1.onmessage = () => resolve();
+    ch.port2.postMessage(0);
+  });
   lastYield = performance.now();
 }

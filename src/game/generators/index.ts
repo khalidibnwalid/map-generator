@@ -13,3 +13,6 @@ export * from "./generatePopulationDensity";
 export * from "./generateCultures";
 export * from "./generateDiplomacy";
 export * from "./generatePOIs";
+export * from "./generateSeaRoutes";
+export * from "./generateCurrents";
+export * from "./generateEconomy";

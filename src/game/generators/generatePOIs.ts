@@ -14,7 +14,8 @@ export type PoiKind =
   | "dam"
   | "mine"
   | "monastery"
-  | "port";
+  | "port"
+  | "volcano";
 
 export interface Poi {
   kind: PoiKind;
@@ -36,6 +37,7 @@ export const POI_LABELS: Record<PoiKind, string> = {
   mine: "Mine",
   monastery: "Zawiya (Sufi lodge)",
   port: "Port",
+  volcano: "Volcano",
 };
 
 // Small features scattered across the world: castles on hills, ruins, inns
@@ -53,22 +55,39 @@ export async function generatePOIs(ctx: GeneratorContext): Promise<void> {
   };
   const nationAt = (x: number, y: number) => world.getCell(x, y)?.nationIndex ?? -1;
 
-  // Spacing check against cities and previously placed POIs
-  const clearOf = (x: number, y: number, cityR: number, poiR: number) => {
-    for (const c of world.cities) {
-      let dx = Math.abs(c.x - x);
-      if (dx > W / 2) dx = W - dx;
-      if (Math.hypot(dx, c.y - y) < cityR) return false;
-    }
-    for (const p of pois) {
-      let dx = Math.abs(p.x - x);
-      if (dx > W / 2) dx = W - dx;
-      if (Math.hypot(dx, p.y - y) < poiR) return false;
-    }
-    return true;
+  // Spacing checks against cities and placed POIs via coarse buckets
+  const B = 8;
+  const BX = Math.ceil(W / B);
+  const cityBuckets = new Map<number, { x: number; y: number }[]>();
+  const poiBuckets = new Map<number, { x: number; y: number }[]>();
+  const put = (m: Map<number, { x: number; y: number }[]>, x: number, y: number) => {
+    const k = Math.floor(y / B) * BX + (Math.floor(x / B) % BX + BX) % BX;
+    const l = m.get(k) ?? [];
+    l.push({ x, y });
+    m.set(k, l);
   };
-  const add = (kind: PoiKind, x: number, y: number, angle: number, name: string) =>
+  for (const c of world.cities) put(cityBuckets, c.x, c.y);
+  const near = (m: Map<number, { x: number; y: number }[]>, x: number, y: number, r: number) => {
+    const by = Math.floor(y / B);
+    const bx = Math.floor(x / B);
+    const reach = Math.ceil(r / B);
+    for (let oy = -reach; oy <= reach; oy++)
+      for (let ox = -reach; ox <= reach; ox++) {
+        const k = (by + oy) * BX + (((bx + ox) % BX) + BX) % BX;
+        for (const p of m.get(k) ?? []) {
+          let dx = Math.abs(p.x - x);
+          if (dx > W / 2) dx = W - dx;
+          if (Math.hypot(dx, p.y - y) < r) return true;
+        }
+      }
+    return false;
+  };
+  const clearOf = (x: number, y: number, cityR: number, poiR: number) =>
+    !near(cityBuckets, x, y, cityR) && !near(poiBuckets, x, y, poiR);
+  const add = (kind: PoiKind, x: number, y: number, angle: number, name: string) => {
     pois.push({ kind, x, y, angle, name, nationIndex: nationAt(x, y) });
+    put(poiBuckets, x, y);
+  };
 
   // --- Along roads: border forts, waystations ---
   for (const road of world.worldRoads) {
@@ -174,6 +193,25 @@ export async function generatePOIs(ctx: GeneratorContext): Promise<void> {
       counts.ruins++;
       add("ruins", x, y, rand() * Math.PI, `Ruins of ${nameFor(x, y)}`);
     }
+  }
+
+  // --- Volcanoes: arcs along converging plate margins, plus volcanic islands ---
+  const volcQuota = Math.max(3, Math.round(nNations * 0.45));
+  const landmassSize = new Map<number, number>();
+  for (const lmId of world.landmass) if (lmId >= 0) landmassSize.set(lmId, (landmassSize.get(lmId) ?? 0) + 1);
+  let volc = 0;
+  for (let t = 0; t < tries && volc < volcQuota; t++) {
+    const x = Math.floor(rand() * W) + 0.5;
+    const y = Math.floor(rand() * H) + 0.5;
+    const cell = world.getCell(x, y);
+    if (!cell || cell.isWater) continue;
+    const onMargin = cell.distanceToBoundary <= 2.5 * resScale && cell.elevation > 0.7;
+    // Small islands far from big land read as hotspot volcanoes
+    const lm = world.landmass[Math.floor(y) * W + Math.floor(x)];
+    const island = !onMargin && cell.elevation > 0.55 && lm >= 0 && (landmassSize.get(lm) ?? 0) < 40 * resScale * resScale;
+    if (!(onMargin || island) || !clearOf(x, y, 5 * resScale, 10 * resScale)) continue;
+    volc++;
+    add("volcano", x, y, rand() * Math.PI * 2, `Mount ${nameFor(x, y)}`);
   }
 
   // --- Ports: towns and cities by the sea ---
