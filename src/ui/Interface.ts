@@ -367,6 +367,21 @@ export class Interface {
     const toggleBtn = document.getElementById("toggle-panel") as HTMLButtonElement;
     const uiPanel = document.getElementById("ui-panel") as HTMLDivElement;
 
+    // The app never scrolls as a whole: focusing an off-screen control would
+    // otherwise shift the map up and leave a blank band below it
+    const app = document.getElementById("app");
+    window.addEventListener(
+      "scroll",
+      () => {
+        if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
+        if (app && (app.scrollTop || app.scrollLeft)) {
+          app.scrollTop = 0;
+          app.scrollLeft = 0;
+        }
+      },
+      true,
+    );
+
     if (toggleBtn && uiPanel) {
       toggleBtn.addEventListener("click", () => uiPanel.classList.add("collapsed"));
     }
