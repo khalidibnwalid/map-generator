@@ -196,7 +196,7 @@ export async function generateEconomy(ctx: GeneratorContext): Promise<void> {
     c.size = size;
     const cell = world.getCell(c.x, c.y);
     const dens = Math.min(1, (cell?.populationDensity ?? 0.2) * 0.6 + (scores.get(c)! / 8) * 0.6);
-    finalizeCity(world, c, size === 0 ? dens * 0.35 : dens);
+    finalizeCity(world, c, size === 0 ? dens * 0.8 : dens);
   });
 
   // Wealth tier per settlement (relative to the world)

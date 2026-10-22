@@ -1,3 +1,4 @@
+import { nationFlag } from "../game/flags";
 import type { WorldData } from "../game/WorldData";
 import type { CanvasTheme } from "./themes";
 import { settlementFade } from "./CityRenderer";
@@ -33,6 +34,7 @@ export class LabelRenderer {
     theme: CanvasTheme,
     showProvinces: boolean,
     nationLandArea: number[] = [],
+    showFlags = true,
   ) {
     const mapPixelWidth = world.width * scale;
     const startCopy = Math.floor(-offsetX / mapPixelWidth);
@@ -70,6 +72,19 @@ export class LabelRenderer {
           if (this.textWidth(ctx, spacedName) > extentPx * 1.15) continue;
           ctx.globalAlpha = nationAlpha;
           this.drawLabelWithHalo(ctx, spacedName, sx, sy, font, theme.nationLabel, theme.nationHalo, 4);
+          // Flag above the name of realms large enough on screen
+          if (showFlags && fontSize >= 12) {
+            const fh = Math.round(fontSize * 0.9);
+            const fw = Math.round(fh * 1.5);
+            const flag = nationFlag(world, nation.id, fw * 2, fh * 2);
+            if (flag) {
+              const fx = Math.round(sx - fw / 2);
+              const fy = Math.round(sy - fontSize * 0.62 - fh - 3);
+              ctx.fillStyle = "rgba(0,0,0,0.35)";
+              ctx.fillRect(fx - 1, fy - 1, fw + 2, fh + 2);
+              ctx.drawImage(flag, fx, fy, fw, fh);
+            }
+          }
         }
       }
       ctx.globalAlpha = 1;

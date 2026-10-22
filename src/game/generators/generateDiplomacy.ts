@@ -1,3 +1,4 @@
+import { makeVassal } from "../politics";
 import type { GeneratorContext } from "./types";
 import type { RelationType, WorldData } from "../WorldData";
 
@@ -44,6 +45,9 @@ export async function generateDiplomacy(ctx: GeneratorContext): Promise<void> {
     }
   }
   const maxArea = Math.max(1, ...area);
+  // The largest realms gather vassals among their small neighbours
+  const bigRank = [...area.keys()].sort((p, q) => area[q] - area[p]);
+  const isBig = new Set(bigRank.slice(0, Math.max(2, Math.round(n * 0.08))));
 
   for (const nation of world.nations) {
     const lang = world.languages[nation.cultureId ?? 0];
@@ -51,6 +55,7 @@ export async function generateDiplomacy(ctx: GeneratorContext): Promise<void> {
     nation.government = lang ? lang.government(size, coastal[nation.id]) : "Kingdom";
   }
 
+  const bonds: { v: number; o: number }[] = []; // vassal candidates
   const rel: RelationType[][] = Array.from({ length: n }, () =>
     new Array<RelationType>(n).fill("Neutral"),
   );
@@ -72,19 +77,35 @@ export async function generateDiplomacy(ctx: GeneratorContext): Promise<void> {
         else if (score < -0.7) r = "Rival";
       } else {
         const ratio = area[a] / Math.max(1, area[b]);
-        const vassalChance = A.cultureId === B.cultureId ? 0.35 : 0.12;
-        if ((ratio > 5 || ratio < 0.2) && score > -0.2 && noise.random() < vassalChance) {
-          r = ratio > 1 ? "Overlord" : "Vassal";
+        const bigger = ratio > 1 ? a : b;
+        let vassalChance = A.cultureId === B.cultureId ? 0.5 : 0.25;
+        if (isBig.has(bigger)) vassalChance += 0.3;
+        if ((ratio > 2.5 || ratio < 0.4) && score > -0.45 && noise.random() < vassalChance) {
+          bonds.push(ratio > 1 ? { v: b, o: a } : { v: a, o: b });
+          r = "Friendly";
         } else if (score < -0.75) r = "War";
         else if (score < -0.3) r = "Rival";
         else if (score > 0.7) r = "Alliance";
         else if (score > 0.3) r = "Friendly";
       }
       rel[a][b] = r;
-      rel[b][a] = r === "Overlord" ? "Vassal" : r === "Vassal" ? "Overlord" : r;
+      rel[b][a] = r;
     }
   }
   world.relations = rel;
+
+  // Vassal bonds go through makeVassal: overlord link, paler colour, shared
+  // highlight. One overlord per vassal and no chains of vassals.
+  for (let i = bonds.length - 1; i > 0; i--) {
+    const j = Math.floor(noise.random() * (i + 1));
+    [bonds[i], bonds[j]] = [bonds[j], bonds[i]];
+  }
+  const isOverlord = new Set<number>();
+  for (const { v, o } of bonds) {
+    if (world.nations[v].overlord !== undefined || world.nations[o].overlord !== undefined || isOverlord.has(v)) continue;
+    makeVassal(world, v, o);
+    isOverlord.add(o);
+  }
 }
 
 export const RELATION_COLORS: Record<RelationType, string> = {

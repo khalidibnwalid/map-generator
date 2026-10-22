@@ -37,6 +37,7 @@ export class MapGenerator {
   public currentPreset: Preset = "Heavy Landmass";
   public currentSeed: number;
   public isGenerating = false;
+  public greatPowers = 1;
 
   constructor(width: number, height: number, seed: number) {
     this.width = width;
@@ -87,6 +88,7 @@ export class MapGenerator {
       width: this.width,
       height: this.height,
       preset: this.currentPreset,
+      greatPowers: this.greatPowers,
     };
 
     // Helper to report sub-ranges smoothly

@@ -5,13 +5,21 @@ export class TooltipManager {
         this.tooltip = document.getElementById('nation-tooltip');
     }
 
-    public show(x: number, y: number, name: string, detail: string) {
+    public show(x: number, y: number, name: string, detail: string, flagUrl = "") {
         if (!this.tooltip) return;
 
         const nameEl = this.tooltip.querySelector('.tooltip-name');
         const detailEl = this.tooltip.querySelector('.tooltip-detail');
 
-        if (nameEl) nameEl.textContent = name;
+        if (nameEl) {
+            nameEl.textContent = name;
+            if (flagUrl) {
+                const img = document.createElement('img');
+                img.className = 'tooltip-flag';
+                img.src = flagUrl;
+                nameEl.prepend(img);
+            }
+        }
         if (detailEl) detailEl.textContent = detail;
 
         this.tooltip.style.display = 'block';

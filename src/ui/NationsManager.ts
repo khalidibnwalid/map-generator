@@ -6,12 +6,16 @@ import {
   partitionNation,
   finalizeCity,
   cityNameFor,
+  setCityPopulation,
   colorForNewNation,
   refreshTerritorialWaters,
 } from "../game/generators";
 import type { City, Nation, RelationType } from "../game/WorldData";
 import { appendNation, blocOf, makeVassal, relation, releaseVassal, removeNation, setRelation } from "../game/politics";
 import { RELATION_COLORS } from "../game/generators/generateDiplomacy";
+import { nationFlagUrl } from "../game/flags";
+import { FlagEditor } from "./FlagEditor";
+import { createDropdown } from "./components/Dropdown";
 import { CELL_KM2 } from "../game/WorldData";
 import type { UIManager } from "./UIManager";
 import type { CityRenderer } from "./CityRenderer";
@@ -40,6 +44,7 @@ function compact(n: number): string {
 export class NationsManager {
   public hoveredNationIndex: number = -1;
   public hoveredProvinceIndex: number = -1;
+  public hoveredCityId: number = -1; // city row under the mouse in the list
   public selectedNationIndex: number = -1;
   public selectedProvinceIndex: number = -1;
   public isEditingNations: boolean = false;
@@ -60,6 +65,14 @@ export class NationsManager {
   private sortDesc = true;
   private stats: NationStats[] = [];
   private nationSubTabs: Map<number, "cities" | "provinces" | "diplomacy"> = new Map();
+  private flagEditor = new FlagEditor();
+
+  public editFlag(idx: number) {
+    this.flagEditor.open(this.generator.getWorld(), idx, () => {
+      this.renderList();
+      this.canvasManager.scheduleRender();
+    });
+  }
   private cityMap: Map<number, City> = new Map();
 
   private lastPaintedX: number | null = null;
@@ -265,8 +278,18 @@ export class NationsManager {
         }
       });
 
+      const flagImg = document.createElement("img");
+      flagImg.className = "nation-flag";
+      flagImg.src = nationFlagUrl(world, idx, 21, 14);
+      flagImg.title = "Edit flag";
+      flagImg.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.editFlag(idx);
+      });
+
       item.appendChild(toggleBtn);
       item.appendChild(swatchContainer);
+      item.appendChild(flagImg);
       item.appendChild(nameInput);
       item.appendChild(territoryCount);
       item.appendChild(deleteNationBtn);
@@ -619,22 +642,24 @@ export class NationsManager {
       .sort((a, b) => a.n.name.localeCompare(b.n.name));
 
     // Overlord picker (only independent nations, never its own vassals)
-    const ovRow = document.createElement("label");
+    const ovRow = document.createElement("div");
     ovRow.className = "diplo-row diplo-overlord";
     ovRow.innerHTML = `<span class="diplo-label">Overlord</span>`;
-    const ovSelect = document.createElement("select");
-    ovSelect.className = "diplo-select";
-    ovSelect.innerHTML =
-      `<option value="-1">Independent</option>` +
-      byName
-        .filter((e) => e.n.overlord === undefined)
-        .map((e) => `<option value="${e.i}" ${nation.overlord === e.i ? "selected" : ""}>${e.n.name}</option>`)
-        .join("");
-    ovSelect.addEventListener("change", () => {
-      const o = Number(ovSelect.value);
-      if (o < 0) releaseVassal(world, nationIdx);
-      else makeVassal(world, nationIdx, o);
-      changed();
+    const ovSelect = createDropdown({
+      className: "diplo-dd diplo-dd-wide",
+      value: String(nation.overlord ?? -1),
+      options: [
+        { value: "-1", label: "Independent" },
+        ...byName
+          .filter((e) => e.n.overlord === undefined)
+          .map((e) => ({ value: String(e.i), label: e.n.name, image: nationFlagUrl(world, e.i, 18, 12) })),
+      ],
+      onChange: (v) => {
+        const o = Number(v);
+        if (o < 0) releaseVassal(world, nationIdx);
+        else makeVassal(world, nationIdx, o);
+        changed();
+      },
     });
     ovRow.appendChild(ovSelect);
     wrap.appendChild(ovRow);
@@ -648,7 +673,7 @@ export class NationsManager {
         const chip = document.createElement("button");
         chip.className = "diplo-chip";
         chip.title = "Release";
-        chip.innerHTML = `<span class="diplo-dot" style="background:${world.nations[v].color}"></span>${world.nations[v].name}<span class="diplo-x">×</span>`;
+        chip.innerHTML = `<img class="diplo-flag" src="${nationFlagUrl(world, v, 15, 10)}" alt="">${world.nations[v].name}<span class="diplo-x">×</span>`;
         chip.addEventListener("click", () => {
           releaseVassal(world, v);
           changed();
@@ -668,22 +693,25 @@ export class NationsManager {
       const rel = relation(world, nationIdx, i);
       const row = document.createElement("div");
       row.className = "diplo-row";
-      row.innerHTML = `<span class="diplo-dot" style="background:${n.color}"></span><span class="diplo-name" title="${n.name}">${n.name}${neighbours.has(i) ? "<small> · border</small>" : ""}</span>`;
-      const sel = document.createElement("select");
-      sel.className = "diplo-select";
-      sel.style.color = RELATION_COLORS[rel];
-      const all = rel === "Vassal" || rel === "Overlord" ? [rel, ...options] : options;
-      sel.innerHTML = all
-        .map((r) => `<option value="${r}" ${r === rel ? "selected" : ""}>${r === "Vassal" ? "Our overlord" : r === "Overlord" ? "Our vassal" : r}</option>`)
-        .join("");
-      sel.addEventListener("change", () => {
-        // Leaving a vassal bond restores an own colour
-        if (rel === "Vassal") releaseVassal(world, nationIdx);
-        if (rel === "Overlord") releaseVassal(world, i);
-        setRelation(world, nationIdx, i, sel.value as RelationType);
-        changed();
+      row.innerHTML = `<img class="diplo-flag" src="${nationFlagUrl(world, i, 18, 12)}" alt=""><span class="diplo-name" title="${n.name}">${n.name}${neighbours.has(i) ? "<small> · border</small>" : ""}</span>`;
+      const all: RelationType[] = rel === "Vassal" || rel === "Overlord" ? [rel, ...options] : options;
+      const sel = createDropdown<RelationType>({
+        className: "diplo-dd",
+        tintLabel: true,
+        value: rel,
+        options: all.map((r) => ({
+          value: r,
+          label: r === "Vassal" ? "Our overlord" : r === "Overlord" ? "Our vassal" : r,
+          color: RELATION_COLORS[r],
+        })),
+        onChange: (v) => {
+          // Leaving a vassal bond restores an own colour
+          if (rel === "Vassal") releaseVassal(world, nationIdx);
+          if (rel === "Overlord") releaseVassal(world, i);
+          setRelation(world, nationIdx, i, v);
+          changed();
+        },
       });
-      sel.addEventListener("click", (e) => e.stopPropagation());
       row.appendChild(sel);
       row.addEventListener("mouseenter", () => {
         this.hoveredNationIndex = i;
@@ -810,8 +838,39 @@ export class NationsManager {
       nameInput.addEventListener("click", (e) => e.stopPropagation());
 
       const popInfo = document.createElement("span");
-      popInfo.className = "city-pop-info";
+      popInfo.className = "city-pop-info editable";
       popInfo.textContent = this.getPopulation(city);
+      popInfo.title = `${city.population.toLocaleString()} people · click to edit`;
+      popInfo.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const input = document.createElement("input");
+        input.type = "number";
+        input.min = "50";
+        input.step = "100";
+        input.className = "city-pop-input";
+        input.value = String(city.population);
+        popInfo.replaceWith(input);
+        input.focus();
+        input.select();
+        let done = false;
+        const commit = (save: boolean) => {
+          if (done) return;
+          done = true;
+          const v = Math.round(Number(input.value));
+          if (save && v > 0 && v !== city.population) {
+            setCityPopulation(city, v);
+            this.cityRenderer.invalidateCity(city);
+            this.canvasManager.scheduleRender();
+          }
+          this.renderList();
+        };
+        input.addEventListener("keydown", (ev) => {
+          if (ev.key === "Enter") commit(true);
+          if (ev.key === "Escape") commit(false);
+        });
+        input.addEventListener("blur", () => commit(true));
+        input.addEventListener("click", (ev) => ev.stopPropagation());
+      });
 
       const locateBtn = document.createElement("button");
       locateBtn.className = "city-locate-btn";
@@ -850,6 +909,16 @@ export class NationsManager {
       cityItem.appendChild(popInfo);
       cityItem.appendChild(locateBtn);
       cityItem.appendChild(deleteBtn);
+      // Highlight the settlement on the map while its row is hovered
+      cityItem.addEventListener("mouseenter", () => {
+        this.hoveredCityId = city.id;
+        this.canvasManager.scheduleRender();
+      });
+      cityItem.addEventListener("mouseleave", () => {
+        if (this.hoveredCityId !== city.id) return;
+        this.hoveredCityId = -1;
+        this.canvasManager.scheduleRender();
+      });
       container.appendChild(cityItem);
     });
 
@@ -1120,13 +1189,13 @@ export class NationsManager {
     const st = this.stats[idx];
     switch (this.sortKey) {
       case "population":
-        return st ? `${compact(st.population)} people` : "";
+        return st ? `${compact(st.population)} ppl` : "";
       case "cities":
-        return st ? `${st.cities} settlements` : "";
+        return st ? `${st.cities} towns` : "";
       case "wealth":
         return st ? `${compact(st.wealth)} wealth` : "";
       default:
-        return `${((this.nationLandArea[idx] || 0) * CELL_KM2).toLocaleString()} km²`;
+        return `${compact((this.nationLandArea[idx] || 0) * CELL_KM2)} km²`;
     }
   }
 

@@ -15,6 +15,7 @@ const ICONS = {
   home: icon(`<path d="M4 10 12 4l8 6v9a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1z"/>`),
   save: icon(`<path d="M5 3h11l3 3v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M7 3v5h8V3M7 21v-7h10v7"/>`),
   open: icon(`<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1"/><path d="M3 7v11a2 2 0 0 0 2 2h13l3-8H6l-3 8"/>`),
+  build: icon(`<path d="M3 21h18M5 21V10l7-5 7 5v11"/><path d="M10 21v-6h4v6"/>`),
   history: icon(`<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 3"/>`),
   play: icon(`<path d="M7 4.5v15l12-7.5z" fill="currentColor"/>`),
   pause: icon(`<path d="M7 4h3.5v16H7zM13.5 4H17v16h-3.5z" fill="currentColor"/>`),
@@ -67,6 +68,7 @@ export default function renderMainApp() {
         <button id="tab-generate" class="rail-btn active" title="World">${ICONS.world}<span>World</span></button>
         <button id="tab-layers" class="rail-btn" title="Layers">${ICONS.layers}<span>Layers</span></button>
         <button id="tab-nations" class="rail-btn" title="Nations">${ICONS.nations}<span>Nations</span></button>
+        <button id="tab-build" class="rail-btn" title="Build">${ICONS.build}<span>Build</span></button>
         <button id="tab-history" class="rail-btn" title="History">${ICONS.history}<span>History</span></button>
         <button id="tab-file" class="rail-btn" title="File">${ICONS.file}<span>File</span></button>
       </nav>
@@ -107,6 +109,21 @@ export default function renderMainApp() {
                   { value: "3200x1800", label: "XL" },
                 ],
                 "800x450",
+              )}
+            </div>
+
+            <div class="field">
+              <div class="field-label">Great powers</div>
+              ${picker(
+                "great-powers",
+                "segmented",
+                [
+                  { value: "0", label: "None" },
+                  { value: "1", label: "1" },
+                  { value: "2", label: "2" },
+                  { value: "3", label: "3" },
+                ],
+                "1",
               )}
             </div>
 
@@ -165,6 +182,7 @@ export default function renderMainApp() {
               ${toggle("layer-nations", "Nations", true)}
               ${toggle("layer-borders", "Borders", true)}
               ${toggle("layer-provinces", "Provinces", true)}
+              ${toggle("layer-flags", "Flags", true, "above nation names")}
             </div>
             <div class="group">
               <div class="group-title">Nature</div>
@@ -205,6 +223,11 @@ export default function renderMainApp() {
             <div id="nations-list" class="nations-list">
               <!-- Dynamically populated -->
             </div>
+          </section>
+
+          <!-- Build -->
+          <section id="content-build" class="tab-content">
+            <div id="build-panel" class="build-panel"></div>
           </section>
 
           <!-- History -->

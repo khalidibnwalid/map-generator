@@ -1,4 +1,5 @@
 import { TerrainSampler } from "../core/TerrainSampler";
+import type { FlagSpec } from "./flags";
 import type { Language } from "./names";
 import type { Poi } from "./generators/generatePOIs";
 import type { SeaRoute } from "./generators/generateSeaRoutes";
@@ -149,6 +150,7 @@ export interface Nation {
   religionId?: number;
   government?: string;
   overlord?: number; // index of the nation this one is a vassal of
+  flag?: FlagSpec; // custom or generated flag (see flags.ts)
 }
 
 export interface Province {
@@ -267,6 +269,7 @@ export class WorldData {
   public currents: CurrentField | null = null;
   public resources: Resource[] = [];
   public roadsEdited = false; // roads differ from what the seed generates
+  public poisEdited = false; // landmarks were placed, renamed or removed
   // relations[a][b], symmetric except Vassal/Overlord pairs
   public relations: RelationType[][] = [];
 

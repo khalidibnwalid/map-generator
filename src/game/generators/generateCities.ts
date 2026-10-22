@@ -7,16 +7,28 @@ import { yieldFrame } from "../util/grid";
 const CORE_DENSITY = 16000;
 
 export function cityRadiusM(population: number): number {
-  return Math.max(110, 1000 * Math.sqrt(population / CORE_DENSITY / Math.PI));
+  // Past ~120k people cities grow denser rather than wider (keeps layouts cheap)
+  const p = population <= 120000 ? population : 120000 * Math.sqrt(population / 120000);
+  return Math.max(110, 1000 * Math.sqrt(p / CORE_DENSITY / Math.PI));
+}
+
+// Sets a settlement's population; its tier and built-up size follow
+export function setCityPopulation(city: City, population: number) {
+  city.population = Math.max(50, Math.round(population));
+  city.size = city.population >= 60000 ? 2 : city.population >= 5000 ? 1 : 0;
+  city.radiusM = cityRadiusM(city.population);
 }
 
 // Fills in population/radius/port flags for a city placed at (x, y).
 export function finalizeCity(world: WorldData, city: City, density: number) {
   const r = hashU(Math.floor(city.x * 16), Math.floor(city.y * 16), world.seed);
   let pop: number;
-  if (city.size >= 2) pop = 35000 + density * 110000 * (0.6 + r);
-  else if (city.size === 1) pop = 4000 + density * 22000 * (0.6 + r);
-  else pop = 300 + density * 2200 * (0.5 + r);
+  // Settlement hierarchy follows how settled the land is: hamlets of a few
+  // hundred in sparse country, market towns of thousands in farmed land
+  const d = Math.max(0, density);
+  if (city.size >= 2) pop = 45000 + 150000 * Math.pow(d, 1.2) * (0.6 + r);
+  else if (city.size === 1) pop = 5000 + 30000 * Math.pow(d, 1.3) * (0.5 + r);
+  else pop = 250 + 9000 * Math.pow(d, 1.6) * (0.5 + r);
   if (city.isCapital) pop *= 1.8;
 
   const sampler = world.sampler;

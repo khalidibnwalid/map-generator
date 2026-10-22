@@ -207,7 +207,16 @@ export const TERRITORIAL_WATERS_CELLS = 4.4;
 export async function generateNations(ctx: GeneratorContext): Promise<void> {
   const { world, noise, width, height, onProgress } = ctx;
   const W = width;
+  const greatPowers = Math.max(0, Math.min(3, ctx.greatPowers ?? 1));
   world.nations = [];
+  // Names never repeat across the world
+  const used = new Set<string>();
+  const uniqueName = (make: () => string) => {
+    let name = make();
+    for (let k = 0; k < 12 && used.has(name); k++) name = make();
+    used.add(name);
+    return name;
+  };
 
   // Base number of nations based on map scale
   const numNations = Math.floor((width * height) / 6000);
@@ -250,7 +259,7 @@ export async function generateNations(ctx: GeneratorContext): Promise<void> {
     const lang = world.languages[cultureId];
     world.nations.push({
       id,
-      name: lang ? lang.nationName() : `Nation ${id + 1}`,
+      name: uniqueName(() => (lang ? lang.nationName() : `Nation ${id + 1}`)),
       color: NATION_PALETTE[id % NATION_PALETTE.length],
       capitalX: x,
       capitalY: y,
@@ -265,13 +274,72 @@ export async function generateNations(ctx: GeneratorContext): Promise<void> {
   onProgress?.(15);
   await yieldFrame();
 
+  // Great powers: realms on broad landmasses absorb the capitals around them
+  // and grow with a strong reach, ending up several times the size of the rest
+  const powers = new Set<number>();
+  if (greatPowers > 0 && world.nations.length >= 6) {
+    const count = greatPowers;
+    // Land within reach of each capital (sampled): coastal or island capitals
+    // can't become empires because the sea caps their growth
+    const R = minDistance * 2.5;
+    const step = Math.max(2, Math.floor(minDistance / 8));
+    const landAround = world.nations.map((n) => {
+      let c = 0;
+      for (let dy = -R; dy <= R; dy += step)
+        for (let dx = -R; dx <= R; dx += step) {
+          if (dx * dx + dy * dy > R * R) continue;
+          const y = Math.round(n.capitalY + dy);
+          if (y < 0 || y >= height) continue;
+          const x = (((Math.round(n.capitalX + dx)) % W) + W) % W;
+          if (!world.grid[x][y].isWater) c++;
+        }
+      return c;
+    });
+    const ranked = world.nations.map((_, i) => i).sort((a, b) => landAround[b] - landAround[a]);
+    const pool = ranked.slice(0, Math.max(count * 3, Math.ceil(ranked.length * 0.15)));
+    for (let k = 0; k < count * 12 && powers.size < count && pool.length; k++) {
+      const p = pool.splice(Math.floor(noise.random() * Math.min(pool.length, 3)), 1)[0];
+      const P = world.nations[p];
+      // Keep the powers apart
+      const farFromOthers = [...powers].every((q) => {
+        let dx = Math.abs(world.nations[q].capitalX - P.capitalX);
+        if (dx > W / 2) dx = W - dx;
+        return Math.hypot(dx, world.nations[q].capitalY - P.capitalY) > minDistance * 4;
+      });
+      if (farFromOthers) powers.add(p);
+    }
+    const absorb = new Set<number>();
+    for (const p of powers) {
+      const P = world.nations[p];
+      const reach = minDistance * (1.9 + noise.random() * 0.5);
+      world.nations.forEach((n, i) => {
+        if (i === p || powers.has(i)) return;
+        let dx = Math.abs(n.capitalX - P.capitalX);
+        if (dx > W / 2) dx = W - dx;
+        if (Math.hypot(dx, n.capitalY - P.capitalY) < reach) absorb.add(i);
+      });
+    }
+    if (absorb.size) {
+      const kept = world.nations.filter((_, i) => !absorb.has(i));
+      const keptPowers = new Set([...powers].map((p) => kept.indexOf(world.nations[p])));
+      world.nations = kept;
+      world.nations.forEach((n, i) => (n.id = i));
+      powers.clear();
+      keptPowers.forEach((p) => powers.add(p));
+    }
+  }
+  // Ordinary realms vary widely too (multiplicative reach: area ~ weight²)
+  const reachOf = world.nations.map((_, i) =>
+    powers.has(i) ? 1.8 + noise.random() * 0.3 : Math.exp((noise.random() - 0.5) * 0.85),
+  );
+
   // 2. Grow land borders over terrain (ridges and rivers make natural frontiers)
   const owner = growRegions(
     world,
     noise,
-    world.nations.map((n) => ({
+    world.nations.map((n, i) => ({
       cell: n.capitalY * W + n.capitalX,
-      weight: 0.75 + noise.random() * 0.6,
+      weight: reachOf[i],
     })),
     {
       mountainCost: 2.5,

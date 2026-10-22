@@ -1,5 +1,6 @@
 import type { MapGenerator, Preset } from "./MapGenerator";
 import type { City, Nation, Province, RelationType, Road, WorldData } from "./WorldData";
+import type { Poi } from "./generators/generatePOIs";
 
 // A .world file = gzip(JSON). Terrain is regenerated from seed/preset/size;
 // everything the user can edit is stored on top of it. Per-cell ownership is
@@ -13,6 +14,7 @@ interface WorldFileData {
   version: number;
   seed: number;
   preset: Preset;
+  greatPowers?: number; // absent in files from before the setting (none)
   width: number;
   height: number;
   nations: Nation[];
@@ -22,6 +24,7 @@ interface WorldFileData {
   nationGrid: string; // RLE + base64 of per-cell nation index
   provinceGrid: string;
   roads?: string; // only when edits changed the road network
+  pois?: Poi[]; // only when landmarks were edited
 }
 
 const RELATION_CODES: RelationType[] = ["Neutral", "Alliance", "Friendly", "Rival", "War", "Vassal", "Overlord"];
@@ -141,6 +144,7 @@ export async function saveWorld(generator: MapGenerator): Promise<Blob> {
     version: VERSION,
     seed: generator.currentSeed,
     preset: generator.currentPreset,
+    greatPowers: generator.greatPowers,
     width: W,
     height: world.height,
     nations: world.nations,
@@ -150,6 +154,7 @@ export async function saveWorld(generator: MapGenerator): Promise<Blob> {
     nationGrid: rleEncode(nationGrid),
     provinceGrid: rleEncode(provinceGrid),
     roads: world.roadsEdited ? encodeRoads(world.worldRoads) : undefined,
+    pois: world.poisEdited ? world.pois : undefined,
   };
   // Trim float noise from city coordinates to keep the file small
   const json = JSON.stringify(data, (_k, v) => (typeof v === "number" && !Number.isInteger(v) ? Math.round(v * 1000) / 1000 : v));
@@ -167,6 +172,7 @@ export async function loadWorld(
 
   generator.currentSeed = data.seed;
   generator.currentPreset = data.preset;
+  generator.greatPowers = data.greatPowers ?? 0;
   generator.setSize(data.width, data.height);
   await generator.generate(onProgress);
   const world = generator.getWorld();
@@ -181,6 +187,10 @@ export async function loadWorld(
   if (data.roads) {
     world.worldRoads = decodeRoads(data.roads);
     world.roadsEdited = true;
+  }
+  if (data.pois) {
+    world.pois = data.pois;
+    world.poisEdited = true;
   }
 
   const W = world.width;

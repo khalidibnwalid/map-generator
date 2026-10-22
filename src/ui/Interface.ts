@@ -17,7 +17,10 @@ import { refreshPickers } from "./components/MainApp";
 import { WorldData } from "../game/WorldData";
 import { RELATION_COLORS } from "../game/generators/generateDiplomacy";
 import { blocOf } from "../game/politics";
+import { nationFlagUrl } from "../game/flags";
+import { installSliders, syncSliders } from "./components/Slider";
 import { Simulation } from "../game/sim/Simulation";
+import { BuildTool } from "./BuildTool";
 
 export type ViewLayer =
   | "Biomes"
@@ -58,9 +61,11 @@ export class Interface {
     currents: false,
     resources: true,
     labels: true,
+    flags: true,
     cities: true,
   };
-  private activeTab: "generate" | "layers" | "nations" | "history" | "file" = "generate";
+  private activeTab: "generate" | "layers" | "nations" | "build" | "history" | "file" = "generate";
+  private buildTool!: BuildTool;
   private sim: Simulation | null = null;
   private simTimer = 0;
   private simSpeed = 2;
@@ -112,6 +117,15 @@ export class Interface {
         this.uiManager,
         this.cityRenderer,
       );
+      this.buildTool = new BuildTool(this.generator, this.nationsManager);
+      this.buildTool.onChanged = () => {
+        const sel = this.buildTool.selected;
+        if (sel?.type === "city") this.cityRenderer.invalidateCity(sel.city);
+        this.vectorState = null;
+        this.sim?.markEdited();
+        if (this.activeTab === "nations") this.nationsManager.renderList();
+        this.canvasManager.scheduleRender();
+      };
       this.nationsManager.onTerritoryChanged = () => {
         this.thematicFocus = -2;
         if (!this.inSimStep) this.sim?.markEdited();
@@ -139,6 +153,10 @@ export class Interface {
 
   private onWorldGenerated() {
     this.pauseSim();
+    if (this.buildTool) {
+      this.buildTool.selected = null;
+      this.buildTool.render();
+    }
     this.sim = null;
     this.renderSimPanel();
     const world = this.generator.getWorld();
@@ -168,7 +186,8 @@ export class Interface {
       if (
         this.nationsManager.cityPlacementMode !== -1 ||
         this.nationsManager.provincePlacementMode !== -1 ||
-        this.nationsManager.nationPlacementMode
+        this.nationsManager.nationPlacementMode ||
+        (this.activeTab === "build" && this.buildTool.tool)
       ) {
         this.canvasManager.canvas.style.cursor = "crosshair";
         this.updateTooltipBar();
@@ -199,7 +218,14 @@ export class Interface {
       const wy = Math.floor(fy);
       const x = ((fx % world.width) + world.width) % world.width;
 
-      if (this.nationsManager.nationPlacementMode) {
+      if (this.activeTab === "build" && wy >= 0 && wy < world.height) {
+        if (this.buildTool.tool) this.buildTool.place(x, fy);
+        else {
+          this.buildTool.selected = this.buildTool.pick(x, fy, cm.scale);
+          this.buildTool.render();
+        }
+        this.canvasManager.scheduleRender();
+      } else if (this.nationsManager.nationPlacementMode) {
         if (wy >= 0 && wy < world.height) {
           (async () => {
             await this.nationsManager.addNation(Math.floor(x), wy);
@@ -288,7 +314,24 @@ export class Interface {
       this.canvasManager.scheduleRender();
     });
 
+    // Right-click removes the object under the cursor while building
+    canvas.addEventListener("contextmenu", (e) => {
+      if (this.activeTab !== "build") return;
+      e.preventDefault();
+      const cm = this.canvasManager;
+      const rect = cm.canvas.getBoundingClientRect();
+      const world = this.generator.getWorld();
+      const fx = (e.clientX - rect.left - cm.offsetX) / cm.scale;
+      const fy = (e.clientY - rect.top - cm.offsetY) / cm.scale;
+      const x = ((fx % world.width) + world.width) % world.width;
+      this.buildTool.remove(this.buildTool.pick(x, fy, cm.scale));
+    });
+
     window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && this.buildTool?.tool) {
+        this.buildTool.setTool(null);
+        this.canvasManager.canvas.style.cursor = "grab";
+      }
       if (
         e.key === "Shift" &&
         this.nationsManager.isEditingNations &&
@@ -317,8 +360,8 @@ export class Interface {
     }
 
     // --- Rail tabs: one panel at a time; clicking the open one closes it ---
-    const tabs = ["generate", "layers", "nations", "history", "file"] as const;
-    const titles = { generate: "World", layers: "Layers", nations: "Nations", history: "History", file: "File" };
+    const tabs = ["generate", "layers", "nations", "build", "history", "file"] as const;
+    const titles = { generate: "World", layers: "Layers", nations: "Nations", build: "Build", history: "History", file: "File" };
     tabs.forEach((tab) => {
       const btn = document.getElementById(`tab-${tab}`);
       const content = document.getElementById(`content-${tab}`);
@@ -341,6 +384,12 @@ export class Interface {
           const title = document.getElementById("panel-title");
           if (title) title.textContent = titles[tab];
           if (tab === "nations") this.nationsManager.renderList();
+          if (tab === "build") this.buildTool.render();
+          else if (this.buildTool.tool || this.buildTool.selected) {
+            this.buildTool.tool = null;
+            this.buildTool.selected = null;
+            this.canvasManager.scheduleRender();
+          }
         });
       }
     });
@@ -430,6 +479,7 @@ export class Interface {
       "cities",
       "provinces",
       "labels",
+      "flags",
     ] as const;
     overlays.forEach((overlay) => {
       const cb = document.getElementById(`layer-${overlay}`) as HTMLInputElement;
@@ -477,6 +527,7 @@ export class Interface {
       const updateBrush = (val: number) => {
         this.nationsManager.brushSize = val;
         brushSlider.value = val.toString();
+        syncSliders(brushSlider.parentElement ?? document);
         brushInput.value = val.toString();
         this.canvasManager.scheduleRender();
       };
@@ -494,6 +545,7 @@ export class Interface {
     }
 
     seedInput.value = this.generator.currentSeed.toString();
+    installSliders();
 
     // --- Save / open ---
     const saveBtn = document.getElementById("save-world") as HTMLButtonElement | null;
@@ -523,9 +575,12 @@ export class Interface {
         this.canvasManager.offsetX = (window.innerWidth - W * fitScale) / 2;
         this.canvasManager.offsetY = 0;
         seedInput.value = this.generator.currentSeed.toString();
+    installSliders();
         presetSelect.value = this.generator.currentPreset;
         const sizeSelect = document.getElementById("size") as HTMLSelectElement | null;
         if (sizeSelect) sizeSelect.value = `${W}x${H}`;
+        const powersSelect = document.getElementById("great-powers") as HTMLSelectElement | null;
+        if (powersSelect) powersSelect.value = String(this.generator.greatPowers);
         refreshPickers();
         this.onWorldGenerated();
         this.nationsManager.renderList();
@@ -559,6 +614,8 @@ export class Interface {
 
       this.generator.currentPreset = p;
       this.generator.currentSeed = seedVal;
+      const powersSelect = document.getElementById("great-powers") as HTMLSelectElement | null;
+      if (powersSelect) this.generator.greatPowers = Number(powersSelect.value) || 0;
 
       if (sizeChanged) {
         this.generator.setSize(newW, newH);
@@ -895,7 +952,43 @@ export class Interface {
         theme,
         this.activeLayers.provinces,
         this.nationsManager.nationLandArea,
+        this.activeLayers.flags,
       );
+    }
+
+    if (this.activeTab === "build") this.buildTool.drawOverlay(ctx, scale, offsetX, offsetY, width);
+
+    // --- City hovered in the nations list ---
+    const hc = this.nationsManager.hoveredCityId >= 0 ? world.cities.find((c) => c.id === this.nationsManager.hoveredCityId) : undefined;
+    if (hc) {
+      const r = Math.max(9, Math.min(26, scale * 0.6));
+      ctx.save();
+      for (let copy = -1; copy <= 1; copy++) {
+        const sx = (hc.x + copy * world.width) * scale + offsetX;
+        const sy = hc.y * scale + offsetY;
+        if (sx < -50 || sx > width + 50 || sy < -50 || sy > height + 50) continue;
+        ctx.beginPath();
+        ctx.arc(sx, sy, r + 5, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(212, 168, 90, 0.22)";
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(sx, sy, r, 0, Math.PI * 2);
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = "#d4a85a";
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(sx, sy, 3.5, 0, Math.PI * 2);
+        ctx.fillStyle = "#fff4dc";
+        ctx.fill();
+        ctx.font = "600 12px Inter, system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.lineWidth = 3.5;
+        ctx.strokeStyle = "rgba(20, 16, 11, 0.85)";
+        ctx.strokeText(hc.name, sx, sy - r - 9);
+        ctx.fillStyle = "#fff4dc";
+        ctx.fillText(hc.name, sx, sy - r - 9);
+      }
+      ctx.restore();
     }
 
     // --- Brush Overlay ---
@@ -1146,7 +1239,13 @@ export class Interface {
     if (religion) lines.push(`Faith: ${religion.name}`);
     lines.push(`${cell.biome} · ${WorldData.elevationMeters(cell.elevation).toLocaleString()} m · ${WorldData.temperatureC(cell.temperature)}°C`);
     lines.push(`Density ~${peoplePerKm2(cell.populationDensity)} /km²${cell.hasRiver ? " · River" : ""}`);
-    this.tooltipManager.show(clientX, clientY, nation ? nation.name : "Unclaimed Land", lines.join("\n"));
+    this.tooltipManager.show(
+      clientX,
+      clientY,
+      nation ? nation.name : "Unclaimed Land",
+      lines.join("\n"),
+      nation ? nationFlagUrl(world, newHovered, 24, 16) : "",
+    );
   }
 
   private renderMapIndicators() {
