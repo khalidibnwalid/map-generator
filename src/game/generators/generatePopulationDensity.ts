@@ -141,7 +141,7 @@ export async function generatePopulationDensity(ctx: GeneratorContext) {
             if (!world.grid[x][y].isWater && maxDensity > 0) {
                 // Apply a gentle curve
                 const normalized = currentDensity[x][y] / maxDensity;
-                world.grid[x][y].populationDensity = Math.pow(normalized, 1.2);
+                world.grid[x][y].populationDensity = Math.pow(Math.max(0, normalized), 1.2); // harsh land can score below zero
             } else {
                 world.grid[x][y].populationDensity = 0;
             }

@@ -2,10 +2,31 @@ import type { MapGenerator } from "../game/MapGenerator";
 import type { CanvasManager } from "../core/CanvasManager";
 import type { GPURenderer } from "../core/GPURenderer";
 import { connectCity, partitionNation, finalizeCity, cityNameFor } from "../game/generators";
-import type { City } from "../game/WorldData";
+import type { City, Nation } from "../game/WorldData";
 import { CELL_KM2 } from "../game/WorldData";
 import type { UIManager } from "./UIManager";
 import type { CityRenderer } from "./CityRenderer";
+
+type SortKey = "name" | "area" | "population" | "cities" | "wealth";
+interface NationStats {
+  population: number;
+  cities: number;
+  wealth: number;
+}
+
+const SORTS: { key: SortKey; label: string }[] = [
+  { key: "name", label: "Name" },
+  { key: "area", label: "Area" },
+  { key: "population", label: "Pop." },
+  { key: "cities", label: "Cities" },
+  { key: "wealth", label: "Wealth" },
+];
+
+function compact(n: number): string {
+  if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + "k";
+  return Math.round(n).toString();
+}
 
 export class NationsManager {
   public hoveredNationIndex: number = -1;
@@ -27,6 +48,9 @@ export class NationsManager {
   public pendingCityIds: Set<number> = new Set();
   private expandedNations: Set<number> = new Set();
   private expandedProvinces: Set<number> = new Set();
+  private sortKey: SortKey = "area";
+  private sortDesc = true;
+  private stats: NationStats[] = [];
   private nationSubTabs: Map<number, "cities" | "provinces"> = new Map();
   private cityMap: Map<number, City> = new Map();
 
@@ -92,7 +116,67 @@ export class NationsManager {
     });
     listContainer.appendChild(addNationBtn);
 
-    world.nations.forEach((nation, idx) => {
+    // --- Sorting ---
+    this.stats = world.nations.map(() => ({ population: 0, cities: 0, wealth: 0 }));
+    for (const c of world.cities) {
+      const st = this.stats[c.nationIndex];
+      if (!st) continue;
+      st.population += c.population;
+      st.cities++;
+      st.wealth += c.wealth ?? 0;
+    }
+    const sortBar = document.createElement("div");
+    sortBar.className = "nation-sort";
+    for (const { key, label } of SORTS) {
+      const b = document.createElement("button");
+      b.className = `nation-sort-btn ${this.sortKey === key ? "active" : ""}`;
+      b.textContent = label;
+      b.title = `Sort by ${label.toLowerCase()}`;
+      b.addEventListener("click", () => {
+        if (this.sortKey === key) this.sortDesc = !this.sortDesc;
+        else {
+          this.sortKey = key;
+          this.sortDesc = key !== "name";
+        }
+        this.renderList();
+      });
+      sortBar.appendChild(b);
+    }
+    const dir = document.createElement("button");
+    dir.className = "nation-sort-dir";
+    dir.title = this.sortDesc ? "Descending" : "Ascending";
+    dir.textContent = this.sortDesc ? "↓" : "↑";
+    dir.addEventListener("click", () => {
+      this.sortDesc = !this.sortDesc;
+      this.renderList();
+    });
+    sortBar.appendChild(dir);
+    listContainer.appendChild(sortBar);
+
+    const order = world.nations.map((_, i) => i);
+    const value = (i: number): number | string => {
+      switch (this.sortKey) {
+        case "name":
+          return world.nations[i].name.toLowerCase();
+        case "area":
+          return this.nationLandArea[i] || 0;
+        case "population":
+          return this.stats[i].population;
+        case "cities":
+          return this.stats[i].cities;
+        case "wealth":
+          return this.stats[i].wealth;
+      }
+    };
+    order.sort((a, b) => {
+      const va = value(a);
+      const vb = value(b);
+      const c = typeof va === "string" ? va.localeCompare(vb as string) : (va as number) - (vb as number);
+      return this.sortDesc ? -c : c;
+    });
+
+    order.forEach((idx) => {
+      const nation = world.nations[idx];
       const item = document.createElement("div");
       item.className = `nation-item ${this.selectedNationIndex === idx ? "selected" : ""}`;
       item.dataset.index = idx.toString();
@@ -147,8 +231,7 @@ export class NationsManager {
       const territoryCount = document.createElement("span");
       territoryCount.className = "nation-territory-count";
       territoryCount.id = `nation-territory-count-${idx}`;
-      const areaKm2 = (this.nationLandArea[idx] || 0) * CELL_KM2;
-      territoryCount.textContent = `${areaKm2.toLocaleString()} km²`;
+      territoryCount.textContent = this.metricText(idx);
 
       const deleteNationBtn = document.createElement("button");
       deleteNationBtn.className = "nation-delete-btn";
@@ -513,7 +596,7 @@ export class NationsManager {
         loadingText.className = "loading-text";
         loadingText.textContent = " Founding...";
         loadingText.style.fontSize = "0.7rem";
-        loadingText.style.color = "var(--accent-bright)";
+        loadingText.style.color = "var(--accent)";
         cityItem.appendChild(loadingText);
         container.appendChild(cityItem);
         return;
@@ -646,14 +729,10 @@ export class NationsManager {
       this.renderList();
       return;
     }
-    const before = new Set(world.provinces);
     // Regrow this nation's provinces with the new seat added, so the new
-    // province takes its natural, terrain-following share of territory.
+    // province takes its natural, terrain-following share of territory (and a
+    // name from the local culture and geography).
     partitionNation(world, this.generator.getNoise(), nationIndex, [{ x, y, cityId: -1 }], true);
-    const created = world.provinces.find(
-      (p) => !before.has(p) && p.nationIndex === nationIndex && p.seatX === x && p.seatY === y,
-    );
-    if (created && created.capitalCityId < 0) created.name = "New Province";
 
     this.gpuRenderer.updateProvincesDataTexture(world);
     this.renderList();
@@ -694,12 +773,18 @@ export class NationsManager {
     const startX = x;
     const startY = y;
 
-    const newNation = {
+    // Name, culture and faith come from the people living at the founding spot
+    const here = world.getCell(startX, startY);
+    const lang = world.languages[here?.cultureIndex ?? 0];
+    const newNation: Nation = {
       id: 0,
-      name: `New Nation`,
+      name: lang ? lang.nationName() : "New Nation",
       color: this.hslToHex(Math.floor(Math.random() * 360), 70, 60),
       capitalX: startX,
       capitalY: startY,
+      cultureId: here?.cultureIndex ?? 0,
+      religionId: here?.religionIndex ?? 0,
+      government: lang ? lang.government(0.1, false) : "Kingdom",
     };
 
     // 1. Shift existing nations and re-index them
@@ -807,7 +892,7 @@ export class NationsManager {
     const cell = world.getCell(x, y);
     const newCity: City = {
       id: world.cities.length,
-      name: isCapital ? nation.name : cityNameFor(world, x, y, Math.random),
+      name: cityNameFor(world, x, y, Math.random),
       x,
       y,
       nationIndex,
@@ -930,15 +1015,27 @@ export class NationsManager {
     this.canvasManager.scheduleRender();
   }
 
+  // The figure shown on a nation row follows the active sort
+  private metricText(idx: number): string {
+    const st = this.stats[idx];
+    switch (this.sortKey) {
+      case "population":
+        return st ? `${compact(st.population)} people` : "";
+      case "cities":
+        return st ? `${st.cities} settlements` : "";
+      case "wealth":
+        return st ? `${compact(st.wealth)} wealth` : "";
+      default:
+        return `${((this.nationLandArea[idx] || 0) * CELL_KM2).toLocaleString()} km²`;
+    }
+  }
+
   private updateNationUI(idx: number) {
     if (idx < 0) return;
     const territoryCount = document.getElementById(
       `nation-territory-count-${idx}`,
     );
-    if (territoryCount) {
-      const areaKm2 = (this.nationLandArea[idx] || 0) * CELL_KM2;
-      territoryCount.textContent = `${areaKm2.toLocaleString()} km²`;
-    }
+    if (territoryCount) territoryCount.textContent = this.metricText(idx);
 
     if (this.expandedNations.has(idx)) {
       const container = document.getElementById(`city-list-container-${idx}`);

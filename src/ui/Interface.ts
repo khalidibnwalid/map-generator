@@ -13,6 +13,7 @@ import { nearestPoi, POI_LABELS } from "../game/generators/generatePOIs";
 import { saveWorld, loadWorld } from "../game/WorldFile";
 import { RESOURCE_INFO, WEALTH_TIERS } from "../game/generators/generateEconomy";
 import { THEMES } from "./themes";
+import { refreshPickers } from "./components/MainApp";
 import { WorldData } from "../game/WorldData";
 import { RELATION_COLORS } from "../game/generators/generateDiplomacy";
 
@@ -57,7 +58,7 @@ export class Interface {
     labels: true,
     cities: true,
   };
-  private activeTab: "generate" | "layers" | "nations" = "generate";
+  private activeTab: "generate" | "layers" | "nations" | "file" = "generate";
   private theme: MapTheme = "Realistic";
   private thematic: ThematicMode = "none";
   private thematicFocus = -2; // nation the diplomacy texture was built for
@@ -299,19 +300,24 @@ export class Interface {
     const uiPanel = document.getElementById("ui-panel") as HTMLDivElement;
 
     if (toggleBtn && uiPanel) {
-      toggleBtn.addEventListener("click", () => {
-        uiPanel.classList.toggle("collapsed");
-        toggleBtn.textContent = uiPanel.classList.contains("collapsed") ? "[+]" : "[-]";
-      });
+      toggleBtn.addEventListener("click", () => uiPanel.classList.add("collapsed"));
     }
 
-    // --- Tab Handling ---
-    const tabs = ["generate", "layers", "nations"] as const;
+    // --- Rail tabs: one panel at a time; clicking the open one closes it ---
+    const tabs = ["generate", "layers", "nations", "file"] as const;
+    const titles = { generate: "World", layers: "Layers", nations: "Nations", file: "File" };
     tabs.forEach((tab) => {
       const btn = document.getElementById(`tab-${tab}`);
       const content = document.getElementById(`content-${tab}`);
       if (btn && content) {
         btn.addEventListener("click", () => {
+          const collapsed = uiPanel?.classList.contains("collapsed");
+          if (this.activeTab === tab && !collapsed) {
+            uiPanel?.classList.add("collapsed");
+            btn.classList.remove("active");
+            return;
+          }
+          uiPanel?.classList.remove("collapsed");
           this.activeTab = tab;
           tabs.forEach((t) => {
             document.getElementById(`tab-${t}`)?.classList.remove("active");
@@ -319,9 +325,33 @@ export class Interface {
           });
           btn.classList.add("active");
           content.classList.add("active");
+          const title = document.getElementById("panel-title");
+          if (title) title.textContent = titles[tab];
           if (tab === "nations") this.nationsManager.renderList();
         });
       }
+    });
+
+    // --- Map controls ---
+    const zoomBy = (factor: number) => {
+      const cm = this.canvasManager;
+      const cx = cm.getWidth() / 2;
+      const cy = cm.getHeight() / 2;
+      cm.offsetX = cx - (cx - cm.offsetX) * factor;
+      cm.offsetY = cy - (cy - cm.offsetY) * factor;
+      cm.scale *= factor;
+      cm.scheduleRender();
+    };
+    document.getElementById("zoom-in")?.addEventListener("click", () => zoomBy(1.6));
+    document.getElementById("zoom-out")?.addEventListener("click", () => zoomBy(1 / 1.6));
+    document.getElementById("zoom-reset")?.addEventListener("click", () => {
+      const W = this.generator.getWidth();
+      const H = this.generator.getHeight();
+      const fit = window.innerHeight / H;
+      this.canvasManager.scale = fit;
+      this.canvasManager.offsetX = (window.innerWidth - W * fit) / 2;
+      this.canvasManager.offsetY = 0;
+      this.canvasManager.scheduleRender();
     });
 
     // --- Base Layer (Radios) ---
@@ -462,6 +492,7 @@ export class Interface {
         presetSelect.value = this.generator.currentPreset;
         const sizeSelect = document.getElementById("size") as HTMLSelectElement | null;
         if (sizeSelect) sizeSelect.value = `${W}x${H}`;
+        refreshPickers();
         this.onWorldGenerated();
         this.nationsManager.renderList();
       } catch (err) {
@@ -734,14 +765,14 @@ export class Interface {
         ctx.beginPath();
         const radius = (this.nationsManager.brushSize * scale) / 2;
         ctx.arc(sx, sy, radius, 0, Math.PI * 2);
-        ctx.strokeStyle = "rgba(0, 255, 170, 0.8)";
+        ctx.strokeStyle = "rgba(212, 168, 90, 0.9)";
         ctx.lineWidth = 2;
         ctx.setLineDash([5, 5]);
         ctx.stroke();
 
         ctx.beginPath();
         ctx.arc(sx, sy, 2, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(0, 255, 170, 0.8)";
+        ctx.fillStyle = "rgba(212, 168, 90, 0.9)";
         ctx.fill();
         ctx.restore();
       }

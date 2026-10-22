@@ -265,8 +265,11 @@ export function partitionNation(
   lists = keep.map((e) => e.l);
   seats = keep.map((e) => e.s);
 
-  // Replace this nation's provinces
+  // Replace this nation's provinces, keeping names/colours of surviving seats
   const nation = world.nations[nationId];
+  const previous = new Map<string, Province>();
+  for (const p of world.provinces)
+    if (p.nationIndex === nationId && p.seatX !== undefined) previous.set(`${p.seatX},${p.seatY}`, p);
   const removed = new Set(world.provinces.filter((p) => p.nationIndex === nationId).map((p) => p.id));
   const others = world.provinces.filter((p) => p.nationIndex !== nationId);
   const remap = new Map<number, number>();
@@ -314,10 +317,11 @@ export function partitionNation(
         return cell?.provinceIndex === id;
       })
       .reduce((s, c) => s + c.population, 0);
+    const old = previous.get(`${seat.x},${seat.y}`);
     const p: Province = {
       id,
-      name: provinceName(world, seatCity, cells, noise.random),
-      color: tint(nation.color, (noise.random() - 0.5) * 0.3),
+      name: old?.name ?? provinceName(world, seatCity, cells, noise.random),
+      color: old?.color ?? tint(nation.color, (noise.random() - 0.5) * 0.3),
       nationIndex: nationId,
       capitalCityId: seatCity ? seatCity.id : -1,
       seatX: seat.x,
