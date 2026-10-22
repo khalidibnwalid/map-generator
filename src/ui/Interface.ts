@@ -12,7 +12,8 @@ import { PoiRenderer } from "./PoiRenderer";
 import { nearestPoi, POI_LABELS } from "../game/generators/generatePOIs";
 import { saveWorld, loadWorld } from "../game/WorldFile";
 import { RESOURCE_INFO, WEALTH_TIERS } from "../game/generators/generateEconomy";
-import { THEMES } from "./themes";
+import { THEMES, NIGHT_THEMES } from "./themes";
+import { MONTHS, seasonFlood } from "../core/Season";
 import { refreshPickers } from "./components/MainApp";
 import { WorldData } from "../game/WorldData";
 import { RELATION_COLORS } from "../game/generators/generateDiplomacy";
@@ -63,7 +64,16 @@ export class Interface {
     labels: true,
     flags: true,
     cities: true,
+    season: false,
+    night: false,
+    weather: false,
   };
+  private seasonMonth = new Date().getMonth(); // 0 = January, fractional between months
+  private lightsKey = ""; // world state the night-lights texture was built for
+  private weatherTimer = 0;
+  private weatherStart = performance.now();
+  // Soft warm disc, drawn additively over detailed cities at night
+  private glowSprite: HTMLCanvasElement | null = null;
   private activeTab: "generate" | "layers" | "nations" | "build" | "history" | "file" = "generate";
   private buildTool!: BuildTool;
   private sim: Simulation | null = null;
@@ -122,6 +132,7 @@ export class Interface {
         const sel = this.buildTool.selected;
         if (sel?.type === "city") this.cityRenderer.invalidateCity(sel.city);
         this.vectorState = null;
+        this.lightsKey = "";
         this.sim?.markEdited();
         if (this.activeTab === "nations") this.nationsManager.renderList();
         this.canvasManager.scheduleRender();
@@ -168,6 +179,7 @@ export class Interface {
     this.nationsManager.buildCache();
     this.cityRenderer.invalidateAll();
     this.vectorState = null;
+    this.lightsKey = "";
     this.thematicFocus = -2;
     this.updateLegend();
     this.canvasManager.scheduleRender();
@@ -480,16 +492,46 @@ export class Interface {
       "provinces",
       "labels",
       "flags",
+      "season",
+      "night",
+      "weather",
     ] as const;
+    const seasonRow = document.getElementById("season-row");
     overlays.forEach((overlay) => {
       const cb = document.getElementById(`layer-${overlay}`) as HTMLInputElement;
       if (cb) {
         cb.addEventListener("change", () => {
           this.activeLayers[overlay] = cb.checked;
+          if (overlay === "season") seasonRow?.classList.toggle("off", !cb.checked);
+          if (overlay === "weather") this.setWeatherTimer(cb.checked);
           this.canvasManager.scheduleRender();
         });
       }
     });
+
+    // --- Seasons: month slider (moving it turns seasons on) ---
+    const monthSlider = document.getElementById("season-month") as HTMLInputElement | null;
+    const monthLabel = document.getElementById("season-month-label");
+    const seasonCb = document.getElementById("layer-season") as HTMLInputElement | null;
+    if (monthSlider) {
+      const showMonth = () => {
+        if (monthLabel) monthLabel.textContent = MONTHS[Math.round(this.seasonMonth) % 12];
+      };
+      monthSlider.value = String(this.seasonMonth);
+      syncSliders(seasonRow ?? document);
+      showMonth();
+      seasonRow?.classList.toggle("off", !this.activeLayers.season);
+      monthSlider.addEventListener("input", () => {
+        this.seasonMonth = Number(monthSlider.value) || 0;
+        showMonth();
+        if (!this.activeLayers.season && seasonCb) {
+          seasonCb.checked = true;
+          this.activeLayers.season = true;
+          seasonRow?.classList.remove("off");
+        }
+        this.canvasManager.scheduleRender();
+      });
+    }
 
     const btnEditNations = document.getElementById("btn-edit-nations") as HTMLButtonElement;
     if (btnEditNations) {
@@ -903,37 +945,18 @@ export class Interface {
       this.gpuCanvas.height = height;
     }
 
-    const hoveredNation =
-      this.nationsManager.hoveredNationIndex < world.nations.length ? this.nationsManager.hoveredNationIndex : -1;
-
-    this.gpuRenderer.hoverBloc = hoveredNation >= 0 ? blocOf(world, hoveredNation) : [];
-    this.gpuRenderer.render(
-      width,
-      height,
-      world.width,
-      world.height,
-      scale,
-      offsetX,
-      offsetY,
-      this.activeLayers,
-      hoveredNation,
-      this.nationsManager.hoveredProvinceIndex,
-      world.seed,
-      this.theme,
-      this.thematic,
-      hoveredNation >= 0
-        ? (hexRgb(world.nations[hoveredNation].color).map((c) => c / 255) as [number, number, number])
-        : [1, 1, 1],
-      isInteracting,
-    );
+    const night = this.activeLayers.night;
+    if (night) this.refreshLights(world);
+    this.renderTerrain(world, width, height, scale, offsetX, offsetY, isInteracting);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
 
-    const theme = THEMES[this.theme];
+    const theme = night ? NIGHT_THEMES[this.theme] : THEMES[this.theme];
     this.drawVectorLayers(ctx, world, width, height, scale, offsetX, offsetY, isInteracting);
     if (this.activeLayers.cities) {
       this.cityRenderer.hoveredNationIndex = this.nationsManager.hoveredNationIndex;
       this.cityRenderer.render(ctx, world, width, height, scale, offsetX, offsetY, this.theme, isInteracting);
     }
+    if (night) this.drawNightOverlay(ctx, world, width, height, scale, offsetX, offsetY);
     if (this.activeLayers.labels) {
       if (this.activeLayers.rivers) {
         this.networkRenderer.renderRiverLabels(ctx, world, width, height, scale, offsetX, offsetY, theme);
@@ -1023,6 +1046,114 @@ export class Interface {
     this.renderMapIndicators();
   }
 
+  private renderTerrain(
+    world: WorldData,
+    width: number,
+    height: number,
+    scale: number,
+    offsetX: number,
+    offsetY: number,
+    isInteracting: boolean,
+  ) {
+    const hoveredNation =
+      this.nationsManager.hoveredNationIndex < world.nations.length ? this.nationsManager.hoveredNationIndex : -1;
+
+    this.gpuRenderer.hoverBloc = hoveredNation >= 0 ? blocOf(world, hoveredNation) : [];
+    this.gpuRenderer.season = this.seasonMonth / 12;
+    this.gpuRenderer.time = (performance.now() - this.weatherStart) / 1000;
+    this.gpuRenderer.render(
+      width,
+      height,
+      world.width,
+      world.height,
+      scale,
+      offsetX,
+      offsetY,
+      this.activeLayers,
+      hoveredNation,
+      this.nationsManager.hoveredProvinceIndex,
+      world.seed,
+      this.theme,
+      this.thematic,
+      hoveredNation >= 0
+        ? (hexRgb(world.nations[hoveredNation].color).map((c) => c / 255) as [number, number, number])
+        : [1, 1, 1],
+      isInteracting,
+    );
+  }
+
+  // Clouds drift at ~12 fps by redrawing only the WebGL terrain; the overlay
+  // canvas above it is left alone. Runs only while Weather is on.
+  private setWeatherTimer(on: boolean) {
+    if (on && !this.weatherTimer) {
+      this.weatherTimer = window.setInterval(() => {
+        const cm = this.canvasManager;
+        if (document.hidden || cm.isInteracting || this.generator.isGenerating) return;
+        const w = this.gpuCanvas.width;
+        const h = this.gpuCanvas.height;
+        if (!w || !h) return;
+        this.renderTerrain(this.generator.getWorld(), w, h, cm.scale, cm.offsetX, cm.offsetY, false);
+      }, 80);
+    } else if (!on && this.weatherTimer) {
+      clearInterval(this.weatherTimer);
+      this.weatherTimer = 0;
+    }
+  }
+
+  // Rebuilds the night-lights texture when cities or roads changed
+  private refreshLights(world: WorldData) {
+    const key = `${world.seed}|${world.width}|${world.cities.length}|${world.worldRoads.length}`;
+    if (key === this.lightsKey) return;
+    this.lightsKey = key;
+    this.gpuRenderer.updateLightsTexture(world);
+  }
+
+  // Night over the canvas layers drawn so far (rivers, roads, cities): dim
+  // them toward the moonlit palette, then light detailed cities from within.
+  private drawNightOverlay(
+    ctx: CanvasRenderingContext2D,
+    world: WorldData,
+    width: number,
+    height: number,
+    scale: number,
+    offsetX: number,
+    offsetY: number,
+  ) {
+    ctx.save();
+    ctx.globalCompositeOperation = "source-atop";
+    ctx.fillStyle = "rgba(8, 12, 30, 0.58)";
+    ctx.fillRect(0, 0, width, height);
+    if (this.activeLayers.cities) {
+      if (!this.glowSprite) {
+        const s = (this.glowSprite = document.createElement("canvas"));
+        s.width = s.height = 128;
+        const g = s.getContext("2d")!;
+        const grad = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+        grad.addColorStop(0, "rgba(255, 196, 120, 0.5)");
+        grad.addColorStop(0.5, "rgba(255, 160, 80, 0.22)");
+        grad.addColorStop(1, "rgba(255, 140, 60, 0)");
+        g.fillStyle = grad;
+        g.fillRect(0, 0, 128, 128);
+      }
+      ctx.globalCompositeOperation = "lighter";
+      const mapW = world.width * scale;
+      for (const c of world.cities) {
+        const r = (c.radiusM / 5000) * scale * 1.7;
+        if (r < 8) continue;
+        const sy = c.y * scale + offsetY;
+        if (sy < -r || sy > height + r) continue;
+        // First copy of the wrapped world that could be on screen
+        let sx = c.x * scale + offsetX;
+        sx -= Math.ceil((sx + r) / mapW) * mapW - mapW;
+        for (; sx - r < width; sx += mapW) {
+          ctx.globalAlpha = Math.min(1, (r - 8) / 12);
+          ctx.drawImage(this.glowSprite, sx - r, sy - r, r * 2, r * 2);
+        }
+      }
+    }
+    ctx.restore();
+  }
+
   private drawVectorLayers(
     ctx: CanvasRenderingContext2D,
     world: WorldData,
@@ -1037,6 +1168,7 @@ export class Interface {
     const key = [
       this.theme,
       L.rivers, L.currents, L.searoutes, L.roads, L.resources, L.pois,
+      L.season ? this.seasonMonth.toFixed(2) : "-",
       world.seed, world.width, world.worldRoads.length, world.cities.length, width, height,
     ].join("|");
     const st = this.vectorState;
@@ -1055,7 +1187,13 @@ export class Interface {
     v.setTransform(1, 0, 0, 1, 0, 0);
     v.clearRect(0, 0, width, height);
     const theme = THEMES[this.theme];
-    if (L.rivers) this.networkRenderer.renderRivers(v, world, width, height, scale, offsetX, offsetY, theme);
+    if (L.rivers) {
+      // Rivers run a little fuller in spring melt and the tropical wet season
+      const month = this.seasonMonth;
+      const H = world.height;
+      const swell = L.season ? (y: number) => 1 + 0.35 * seasonFlood(month, (y / H) * 2 - 1) : undefined;
+      this.networkRenderer.renderRivers(v, world, width, height, scale, offsetX, offsetY, theme, swell);
+    }
     if (L.currents) this.networkRenderer.renderCurrents(v, world, width, height, scale, offsetX, offsetY);
     if (L.searoutes) this.networkRenderer.renderSeaRoutes(v, world, width, height, scale, offsetX, offsetY, theme);
     if (L.roads) this.networkRenderer.renderRoads(v, world, width, height, scale, offsetX, offsetY, theme);

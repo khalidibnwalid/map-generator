@@ -52,6 +52,13 @@ uniform int u_hoverBlocCount;
 uniform bool u_showIce;
 uniform bool u_fast; // view is moving: skip fine detail, keep full resolution
 uniform float u_hoverProvinceIndex;
+uniform bool u_seasonOn;
+uniform float u_season;         // 0..1 through the year, 0 = mid-January
+uniform bool u_night;
+uniform sampler2D u_lightsTex;  // R city glow, G road threads, B harbour lights
+uniform vec3 u_lightMask;       // city, road and harbour light switches
+uniform bool u_weather;
+uniform float u_time;           // seconds; drifts the clouds
 
 out vec4 fragColor;
 
@@ -160,6 +167,66 @@ vec3 leafColor(int b) {
   if (b == 22 || b == 28) return vec3(0.33, 0.38, 0.18);   // acacia / scrub
   if (b == 14) return vec3(0.22, 0.36, 0.14);
   return vec3(0.19, 0.34, 0.15);                           // broadleaf
+}
+
+// Season at signed latitude latS (-1 north pole .. 1 south pole); the
+// hemispheres run six months apart and all terms are smooth in u_season.
+// x: winter (-1 high summer .. 1 deep winter), y: autumn colour (0..1),
+// z: spring thaw (0..1), w: seasonal amplitude (0 at the equator).
+// Keep seasonFlood in sync with Season.ts.
+vec4 seasonState(float latS) {
+  float m = u_season * 12.0;
+  float a = 6.2831853 / 12.0;
+  float hs = smoothstep(-0.03, 0.03, latS);
+  float winter = cos(a * (m - 0.4)) * (1.0 - 2.0 * hs); // coldest in late January
+
+  float autumn = mix(pow(max(0.0, cos(a * (m - 9.0))), 3.0), pow(max(0.0, cos(a * (m - 3.0))), 3.0), hs);
+  float thaw = mix(pow(max(0.0, cos(a * (m - 3.5))), 3.0), pow(max(0.0, cos(a * (m - 9.5))), 3.0), hs);
+  return vec4(winter, autumn, thaw, smoothstep(0.12, 0.5, abs(latS)));
+}
+float tropicBand(float latS) {
+  float a = abs(latS);
+  return smoothstep(0.03, 0.12, a) * (1.0 - smoothstep(0.35, 0.55, a));
+}
+float seasonFlood(vec4 ss, float latS) {
+  return max(ss.z * ss.w, max(0.0, -ss.x) * tropicBand(latS) * 0.6);
+}
+vec3 relum(vec3 target, float lum) {
+  return target * (lum / max(0.01, dot(target, vec3(0.3, 0.55, 0.15))));
+}
+// Foliage through the year: temperate leaves turn ochre and fall, grass
+// cures to straw, evergreens darken; tropical savannas and dry forests
+// green up in the wet season and parch in the dry one. Deserts are untouched.
+vec3 seasonFoliage(vec3 c, int b, vec4 ss, float latS, float vary) {
+  float lum = dot(c, vec3(0.3, 0.55, 0.15));
+  float decid = (b == 11 || b == 30) ? 0.85 : (b == 12 || b == 21 || b == 27 || b == 31) ? 0.4 : 0.0;
+  float grass = (b == 10 || b == 35 || b == 23 || b == 24) ? 0.7 : (b == 9 ? 0.45 : 0.0);
+  float bare = smoothstep(0.35, 0.85, ss.x);
+  float autumn = ss.y * (1.0 - bare) * (0.6 + 0.8 * vary) * ss.w;
+  float spring = ss.z * (1.0 - bare) * ss.w;
+  bare *= ss.w;
+  if (decid > 0.0) {
+    // Stands turn at different times: gold, orange and russet patches
+    vec3 ochre = mix(vec3(0.74, 0.56, 0.22), vec3(0.66, 0.32, 0.13), clamp(vary * 2.0 - 0.5, 0.0, 1.0));
+    c = mix(c, relum(ochre, lum * 1.15), min(1.0, autumn) * decid * 0.85);
+    c = mix(c, relum(vec3(0.47, 0.42, 0.36), lum * 1.1), bare * decid);
+    c = mix(c, c * vec3(1.08, 1.12, 0.84), spring * decid * 0.5);
+  }
+  if (grass > 0.0) {
+    c = mix(c, relum(vec3(0.76, 0.66, 0.38), lum * 1.15), min(1.0, autumn) * grass);
+    c = mix(c, relum(vec3(0.56, 0.51, 0.41), lum), bare * grass);
+    c = mix(c, c * vec3(1.0, 1.1, 0.85), spring * grass * 0.5);
+  }
+  if (b == 19) c *= 1.0 - 0.15 * bare;
+  // Mediterranean scrub: green winters, parched summers
+  if (b == 28) c = mix(c, relum(vec3(0.74, 0.64, 0.40), lum * 1.1), max(0.0, -ss.x) * ss.w * 0.6);
+  float dry = (b == 22 || b == 10) ? 1.0 : (b == 14 ? 0.5 : 0.0);
+  if (dry > 0.0) {
+    float tr = tropicBand(latS) * dry;
+    c = mix(c, relum(vec3(0.76, 0.66, 0.40), lum * 1.1), max(0.0, ss.x) * tr * 0.55);
+    c = mix(c, c * vec3(0.85, 1.08, 0.80), max(0.0, -ss.x) * tr * 0.6);
+  }
+  return c;
 }
 
 float decodeIdx(vec4 color);
@@ -387,6 +454,10 @@ void main() {
   float nx = wxwy.x / u_worldSize.x;
   nx = nx - floor(nx);
   float ny = clamp(wxwy.y / u_worldSize.y, 0.0, 1.0);
+  float latS = ny * 2.0 - 1.0; // -1 north pole .. 1 south pole
+  vec4 ss = u_seasonOn ? seasonState(latS) : vec4(0.0);
+  // Spring melt and the tropical wet season swell lakes and widen wetlands
+  float flood = u_seasonOn ? seasonFlood(ss, latS) : 0.0;
 
   vec4 data = texture(u_mapTexture, vec2(nx, ny));
   float elevation = data.r;
@@ -420,6 +491,12 @@ void main() {
     lakeF = wsum > 0.0 ? dot(isL, wts) / wsum : (isL.x + isL.y + isL.z + isL.w > 0.0 ? 1.0 : 0.0);
     waterD = dot(vec4(t00.a, t10.a, t01.a, t11.a), wts) * 8.0;
   }
+  if (u_seasonOn) {
+    coast -= flood * 0.15 * lakeF;
+    coastW = max(fwidth(coast), 1e-5);
+    landMask = smoothstep(-0.5, 0.5, coast / coastW);
+    isLand = coast > 0.0;
+  }
   bool lake = lakeF > 0.5;
   float coastLine = 1.0 - smoothstep(0.5, 1.5, abs(coast) / coastW);
 
@@ -447,11 +524,13 @@ void main() {
   float qt = clamp(temperature + t_noise + fine * 0.04, 0.0, 1.0);
   float qm = clamp(moisture + m_noise + fine * 0.05, 0.0, 1.0);
   float slope = length(vec2(hR - hL, hU - hD)) * 0.5;
-  float qw = waterD + fine * 0.35 + (fbm(wxwy * 4.0) - 0.5) * 0.3;
+  float qw = waterD - flood * 0.12 + fine * 0.35 + (fbm(wxwy * 4.0) - 0.5) * 0.3;
   int bIdx = classify(qe, qt, qm, slope, qw, coast);
   // A second, offset sample: where they disagree the two biomes interleave
   int bIdx2 = u_fast ? bIdx : classify(qe - fine * 0.01, qt - fine * 0.03, qm - fine * 0.04, slope, qw + 0.15, coast);
   float detail = fbm(wxwy * 0.05);
+  // Patchiness for seasonal foliage (which stands turn first)
+  float sVary = u_seasonOn ? fbm(wxwy * 0.7) * 0.6 + detail * 0.4 : 0.0;
   float ppm = u_scale / CELL_M; // pixels per meter
 
   vec3 color = vec3(0.0);
@@ -558,13 +637,16 @@ void main() {
         color *= 0.8 + 0.35 * mot;
       }
 
+      if (u_seasonOn) color = seasonFoliage(color, bIdx, ss, latS, sVary);
+
       // Settled land reads slightly warmer/cleared (cities draw real fields)
       if (isArable(bIdx)) color = mix(color, color * vec3(1.06, 1.04, 0.9), smoothstep(0.35, 0.8, populationDensity) * 0.5);
 
       if (elevation > 0.7) {
         color = mix(color, vec3(0.4, 0.35, 0.3), (detail - 0.5) * 0.5);
         if (elevation > 0.85) {
-          float snowBlend = smoothstep(0.85, 0.9, elevation + (detail - 0.5) * 0.2);
+          // Peak snow shrinks a little in summer when seasons are on (ss = 0 otherwise)
+          float snowBlend = smoothstep(0.85, 0.9, elevation + (detail - 0.5) * 0.2 - max(0.0, -ss.x) * ss.w * 0.03);
           color = mix(color, vec3(0.9, 0.9, 0.95), snowBlend);
         }
       } else {
@@ -595,6 +677,7 @@ void main() {
           vec4 t = trees(ci, l, density);
           float fade = smoothstep(0.06, 0.2, ppm);
           vec3 leaf = leafColor(bIdx);
+          if (u_seasonOn) leaf = seasonFoliage(leaf, bIdx, ss, latS, sVary);
           vec3 canopy = mix(leaf * 0.7, leaf * 1.45 + 0.03, t.y);
           canopy *= 1.0 + 0.08 * t.w * smoothstep(0.4, 1.5, ppm);
           color = mix(color, color * 0.62, t.z * (1.0 - t.x) * fade * 0.8);
@@ -635,14 +718,29 @@ void main() {
     color = mix(other, color, own);
   }
 
+  // ===================== SEASONAL SNOW =====================
+  if (u_seasonOn && !u_showElevation) {
+    // This month's temperature: winter cools high latitudes most, and the
+    // snow line sits lower on mountains
+    float tEff = qt - 0.2 * ss.x * ss.w - max(0.0, elevation - 0.65) * 0.4 + (detail - 0.5) * 0.06;
+    float snow = smoothstep(0.32, 0.25, tEff) * max(landMask, isletMask);
+    if (snow > 0.0) {
+      if (u_theme == 1) color = mix(color, vec3(0.97, 0.96, 0.93), snow * 0.45);
+      else if (u_theme == 2) color = mix(color, vec3(0.985, 0.99, 1.0), snow * 0.6);
+      else color = mix(color, vec3(0.93, 0.95, 0.99) * mix(1.0, shade, 0.8), snow * 0.85 * (1.0 - 0.3 * treeDensity(bIdx)));
+    }
+  }
+
   // ===================== POLAR ICE =====================
   if (u_showIce && !u_showElevation) {
     // Caps follow latitude, as around the poles of a globe; the edge undulates
     // with low-frequency noise only, so it reads as a smooth ice margin.
     float lat = abs(wxwy.y / u_worldSize.y - 0.5) * 2.0;
     float wob = (fbm(vec2(wxwy.x * 0.012, lat * 3.0)) - 0.5) * 0.07 + (fbm(wxwy * 0.05) - 0.5) * 0.025;
-    float seaEdge = 0.875 + wob;
-    float landEdge = 0.80 + wob - max(0.0, elevation - 0.6) * 0.5;
+    // Seasons: pack ice spreads toward the equator in winter, retreats in summer
+    float iceShift = ss.x * ss.w;
+    float seaEdge = 0.875 + wob - 0.05 * iceShift;
+    float landEdge = 0.80 + wob - max(0.0, elevation - 0.6) * 0.5 - 0.025 * iceShift;
     float px2lat = 2.0 / (u_worldSize.y * u_scale) * 1.5; // ~1.5 px soft edge
     if (!isLand) {
       float pack = smoothstep(seaEdge - 0.004 - px2lat, seaEdge + 0.004 + px2lat, lat);
@@ -810,6 +908,52 @@ void main() {
       float hw = mix(mix(h00, h10, noisy_fxy.x), mix(h01, h11, noisy_fxy.x), noisy_fxy.y);
       color += vec3(0.2) * landMask * hw;
     }
+  }
+
+  // ===================== WEATHER =====================
+  float cloud = 0.0;
+  if (u_weather && !u_showElevation) {
+    // Broad weather systems drifting east plus finer, faster-changing wisps;
+    // they thin out at city scale where they would only blur the view
+    vec2 cp = (wxwy + vec2(0.45, 0.1) * u_time) * 0.04;
+    float wisp = fbm(cp * 2.7 + vec2(u_time * 0.02, -u_time * 0.006));
+    float zf = 1.0 - smoothstep(30.0, 160.0, u_scale);
+    cloud = smoothstep(0.56, 0.74, fbm(cp) * 0.75 + wisp * 0.25) * zf;
+    // Shadows fall south-east of each cloud
+    float shadow = smoothstep(0.54, 0.72, fbm(cp - vec2(0.1)) * 0.75 + wisp * 0.25) * zf;
+    color *= 1.0 - 0.3 * shadow * (1.0 - cloud);
+    color = mix(color, vec3(0.96, 0.97, 0.99), cloud * 0.6);
+  }
+
+  // ===================== NIGHT =====================
+  if (u_night && !u_showElevation) {
+    float water = 1.0 - max(landMask, isletMask);
+    float lum = dot(color, vec3(0.299, 0.587, 0.114));
+    vec3 desat = mix(vec3(lum), color, 0.4);
+    // Moonlight: dark, desaturated and blue-shifted; the sea a deep navy
+    vec3 night = desat * vec3(0.26, 0.32, 0.50);
+    vec3 sea = vec3(0.012, 0.028, 0.07) + desat * vec3(0.02, 0.04, 0.10);
+    float ripple = fbm(wxwy * vec2(0.9, 2.4));
+    if (u_scale > 8.0 && !u_fast) ripple = mix(ripple, detailNoise(ci, l, 16, 0x77u) * 0.5 + 0.5, smoothstep(8.0, 32.0, u_scale) * 0.6);
+    float glint = smoothstep(0.62, 0.8, ripple) * smoothstep(0.35, 0.75, fbm(wxwy * 0.02 + 7.0));
+    sea += vec3(0.05, 0.065, 0.09) * glint;
+    night = mix(night, sea, water * 0.9);
+
+    // Lights pre-splatted per world: warm pools by population, beaded road
+    // threads (gone once roads are drawn for real) and harbour reflections
+    vec3 lt = texture(u_lightsTex, vec2(nx, ny)).rgb;
+    // The pools are kilometres wide; up close they shrink to a faint halo and
+    // the overlay lights each drawn city instead
+    float closeUp = 1.0 - 0.85 * smoothstep(10.0, 60.0, u_scale);
+    lt.rb *= closeUp;
+    float cityL = lt.r * u_lightMask.x;
+    float roadL = lt.g * u_lightMask.y * (1.0 - smoothstep(10.0, 60.0, u_scale)) * (0.55 + 0.9 * noise(wxwy * 1.5));
+    float portL = lt.b * u_lightMask.z * water * (0.6 + 0.8 * ripple);
+    vec3 glow = vec3(1.0, 0.68, 0.33) * cityL * 1.15
+              + vec3(1.0, 0.93, 0.80) * smoothstep(0.55, 0.95, cityL) * 0.55
+              + vec3(1.0, 0.76, 0.42) * roadL * 0.8
+              + vec3(1.0, 0.85, 0.60) * portL * 0.6;
+    color = night + glow * (1.0 - 0.6 * cloud);
   }
 
   if (u_theme == 1) {

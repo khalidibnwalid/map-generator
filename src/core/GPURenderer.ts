@@ -24,6 +24,11 @@ export interface RenderLayers {
   nations: boolean;
   borders: boolean;
   provinces: boolean;
+  cities?: boolean;
+  roads?: boolean;
+  season?: boolean; // month comes from GPURenderer.season
+  night?: boolean;
+  weather?: boolean; // clouds drift with GPURenderer.time
 }
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -47,6 +52,9 @@ export class GPURenderer {
   private nearestLandWorld: WorldData | null = null;
   private texSize = { w: 0, h: 0 };
   public hoverBloc: number[] = []; // nations highlighted with the hovered one
+  public season = 0; // 0..1 through the year (0 = mid-January), when layers.season
+  public time = 0; // seconds, when layers.weather
+  private lightsTexture: WebGLTexture | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     const gl = canvas.getContext("webgl2", {
@@ -353,6 +361,77 @@ export class GPURenderer {
     });
   }
 
+  // Night lights as soft Gaussian splats into a low-res texture, built once per
+  // world (and when cities or roads change) so the shader only samples it.
+  // R: city pools by population, G: threads along roads and highways,
+  // B: harbour lights, used on water only.
+  public updateLightsTexture(world: WorldData) {
+    const W = world.width;
+    const H = world.height;
+    const f = Math.min(2, 2048 / W); // texels per cell
+    const LW = Math.round(W * f);
+    const LH = Math.round(H * f);
+    const acc = new Float32Array(LW * LH * 3);
+    const splat = (cx: number, cy: number, sigma: number, amp: number, ch: number) => {
+      const s = Math.max(0.6, sigma * f);
+      const r = Math.ceil(s * 3);
+      const px = cx * f - 0.5;
+      const py = cy * f - 0.5;
+      const inv = 1 / (2 * s * s);
+      const y0 = Math.max(0, Math.floor(py - r));
+      const y1 = Math.min(LH - 1, Math.ceil(py + r));
+      const x0 = Math.floor(px - r);
+      const x1 = Math.ceil(px + r);
+      for (let y = y0; y <= y1; y++) {
+        const dy2 = (y - py) * (y - py);
+        const row = y * LW;
+        for (let x = x0; x <= x1; x++) {
+          const v = amp * Math.exp(-((x - px) * (x - px) + dy2) * inv);
+          if (v < 1e-3) continue;
+          acc[(row + (((x % LW) + LW) % LW)) * 3 + ch] += v;
+        }
+      }
+    };
+    for (const c of world.cities) {
+      const pop = Math.max(50, c.population);
+      const sigma = Math.min(1.6, 0.35 + 0.9 * Math.sqrt(pop / 100000));
+      let amp = 0.12 + 0.88 * Math.min(1, Math.max(0, Math.log10(pop / 200) / 3.4));
+      if (c.isCapital) amp *= 1.3;
+      splat(c.x, c.y, sigma, amp, 0);
+      splat(c.x, c.y, sigma * 0.35, amp * 0.8, 0); // bright core
+      if (c.size >= 1) splat(c.x, c.y, sigma * 3, amp * 0.08, 0); // light pollution
+      if (c.isPort) splat(c.x, c.y, sigma * 1.2 + 0.4, 0.35 + 0.5 * amp, 2);
+    }
+    // Overlapping splats along a line sum to ~amp * s * sqrt(2π) / step
+    const roadSigma = 0.45;
+    const sT = Math.max(0.6, roadSigma * f);
+    const step = 0.7; // texels
+    for (const road of world.worldRoads) {
+      if (road.tier < 1) continue;
+      const amp = ((road.tier >= 2 ? 0.3 : 0.18) * step) / (sT * 2.5066);
+      const P = road.points;
+      for (let i = 0; i + 1 < P.length; i++) {
+        const dx = P[i + 1].x - P[i].x;
+        const dy = P[i + 1].y - P[i].y;
+        const n = Math.max(1, Math.ceil((Math.hypot(dx, dy) * f) / step));
+        for (let k = 0; k < n; k++) splat(P[i].x + (dx * k) / n, P[i].y + (dy * k) / n, roadSigma, amp, 1);
+      }
+    }
+    const data = new Uint8Array(LW * LH * 4);
+    for (let i = 0, o = 0; i < acc.length; i += 3, o += 4) {
+      data[o] = Math.round(255 * (1 - Math.exp(-acc[i] * 1.2)));
+      data[o + 1] = Math.round(255 * (1 - Math.exp(-acc[i + 1] * 1.2)));
+      data[o + 2] = Math.round(255 * (1 - Math.exp(-acc[i + 2] * 1.2)));
+      data[o + 3] = 255;
+    }
+    const gl = this.gl;
+    if (!this.lightsTexture) {
+      this.lightsTexture = this.makeTexture(gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT); // the world wraps east-west
+    }
+    this.upload(this.lightsTexture, LW, LH, data);
+  }
+
   public render(
     width: number,
     height: number,
@@ -386,6 +465,7 @@ export class GPURenderer {
     bind(3, this.provincesTexture, "u_provincesTexture");
     bind(4, this.thematicTexture, "u_thematicTex");
     bind(5, this.nationIdxTexture, "u_nationIdxTex");
+    bind(6, this.lightsTexture, "u_lightsTex");
 
     // Split the camera into an integer cell near the screen centre plus a
     // small local offset so the shader keeps sub-meter precision.
@@ -433,6 +513,13 @@ export class GPURenderer {
     gl.uniform1i(this.u("u_showIce"), layers.ice ? 1 : 0);
     gl.uniform1i(this.u("u_fast"), fast ? 1 : 0);
     gl.uniform1f(this.u("u_hoverProvinceIndex"), hoverProvinceIndex);
+    gl.uniform1i(this.u("u_seasonOn"), layers.season ? 1 : 0);
+    gl.uniform1f(this.u("u_season"), this.season);
+    gl.uniform1i(this.u("u_night"), layers.night ? 1 : 0);
+    const cityLights = layers.cities === false ? 0 : 1;
+    gl.uniform3f(this.u("u_lightMask"), cityLights, layers.roads === false ? 0 : 1, cityLights);
+    gl.uniform1i(this.u("u_weather"), layers.weather ? 1 : 0);
+    gl.uniform1f(this.u("u_time"), this.time);
 
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     gl.bindVertexArray(null);

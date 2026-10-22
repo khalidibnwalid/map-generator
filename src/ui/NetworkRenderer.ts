@@ -75,6 +75,7 @@ export class NetworkRenderer {
     offsetX: number,
     offsetY: number,
     theme: CanvasTheme,
+    widthScale?: (y: number) => number, // seasonal swelling by latitude
   ) {
     const v = viewRect(width, height, scale, offsetX, offsetY);
     const ppm = scale / CELL_METERS;
@@ -97,7 +98,8 @@ export class NetworkRenderer {
       copies(boxOf(r), world.width, v, 1, (dx) => {
         for (let i = 0; i < r.points.length - 1; i += CHUNK) {
           const mid = Math.min(r.points.length - 1, i + (CHUNK >> 1));
-          const w = Math.max(minPx * Math.min(1, 0.4 + 0.12 * scale), r.widths[mid] * ppm);
+          let w = Math.max(minPx * Math.min(1, 0.4 + 0.12 * scale), r.widths[mid] * ppm);
+          if (widthScale) w *= widthScale(r.points[mid].y);
           const wq = w < 4 ? Math.round(w * 4) / 4 : Math.round(w);
           const key = wq + "|" + a;
           let bt = batches.get(key);
@@ -134,7 +136,7 @@ export class NetworkRenderer {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.font = `italic 500 ${Math.round(Math.min(15, 10 + scale * 0.3))}px ${theme.font}`;
     ctx.fillStyle = theme.river;
-    ctx.strokeStyle = "rgba(255,255,255,0.55)";
+    ctx.strokeStyle = theme.riverHalo;
     ctx.lineWidth = 3;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";

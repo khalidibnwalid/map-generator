@@ -200,6 +200,16 @@ export default function renderMainApp() {
               ${toggle("layer-labels", "Labels", true)}
             </div>
             <div class="group">
+              <div class="group-title">Atmosphere</div>
+              ${toggle("layer-season", "Seasons", false, "snow, foliage & sea ice by month")}
+              <div class="season-row" id="season-row">
+                <input type="range" id="season-month" min="0" max="11" step="0.05" value="0" aria-label="Month" />
+                <span id="season-month-label" class="season-month">January</span>
+              </div>
+              ${toggle("layer-night", "Night", false, "moonlight & city lights")}
+              ${toggle("layer-weather", "Weather", false, "drifting clouds")}
+            </div>
+            <div class="group">
               <div class="group-title">Data overlays</div>
               ${toggle("layer-heatmap", "Temperature", false)}
               ${toggle("layer-population", "Population", false)}
