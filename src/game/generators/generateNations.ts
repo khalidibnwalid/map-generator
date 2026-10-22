@@ -1,147 +1,124 @@
 import type { GeneratorContext } from "./types";
+import { hslHex } from "../names";
+import { growRegions, fillUnreached, warpOwnerArray } from "../util/regionGrow";
+import { distanceTransform, yieldFrame } from "../util/grid";
+
+// Territorial waters reach ~22 km (12 nautical miles) offshore.
+export const TERRITORIAL_WATERS_CELLS = 4.4;
 
 export async function generateNations(ctx: GeneratorContext): Promise<void> {
   const { world, noise, width, height, onProgress } = ctx;
+  const W = width;
+  const N = width * height;
   world.nations = [];
 
   // Base number of nations based on map scale
   const numNations = Math.floor((width * height) / 6000);
+  const minDistance = 40 * (width / 800);
 
-  const names = [
-    "Aethelgard",
-    "Vanguard",
-    "Karak",
-    "Zion",
-    "Oblivion",
-    "Nebula",
-    "Cynosure",
-    "Dominion",
-    "Republic of Terra",
-    "Empire of the Sun",
-    "Zenith",
-    "Apex",
-    "Nadir",
-    "Horizon",
-    "Meridian",
-    "Equinox",
-    "Solstice",
-    "Oasis",
-    "Sanctuary",
-    "Bastion",
-    "Citadel",
-    "Aegis",
-    "Vortex",
-  ];
-
-  // 1. Pick Capitals
-  let capitalAttempts = 0;
-  while (world.nations.length < numNations && capitalAttempts < 2000) {
-    if (capitalAttempts % 100 === 0) {
-      onProgress?.((capitalAttempts / 2000) * 20); // 0-20% sub-progress for capitals
-      await new Promise((resolve) => requestAnimationFrame(resolve));
+  // 1. Pick Capitals (bucketed so the spacing check stays cheap on large maps)
+  const bucket = Math.max(8, Math.floor(minDistance));
+  const bucketsX = Math.ceil(W / bucket);
+  const buckets = new Map<number, number[]>();
+  const tooClose = (x: number, y: number) => {
+    const bx = Math.floor(x / bucket);
+    const by = Math.floor(y / bucket);
+    for (let oy = -1; oy <= 1; oy++) {
+      for (let ox = -1; ox <= 1; ox++) {
+        const key = (by + oy) * bucketsX + ((bx + ox + bucketsX) % bucketsX);
+        for (const id of buckets.get(key) ?? []) {
+          const n = world.nations[id];
+          let dx = Math.abs(x - n.capitalX);
+          if (dx > W / 2) dx = W - dx;
+          if (Math.hypot(dx, y - n.capitalY) < minDistance) return true;
+        }
+      }
     }
+    return false;
+  };
 
+  let capitalAttempts = 0;
+  while (world.nations.length < numNations && capitalAttempts < 4000) {
+    capitalAttempts++;
     const x = Math.floor(noise.random() * width);
     const y = Math.floor(noise.random() * height);
     const cell = world.grid[x][y];
+    if (cell.isWater || cell.elevation >= 0.7) continue;
+    // Prefer habitable land for capitals
+    if (noise.random() > 0.25 + cell.populationDensity) continue;
+    if (tooClose(x, y)) continue;
 
-    if (!cell.isWater && cell.elevation < 0.7) {
-      let tooClose = false;
-      for (const n of world.nations) {
-        let dx = Math.abs(x - n.capitalX);
-        if (dx > width / 2) dx = width - dx;
-        const dy = Math.abs(y - n.capitalY);
-        const minDistance = 40 * (width / 800);
-        if (Math.hypot(dx, dy) < minDistance) {
-          tooClose = true;
-          break;
-        }
-      }
-
-      if (!tooClose) {
-        const hue = Math.floor(noise.random() * 360);
-        const s = 0.8;
-        const l = 0.6;
-        const k = (n: number) => (n + hue / 30) % 12;
-        const a = s * Math.min(l, 1 - l);
-        const f = (n: number) =>
-          l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
-        const toHex = (c: number) => {
-          const hex = Math.round(c * 255).toString(16);
-          return hex.length === 1 ? "0" + hex : hex;
-        };
-        const colorHex = `#${toHex(f(0))}${toHex(f(8))}${toHex(f(4))}`;
-        let name = names[Math.floor(noise.random() * names.length)];
-        const suffix =
-          String.fromCharCode(65 + Math.floor(noise.random() * 26)) +
-          String.fromCharCode(65 + Math.floor(noise.random() * 26));
-        name = `${name}-${suffix}`;
-
-        world.nations.push({
-          id: world.nations.length,
-          name,
-          color: colorHex,
-          capitalX: x,
-          capitalY: y,
-        });
-      }
-    }
-    capitalAttempts++;
+    const id = world.nations.length;
+    const cultureId = cell.cultureIndex ?? 0;
+    const lang = world.languages[cultureId];
+    const hue = Math.floor(noise.random() * 360);
+    world.nations.push({
+      id,
+      name: lang ? lang.nationName() : `Nation ${id + 1}`,
+      color: hslHex(hue, 0.8, 0.6),
+      capitalX: x,
+      capitalY: y,
+      cultureId,
+      religionId: cell.religionIndex ?? 0,
+    });
+    const key = Math.floor(y / bucket) * bucketsX + Math.floor(x / bucket);
+    const list = buckets.get(key) ?? [];
+    list.push(id);
+    buckets.set(key, list);
   }
+  onProgress?.(15);
+  await yieldFrame();
 
-  // 2. Expand Borders
-  const invResScale = 800 / width;
-  for (let x = 0; x < width; x++) {
-    if (x % 50 === 0) {
-      onProgress?.(20 + (x / width) * 60); // 20-80% sub-progress for expansion
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-    }
+  // 2. Grow land borders over terrain (ridges and rivers make natural frontiers)
+  const owner = growRegions(
+    world,
+    noise,
+    world.nations.map((n) => ({
+      cell: n.capitalY * W + n.capitalX,
+      weight: 0.75 + noise.random() * 0.6,
+    })),
+    {
+      mountainCost: 2.5,
+      slopeCost: 1.2,
+      riverCost: 1.5,
+      noiseAmp: 0.35,
+      noiseScale: 0.02,
+      noiseOffset: 0,
+    },
+  );
+  // Islands without a capital become overseas territories of the nearest state
+  fillUnreached(world, owner);
+  warpOwnerArray(world, noise, owner, 5 * (width / 800));
+  onProgress?.(55);
+  await yieldFrame();
+
+  // 3. Territorial waters: each water cell belongs to the nearest coast's
+  // owner within the limit; lakes are internal waters of their shores.
+  const landSite = new Uint8Array(N);
+  for (let i = 0; i < N; i++) if (owner[i] >= 0 && world.waterType[i] === 0) landSite[i] = 1;
+  const { dist, nearest } = distanceTransform(W, height, landSite);
+  for (let i = 0; i < N; i++) {
+    if (world.waterType[i] === 0) continue;
+    const isLake = world.waterType[i] === 2;
+    owner[i] =
+      nearest[i] >= 0 && (isLake || dist[i] <= TERRITORIAL_WATERS_CELLS)
+        ? owner[nearest[i]]
+        : -1;
+  }
+  onProgress?.(75);
+  await yieldFrame();
+
+  for (let x = 0; x < W; x++) {
     for (let y = 0; y < height; y++) {
-      const cell = world.grid[x][y];
-      // Remove water check to allow full map coverage for noisy coastlines
-      // if (cell.isWater) continue;
-
-      let minScore = Infinity;
-      let closestNation = -1;
-      const noiseScale = 0.02 * invResScale;
-      const noiseStrength = 25 * (width / 800);
-      const noiseX =
-        noise.fbmCylinder(x, y, width, 4, 0.5, 2.0, noiseScale) * noiseStrength;
-      const noiseY =
-        noise.fbmCylinder(x + 5000, y + 5000, width, 4, 0.5, 2.0, noiseScale) *
-        noiseStrength;
-
-      const px = x + noiseX;
-      const py = y + noiseY;
-
-      for (const n of world.nations) {
-        let dx = Math.abs(px - n.capitalX);
-        while (dx > width) dx -= width;
-        if (dx > width / 2) dx = width - dx;
-        let dy = py - n.capitalY;
-        let dist = Math.hypot(dx, dy);
-        if (dist < minScore) {
-          minScore = dist;
-          closestNation = n.id;
-        }
-      }
-      cell.nationIndex = closestNation;
+      world.grid[x][y].nationIndex = owner[y * W + x];
     }
   }
 
-  // 3. Pre-compute border flags
+  // 4. Pre-compute land border flags
   for (let x = 0; x < width; x++) {
-    if (x % 100 === 0) {
-      onProgress?.(80 + (x / width) * 20); // 80-100% sub-progress for borders
-      await new Promise((resolve) => requestAnimationFrame(resolve));
-    }
     for (let y = 0; y < height; y++) {
       const cell = world.grid[x][y];
-      if (
-        cell.isWater ||
-        cell.nationIndex === undefined ||
-        cell.nationIndex < 0
-      ) {
+      if (cell.isWater || cell.nationIndex === undefined || cell.nationIndex < 0) {
         cell.isNationBorder = false;
         continue;
       }
@@ -164,4 +141,5 @@ export async function generateNations(ctx: GeneratorContext): Promise<void> {
       cell.isNationBorder = border;
     }
   }
+  onProgress?.(100);
 }

@@ -1,123 +1,188 @@
-import type { GeneratorContext } from './types';
+import type { GeneratorContext } from "./types";
+import type { City, WorldData } from "../WorldData";
+import { hashU } from "../../core/FieldNoise";
+import { yieldFrame } from "../util/grid";
+
+// Built-up density of a pre-industrial core, people per km²
+const CORE_DENSITY = 16000;
+
+export function cityRadiusM(population: number): number {
+  return Math.max(110, 1000 * Math.sqrt(population / CORE_DENSITY / Math.PI));
+}
+
+// Fills in population/radius/port flags for a city placed at (x, y).
+export function finalizeCity(world: WorldData, city: City, density: number) {
+  const r = hashU(Math.floor(city.x * 16), Math.floor(city.y * 16), world.seed);
+  let pop: number;
+  if (city.size >= 2) pop = 35000 + density * 110000 * (0.6 + r);
+  else if (city.size === 1) pop = 4000 + density * 22000 * (0.6 + r);
+  else pop = 300 + density * 2200 * (0.5 + r);
+  if (city.isCapital) pop *= 1.8;
+
+  const sampler = world.sampler;
+  let nearSea = false;
+  for (let a = 0; a < 8 && !nearSea; a++) {
+    const ang = (a / 8) * Math.PI * 2;
+    if (sampler.coastField(city.x + Math.cos(ang) * 0.6, city.y + Math.sin(ang) * 0.6, 4) < 0)
+      nearSea = true;
+  }
+  const cell = world.getCell(city.x, city.y);
+  if (nearSea) pop *= 1.25;
+  if (cell?.hasRiver) pop *= 1.15;
+
+  city.population = Math.round(pop);
+  city.radiusM = cityRadiusM(city.population);
+  city.isPort = nearSea;
+  city.seed = (hashU(city.id + 1, Math.floor(city.x * 97), world.seed) * 4294967296) >>> 0;
+}
+
+export function cityNameFor(world: WorldData, x: number, y: number, rand: () => number): string {
+  const cell = world.getCell(x, y);
+  const lang = world.languages[cell?.cultureIndex ?? 0];
+  if (lang) return lang.townName();
+  return `Settlement ${Math.floor(rand() * 1000)}`;
+}
 
 export async function generateCities(ctx: GeneratorContext): Promise<void> {
-    const { world, noise, width, height, onProgress } = ctx;
-    world.cities = [];
+  const { world, noise, width, height, onProgress } = ctx;
+  world.cities = [];
 
-    const cityPrefixes = ['Al', 'El', 'Fort', 'New', 'Port', 'San', 'Vel', 'Mar', 'Dun', 'Kas', 'Ark', 'Tor'];
-    const citySuffixes = ['haven', 'holm', 'ford', 'burg', 'ton', 'gate', 'deep', 'reach', 'fell', 'moor', 'vale', 'mere', 'cross', 'bay', 'point'];
-    const makeName = () => {
-        const p = cityPrefixes[Math.floor(noise.random() * cityPrefixes.length)];
-        const s = citySuffixes[Math.floor(noise.random() * citySuffixes.length)];
-        return `${p}${s}`;
+  // Bucket land cells by nation in a single pass
+  const byNation: { x: number; y: number; density: number }[][] = world.nations.map(() => []);
+  for (let x = 0; x < width; x++) {
+    for (let y = 0; y < height; y++) {
+      const cell = world.grid[x][y];
+      const n = cell.nationIndex ?? -1;
+      if (cell.isWater || n < 0 || n >= byNation.length) continue;
+      byNation[n].push({ x, y, density: cell.populationDensity });
+    }
+  }
+
+  // Capitals sit on the most populous spot of each nation
+  for (const nation of world.nations) {
+    const cells = byNation[nation.id];
+    let best = { x: nation.capitalX, y: nation.capitalY, density: -1 };
+    for (const c of cells) if (c.density > best.density) best = c;
+    nation.capitalX = best.x + 0.5;
+    nation.capitalY = best.y + 0.5;
+    const city: City = {
+      id: world.cities.length,
+      name: cityNameFor(world, best.x, best.y, noise.random),
+      x: best.x + 0.5,
+      y: best.y + 0.5,
+      nationIndex: nation.id,
+      isCapital: true,
+      size: 2,
+      population: 0,
+      radiusM: 0,
+      seed: 0,
     };
+    finalizeCity(world, city, Math.max(0, best.density));
+    world.cities.push(city);
+  }
 
-    // First: add capitals as cities
-    for (const nation of world.nations) {
-        let bestCapX = nation.capitalX;
-        let bestCapY = nation.capitalY;
-        let maxPop = -1;
-
-        for (let x = 0; x < width; x++) {
-            for (let y = 0; y < height; y++) {
-                const cell = world.grid[x][y];
-                if (!cell.isWater && cell.nationIndex === nation.id) {
-                    if (cell.populationDensity > maxPop) {
-                        maxPop = cell.populationDensity;
-                        bestCapX = x;
-                        bestCapY = y;
-                    }
-                }
-            }
+  const resScale = width / 800;
+  const minCityDist = 12 * resScale; // towns & cities
+  const minVillageDist = 3.2 * resScale; // hamlets and villages
+  const W = width;
+  // Spatial hash for the spacing check
+  const bucket = Math.ceil(minCityDist);
+  const bucketsX = Math.ceil(W / bucket);
+  const grid = new Map<number, City[]>();
+  const addToGrid = (c: City) => {
+    const key = Math.floor(c.y / bucket) * bucketsX + (Math.floor(c.x / bucket) % bucketsX);
+    const list = grid.get(key) ?? [];
+    list.push(c);
+    grid.set(key, list);
+  };
+  world.cities.forEach(addToGrid);
+  const tooClose = (x: number, y: number, minD: number = minCityDist) => {
+    const bx = Math.floor(x / bucket);
+    const by = Math.floor(y / bucket);
+    for (let oy = -1; oy <= 1; oy++) {
+      for (let ox = -1; ox <= 1; ox++) {
+        const key = (by + oy) * bucketsX + ((bx + ox + bucketsX) % bucketsX);
+        for (const c of grid.get(key) ?? []) {
+          let dx = Math.abs(x - c.x);
+          if (dx > W / 2) dx = W - dx;
+          if (Math.hypot(dx, y - c.y) < minD) return true;
         }
+      }
+    }
+    return false;
+  };
 
-        nation.capitalX = bestCapX;
-        nation.capitalY = bestCapY;
-
-        world.cities.push({
-            id: world.cities.length,
-            name: nation.name,
-            x: bestCapX,
-            y: bestCapY,
-            nationIndex: nation.id,
-            isCapital: true,
-            size: 2
-        });
+  const totalNations = world.nations.length;
+  for (let i = 0; i < totalNations; i++) {
+    const nation = world.nations[i];
+    if (i % 4 === 0) {
+      onProgress?.((i / totalNations) * 100);
+      await yieldFrame();
     }
 
-    const resScale = width / 800;
-    const minCityDist = 18 * resScale;
-    const totalNations = world.nations.length;
+    const validCells = byNation[i];
+    // Sort by density descending to check the hot spots first
+    validCells.sort((a, b) => b.density - a.density);
 
-    for (let i = 0; i < totalNations; i++) {
-        const nation = world.nations[i];
+    let placed = 1; // 1 for capital
+    const maxCitiesPerNation = 300;
 
-        onProgress?.((i / totalNations) * 100);
-        await new Promise(resolve => requestAnimationFrame(resolve));
+    for (const cell of validCells) {
+      if (placed >= maxCitiesPerNation) break;
 
-        // Group valid cells for this nation
-        const validCells: { x: number, y: number, density: number }[] = [];
-        for (let x = 0; x < width; x++) {
-            for (let y = 0; y < height; y++) {
-                const cell = world.grid[x][y];
-                // Skip water, wrong nation, or if it's the exact capital spot
-                if (!cell.isWater && cell.nationIndex === nation.id) {
-                    if (x !== nation.capitalX || y !== nation.capitalY) {
-                        validCells.push({ x, y, density: cell.populationDensity });
-                    }
-                }
-            }
-        }
+      let chance = 0;
+      if (cell.density >= 0.8) chance = 1.0;
+      else if (cell.density >= 0.6) chance = 0.2;
+      else if (cell.density >= 0.4) chance = 0.012;
+      else if (cell.density >= 0.2) chance = 0.0012;
+      else chance = 0.0001;
 
-        // Sort by density descending to check the hot spots first
-        validCells.sort((a, b) => b.density - a.density);
+      if (noise.random() >= chance) continue;
+      const cx = cell.x + 0.5;
+      const cy = cell.y + 0.5;
+      if (tooClose(cx, cy)) continue;
 
-        let placed = 1; // 1 for capital
-        const maxCitiesPerNation = 300;
-
-        for (const cell of validCells) {
-            if (placed >= maxCitiesPerNation) break;
-
-            let chance = 0;
-            if (cell.density >= 0.8) {
-                chance = 1.0; // Very hot spot: absolutely guaranteed at peak
-            } else if (cell.density >= 0.6) {
-                chance = 0.1; // Hot spot: virtually guaranteed to saturate area
-            } else if (cell.density >= 0.4) {
-                chance = 0.005; // Moderate: ~75% chance per available city-sized area (frequent but with gaps)
-            } else if (cell.density >= 0.2) {
-                chance = 0.0005; // Cold/Green: sparse, occasional village (~15% chance per area)
-            } else {
-                chance = 0.00005; // Non-existent: very rare, maybe 1 or 0 per massive empty province
-            }
-
-            if (noise.random() < chance) {
-                let tooClose = false;
-                for (const c of world.cities) {
-                    let dx = Math.abs(cell.x - c.x);
-                    if (dx > width / 2) dx = width - dx;
-                    if (Math.hypot(dx, cell.y - c.y) < minCityDist) {
-                        tooClose = true;
-                        break;
-                    }
-                }
-
-                if (!tooClose) {
-                    let citySize = 0;
-                    if (cell.density >= 0.7) citySize = 1; // Larger cities in hot spots
-
-                    world.cities.push({
-                        id: world.cities.length,
-                        name: makeName(),
-                        x: cell.x,
-                        y: cell.y,
-                        nationIndex: nation.id,
-                        isCapital: false,
-                        size: citySize
-                    });
-                    placed++;
-                }
-            }
-        }
+      const size = cell.density >= 0.85 && noise.random() < 0.5 ? 2 : cell.density >= 0.62 ? 1 : 0;
+      const city: City = {
+        id: world.cities.length,
+        name: cityNameFor(world, cell.x, cell.y, noise.random),
+        x: cx,
+        y: cy,
+        nationIndex: nation.id,
+        isCapital: false,
+        size,
+        population: 0,
+        radiusM: 0,
+        seed: 0,
+      };
+      finalizeCity(world, city, cell.density);
+      world.cities.push(city);
+      addToGrid(city);
+      placed++;
     }
+
+    // Villages and hamlets fill the countryside, thicker where land is fertile
+    for (const cell of validCells) {
+      if (noise.random() >= 0.07 * Math.pow(cell.density + 0.05, 1.2)) continue;
+      const cx = cell.x + 0.2 + noise.random() * 0.6;
+      const cy = cell.y + 0.2 + noise.random() * 0.6;
+      if (world.sampler.coastField(cx, cy, 6) < 0.08) continue;
+      if (tooClose(cx, cy, minVillageDist)) continue;
+      const city: City = {
+        id: world.cities.length,
+        name: cityNameFor(world, cell.x, cell.y, noise.random),
+        x: cx,
+        y: cy,
+        nationIndex: nation.id,
+        isCapital: false,
+        size: 0,
+        population: 0,
+        radiusM: 0,
+        seed: 0,
+      };
+      finalizeCity(world, city, cell.density * 0.35);
+      world.cities.push(city);
+      addToGrid(city);
+    }
+  }
 }
