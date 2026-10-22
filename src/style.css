@@ -1370,6 +1370,10 @@ code {
 .sim-event.annex .txt { color: #b9a4e0; }
 .sim-event.independence .txt { color: #8fc7a2; }
 .sim-event.fall .txt { color: #c9786e; font-weight: 600; }
+.sim-event.growth .txt { color: #e3c27a; }
+.sim-event.founding .txt { color: #a9c98a; }
+.sim-event.decline .txt { color: #b7a48c; }
+.sim-event.ruin .txt { color: #a08f80; font-style: italic; }
 
 .sim-bar {
   position: absolute;

@@ -19,6 +19,7 @@ import {
   generateSeaRoutes,
   generateCurrents,
   generateEconomy,
+  generateTrade,
   type GeneratorContext,
 } from "./generators";
 
@@ -117,7 +118,8 @@ export class MapGenerator {
       [generateRoads, 94],
       [generateSeaRoutes, 96],
       [generatePOIs, 98],
-      [generateDiplomacy, 100],
+      [generateDiplomacy, 99],
+      [generateTrade, 100], // last: wars (from diplomacy) close trade links
     ];
     let start = 0;
     const timings: string[] = [];

@@ -187,6 +187,7 @@ export interface Road {
   tier: number; // 0 = track, 1 = road, 2 = highway
   a: number; // city ids
   b: number;
+  traffic?: number; // trade flow, 0..1 of the busiest link (runtime, see generateTrade)
 }
 
 export interface City {
@@ -203,6 +204,7 @@ export interface City {
   seed: number;
   isPort?: boolean;
   wealth?: number; // income proxy from resources and trade
+  baseWealth?: number; // the part from resources, harbour and river; trade is added on top
   wealthTier?: number; // index into WEALTH_TIERS
   resources?: string[]; // notable resource kinds nearby
 }

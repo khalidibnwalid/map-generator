@@ -16,3 +16,4 @@ export * from "./generatePOIs";
 export * from "./generateSeaRoutes";
 export * from "./generateCurrents";
 export * from "./generateEconomy";
+export * from "./generateTrade";

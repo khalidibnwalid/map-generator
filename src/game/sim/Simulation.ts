@@ -10,11 +10,12 @@ import {
   setRelation,
 } from "../politics";
 import { colorForNewNation, partitionNation, refreshTerritorialWaters } from "../generators";
+import { EconomySim, type EconEventKind } from "./economySim";
 
 export interface SimEvent {
   year: number;
   text: string;
-  kind: "war" | "peace" | "conquest" | "civil" | "vassal" | "independence" | "fall" | "annex";
+  kind: "war" | "peace" | "conquest" | "civil" | "vassal" | "independence" | "fall" | "annex" | EconEventKind;
   x: number;
   y: number;
 }
@@ -103,6 +104,7 @@ export class Simulation {
   public changedCities = new Set<number>(); // city ids whose owner changed since last read
   // Rows touched since the UI last read them, and whether provinces changed
   public dirty = { y0: Infinity, y1: -1, provinces: false };
+  public econ = new EconomySim(); // settlement growth, ruin, founding and trade (economySim.ts)
   private po: Int16Array = new Int16Array(0); // province -> owning nation
   private calmUntil = new Map<string, number>(); // nation name -> year a new civil war may start
   private world: WorldData;
@@ -510,6 +512,7 @@ export class Simulation {
       changed = true;
     }
 
+    if (this.econ.step(w, this.year, rand, (k, t, x, y) => this.log(k, t, x, y))) this.needsSync = true;
     return this.finish(changed);
   }
 

@@ -1,6 +1,7 @@
 import type { MapGenerator, Preset } from "./MapGenerator";
 import type { City, Nation, Province, RelationType, Road, WorldData } from "./WorldData";
 import type { Poi } from "./generators/generatePOIs";
+import { computeTrade } from "./generators/generateTrade";
 
 // A .world file = gzip(JSON). Terrain is regenerated from seed/preset/size;
 // everything the user can edit is stored on top of it. Per-cell ownership is
@@ -219,5 +220,7 @@ export async function loadWorld(
       c.isNationBorder = border;
     }
   }
+  // Trade follows the saved settlements, roads and wars
+  computeTrade(world);
   return world;
 }

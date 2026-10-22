@@ -195,6 +195,7 @@ export default function renderMainApp() {
               ${toggle("layer-cities", "Cities", true)}
               ${toggle("layer-roads", "Roads", true)}
               ${toggle("layer-searoutes", "Sea routes", true)}
+              ${toggle("layer-trade", "Trade flows", false, "caravans & shipping")}
               ${toggle("layer-pois", "Landmarks", true)}
               ${toggle("layer-resources", "Resources", true)}
               ${toggle("layer-labels", "Labels", true)}

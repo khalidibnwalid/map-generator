@@ -181,7 +181,7 @@ export async function generateEconomy(ctx: GeneratorContext): Promise<void> {
     if (c.isCapital) s += 3;
     s += rand() * 0.6; // history is not deterministic
     scores.set(c, s);
-    c.wealth = wealth + (c.isPort ? 6 : 0) + (cell?.hasRiver ? 3 : 0);
+    c.wealth = c.baseWealth = wealth + (c.isPort ? 6 : 0) + (cell?.hasRiver ? 3 : 0);
     c.resources = local.slice(0, 3);
   }
   onProgress?.(70);
@@ -199,7 +199,12 @@ export async function generateEconomy(ctx: GeneratorContext): Promise<void> {
     finalizeCity(world, c, size === 0 ? dens * 0.8 : dens);
   });
 
-  // Wealth tier per settlement (relative to the world)
+  assignWealthTiers(world);
+  onProgress?.(100);
+}
+
+// Wealth tier per settlement, relative to the rest of the world
+export function assignWealthTiers(world: WorldData) {
   const ws = world.cities.map((c) => c.wealth ?? 0).sort((a, b) => a - b);
   const q = (p: number) => ws[Math.floor((ws.length - 1) * p)] ?? 0;
   const cuts = [q(0.1), q(0.3), q(0.6), q(0.85), q(0.97)];
@@ -209,5 +214,22 @@ export async function generateEconomy(ctx: GeneratorContext): Promise<void> {
     while (t < cuts.length && w > cuts[t]) t++;
     c.wealthTier = t;
   }
-  onProgress?.(100);
+}
+
+// Resource wealth and notable resources around a spot, for settlements
+// founded after generation (same weighting as above)
+export function localWealth(world: WorldData, x: number, y: number): { wealth: number; kinds: string[] } {
+  const resScale = world.width / 800;
+  const W = world.width;
+  let wealth = 0;
+  const kinds: string[] = [];
+  for (const r of world.resources) {
+    let dx = Math.abs(r.x - x);
+    if (dx > W / 2) dx = W - dx;
+    const d = Math.hypot(dx, r.y - y);
+    if (d > 14 * resScale) continue;
+    wealth += (RESOURCE_INFO[r.kind].value * r.richness) / (1 + d / (4 * resScale));
+    if (d < 8 * resScale && kinds.length < 3 && !kinds.includes(r.kind)) kinds.push(r.kind);
+  }
+  return { wealth, kinds };
 }

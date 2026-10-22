@@ -6,6 +6,7 @@ import { RESOURCE_INFO } from "../game/generators/generateEconomy";
 import { viewRect } from "./themes";
 
 type Box = [number, number, number, number];
+const TRADE_LEVELS = 6;
 const boxes = new WeakMap<object, Box>();
 function boxOf(o: { points: Point[] }): Box {
   let b = boxes.get(o);
@@ -309,6 +310,64 @@ export class NetworkRenderer {
       }
       ctx.stroke();
     }
+    ctx.restore();
+  }
+
+  // Trade flows over roads (caravans, warm gold) and lanes (shipping, pale
+  // teal): width and opacity by traffic, beaded dashes on the busiest links.
+  // Routes are bucketed by kind and traffic level: a few strokes in all.
+  private tradeBuckets: { r: { points: Point[] }; dx: number }[][] = Array.from({ length: 2 * TRADE_LEVELS }, () => []);
+  public renderTrade(
+    ctx: CanvasRenderingContext2D,
+    world: WorldData,
+    width: number,
+    height: number,
+    scale: number,
+    offsetX: number,
+    offsetY: number,
+  ) {
+    const v = viewRect(width, height, scale, offsetX, offsetY);
+    // Faint local trade appears as you zoom in
+    const minT = scale < 1.5 ? 0.04 : scale < 3 ? 0.02 : scale < 6 ? 0.008 : 0.002;
+    const buckets = this.tradeBuckets;
+    for (const b of buckets) b.length = 0;
+    const add = (r: { points: Point[]; traffic?: number }, kind: number) => {
+      const t = r.traffic ?? 0;
+      if (t < minT) return;
+      const level = Math.min(TRADE_LEVELS - 1, Math.floor(Math.sqrt(t) * TRADE_LEVELS));
+      copies(boxOf(r), world.width, v, 0.5, (dx) => buckets[kind * TRADE_LEVELS + level].push({ r, dx }));
+    };
+    for (const r of world.seaRoutes) add(r, 1);
+    for (const r of world.worldRoads) add(r, 0);
+    const zf = Math.min(1.8, 0.75 + scale * 0.06);
+    const tx = (dx: number) => (x: number, y: number): [number, number] => [(x + dx) * scale + offsetX, y * scale + offsetY];
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (let pass = 0; pass < 2; pass++)
+      for (let kind = 1; kind >= 0; kind--)
+        for (let level = 0; level < TRADE_LEVELS; level++) {
+          const list = buckets[kind * TRADE_LEVELS + level];
+          if (!list.length) continue;
+          const s = (level + 1) / TRADE_LEVELS; // ~sqrt(traffic)
+          const rgb = kind === 0 ? "236, 186, 92" : "150, 222, 214";
+          if (pass === 0) {
+            ctx.setLineDash([]);
+            ctx.lineWidth = (0.8 + 5.5 * s) * zf;
+            ctx.strokeStyle = `rgba(${rgb}, ${0.22 + 0.5 * s})`;
+          } else {
+            // Caravans and convoys: bright beads along the busiest links
+            if (s < 0.45) continue;
+            const w = Math.max(1.2, (0.6 + 2 * s) * zf);
+            ctx.setLineDash(kind === 0 ? [w * 0.2, w * 3.2] : [w * 2.2, w * 3]);
+            ctx.lineWidth = w;
+            ctx.strokeStyle = kind === 0 ? "rgba(255, 238, 196, 0.85)" : "rgba(226, 250, 246, 0.8)";
+          }
+          ctx.beginPath();
+          for (const { r, dx } of list) tracePieces(ctx, r.points, 0, r.points.length, tx(dx));
+          ctx.stroke();
+        }
     ctx.restore();
   }
 

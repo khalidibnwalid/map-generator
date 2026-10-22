@@ -12,6 +12,7 @@ import { PoiRenderer } from "./PoiRenderer";
 import { nearestPoi, POI_LABELS } from "../game/generators/generatePOIs";
 import { saveWorld, loadWorld } from "../game/WorldFile";
 import { RESOURCE_INFO, WEALTH_TIERS } from "../game/generators/generateEconomy";
+import { cityExports, cityTrade, tradeRole } from "../game/generators/generateTrade";
 import { THEMES, NIGHT_THEMES } from "./themes";
 import { MONTHS, seasonFlood } from "../core/Season";
 import { refreshPickers } from "./components/MainApp";
@@ -59,6 +60,7 @@ export class Interface {
     roads: true,
     pois: true,
     searoutes: true,
+    trade: false,
     currents: false,
     resources: true,
     labels: true,
@@ -500,6 +502,7 @@ export class Interface {
       "ice",
       "pois",
       "searoutes",
+      "trade",
       "currents",
       "resources",
       "roads",
@@ -729,6 +732,7 @@ export class Interface {
     const world = this.generator.getWorld();
     this.sim ??= new Simulation(world, this.generator.getNoise());
     const nationsBefore = world.nations.length;
+    const citiesBefore = world.cities.length;
     const colorsBefore = world.nations.map((n) => n.color).join();
     this.inSimStep = true;
     const changed = this.sim.step();
@@ -751,6 +755,19 @@ export class Interface {
         this.simListAt = now;
         this.nationsManager.renderList();
       }
+      this.canvasManager.scheduleRender();
+    }
+    // Settlements grew, shrank, fell to ruin or were founded; trade was re-routed
+    const ec = this.sim.econ;
+    if (ec.touched.size || ec.removed.length || ec.tradeChanged || world.cities.length !== citiesBefore) {
+      for (const c of ec.touched) this.cityRenderer.invalidateCity(c);
+      for (const c of ec.removed) this.cityRenderer.invalidateCity(c);
+      const sel = this.buildTool.selected;
+      if (sel?.type === "city" && ec.removed.includes(sel.city)) this.buildTool.selected = null;
+      this.vectorState = null;
+      // Wealth only moves when trade is re-routed or settlements come and go
+      if (ec.tradeChanged || world.cities.length !== citiesBefore || ec.removed.length) this.thematicFocus = -2;
+      ec.clearDirty();
       this.canvasManager.scheduleRender();
     }
     this.inSimStep = false;
@@ -1182,7 +1199,7 @@ export class Interface {
     const L = this.activeLayers;
     const key = [
       this.theme,
-      L.rivers, L.currents, L.searoutes, L.roads, L.resources, L.pois,
+      L.rivers, L.currents, L.searoutes, L.roads, L.trade, L.resources, L.pois,
       L.season ? this.seasonMonth.toFixed(2) : "-",
       world.seed, world.width, world.worldRoads.length, world.cities.length, width, height,
     ].join("|");
@@ -1212,6 +1229,7 @@ export class Interface {
     if (L.currents) this.networkRenderer.renderCurrents(v, world, width, height, scale, offsetX, offsetY);
     if (L.searoutes) this.networkRenderer.renderSeaRoutes(v, world, width, height, scale, offsetX, offsetY, theme);
     if (L.roads) this.networkRenderer.renderRoads(v, world, width, height, scale, offsetX, offsetY, theme);
+    if (L.trade) this.networkRenderer.renderTrade(v, world, width, height, scale, offsetX, offsetY);
     if (L.resources) this.networkRenderer.renderResources(v, world, width, height, scale, offsetX, offsetY, theme);
     if (L.pois) this.poiRenderer.render(v, world, width, height, scale, offsetX, offsetY, this.theme);
     ctx.drawImage(this.vectorLayer, 0, 0);
@@ -1355,11 +1373,16 @@ export class Interface {
       lines.push(`Population ${nearestCity.population.toLocaleString()}`);
       lines.push(`Area ~${(Math.PI * (nearestCity.radiusM / 1000) ** 2).toFixed(1)} km²${nearestCity.isPort ? " · Port" : ""}`);
       lines.push("Wealth: " + WEALTH_TIERS[nearestCity.wealthTier ?? 2]);
-      if (nearestCity.resources?.length)
-        lines.push(
-          "Trades in " +
-            nearestCity.resources.map((k) => RESOURCE_INFO[k as keyof typeof RESOURCE_INFO]?.label.toLowerCase()).join(", "),
-        );
+      // e.g. "Trade hub · 3 caravan routes · 1 sea lane", then exports
+      const trade = cityTrade(nearestCity);
+      const plural = (k: number, one: string) => `${k} ${one}${k === 1 ? "" : "s"}`;
+      const tradeBits = [tradeRole(trade, !!nearestCity.isPort)];
+      if (trade?.caravans) tradeBits.push(plural(trade.caravans, "caravan route"));
+      if (trade?.lanes) tradeBits.push(plural(trade.lanes, "sea lane"));
+      lines.push(tradeBits.join(" · "));
+      if (trade?.cut) lines.push(`War has cut ${plural(trade.cut, "trade route")}`);
+      const exports = cityExports(nearestCity);
+      if (exports.length) lines.push((trade && trade.volume > 0 ? "Exports " : "Produces ") + exports.join(", "));
       const prov = world.provinces[nearestCity.provinceIndex ?? -1];
       if (prov) lines.push(`Province: ${prov.name}`);
       this.tooltipManager.show(clientX, clientY, nearestCity.name, lines.join("\n"));

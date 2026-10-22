@@ -9,6 +9,7 @@ export interface SeaRoute {
   a: number; // city ids
   b: number;
   tier: number; // 2 = between major ports, 1 = towns, 0 = local
+  traffic?: number; // trade flow, 0..1 of the busiest link (runtime, see generateTrade)
 }
 
 const S5 = Math.sqrt(5);
