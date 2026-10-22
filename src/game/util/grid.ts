@@ -163,7 +163,7 @@ export function distanceTransform(
   return { dist, nearest };
 }
 
-// Connected component labelling (4-neighbour, horizontal wrap).
+// Connected component labeling (4-neighbor, horizontal wrap).
 export function labelComponents(
   W: number,
   H: number,

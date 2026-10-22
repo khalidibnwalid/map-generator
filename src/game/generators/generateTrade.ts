@@ -27,7 +27,7 @@ export function cityTrade(c: City): CityTrade | undefined {
 export function tradeRole(t: CityTrade | undefined, port: boolean): string {
   if (!t || t.volume <= 0) return "Isolated";
   if (t.rank >= 0.985) return port ? "Great entrepôt" : "Great caravan city";
-  if (t.rank >= 0.92) return port ? "Busy harbour" : "Trade hub";
+  if (t.rank >= 0.92) return port ? "Busy harbor" : "Trade hub";
   if (t.rank >= 0.7) return "Busy market";
   if (t.rank >= 0.35) return "Local market";
   return "Backwater";
@@ -125,7 +125,7 @@ export function computeTrade(world: WorldData) {
       cut[b]++;
       continue;
     }
-    // Shipping is cheap per league but costs loading and harbour dues
+    // Shipping is cheap per league but costs loading and harbor dues
     let c = sea ? lengthOf(r) * 0.45 + 8 * resScale : lengthOf(r) * (roadMul[r.tier] ?? 1);
     if (relation !== "Self") c += relation === "Rival" ? border * 3 : relation === "Alliance" || relation === "Vassal" || relation === "Overlord" ? border * 0.3 : border;
     // Lands at war are unsafe for merchants
@@ -250,7 +250,7 @@ export function computeTrade(world: WorldData) {
   for (let i = 0; i < n; i++) {
     const c = cities[i];
     tradeOf.set(c, { volume: through[i], rank: rank[i], caravans: caravans[i], lanes: shipLanes[i], cut: cut[i] });
-    // Busy junctions and harbours grow rich on tolls, markets and warehousing
+    // Busy junctions and harbors grow rich on tolls, markets and warehousing
     c.wealth = (c.baseWealth ?? 0) + 4 * Math.sqrt(through[i] / mean);
   }
   assignWealthTiers(world);

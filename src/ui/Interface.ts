@@ -21,11 +21,46 @@ import { RELATION_COLORS } from "../game/generators/generateDiplomacy";
 import { blocOf } from "../game/politics";
 import { nationFlagUrl } from "../game/flags";
 import { installSliders, syncSliders } from "./components/Slider";
-import { Simulation } from "../game/sim/Simulation";
+import { Simulation, type SimEvent } from "../game/sim/Simulation";
+import { viewStats, type SnapNation } from "../game/sim/History";
+import { crownRulers, rulerStyle, seededRand } from "../game/sim/Rulers";
 import { BuildTool } from "./BuildTool";
 import { dimOutside, layoutContext, yieldToUI, type AtlasHost, type MapView } from "./AtlasRender";
 import { PosterDialog } from "./PosterDialog";
 import { FactSheet } from "./FactSheet";
+import { drawBattles, drawFronts } from "./WarRenderer";
+import { exportHistoryGif } from "./GifExport";
+import type { Nation } from "../game/WorldData";
+
+// A recorded year shown in place of the live borders (History timeline)
+interface Replay {
+  index: number;
+  year: number;
+  owner: Int16Array; // index into nations
+  nations: SnapNation[];
+  world: WorldData; // the live world with these nations, for labels and textures
+  sizes: number[];
+  centroids: { x: number; y: number }[];
+  land: number[];
+}
+
+// Chronicle filter groups
+const EVENT_GROUP: Record<SimEvent["kind"], string> = {
+  war: "war",
+  peace: "war",
+  battle: "war",
+  conquest: "war",
+  civil: "realm",
+  vassal: "realm",
+  independence: "realm",
+  fall: "realm",
+  annex: "realm",
+  growth: "realm",
+  decline: "realm",
+  ruin: "realm",
+  founding: "realm",
+  ruler: "ruler",
+};
 
 export type ViewLayer =
   | "Biomes"
@@ -72,6 +107,7 @@ export class Interface {
     season: false,
     night: false,
     weather: false,
+    wars: true,
   };
   private seasonMonth = new Date().getMonth(); // 0 = January, fractional between months
   private lightsKey = ""; // world state the night-lights texture was built for
@@ -79,6 +115,9 @@ export class Interface {
   private weatherStart = performance.now();
   // Soft warm disc, drawn additively over detailed cities at night
   private glowSprite: HTMLCanvasElement | null = null;
+  private replay: Replay | null = null;
+  private simFilter = "all";
+  private exportingGif = false;
   private activeTab: "generate" | "layers" | "nations" | "build" | "history" | "file" = "generate";
   private buildTool!: BuildTool;
   private sim: Simulation | null = null;
@@ -185,8 +224,11 @@ export class Interface {
       this.buildTool.render();
     }
     this.sim = null;
-    this.renderSimPanel();
+    this.replay = null;
     const world = this.generator.getWorld();
+    // Houses and rulers from a seeded stream of their own, so generation is unaffected
+    crownRulers(world, seededRand(world.seed * 7919 + world.nations.length));
+    this.renderSimPanel();
     this.gpuRenderer.updateWorldTexture(world);
     this.gpuRenderer.updateProvincesDataTexture(world);
     this.nationsManager.nationsStateDirty = true;
@@ -467,6 +509,21 @@ export class Interface {
       if (!row) return;
       this.centerOn(Number(row.dataset.x), Number(row.dataset.y));
     });
+    const filterSelect = document.getElementById("sim-filter") as HTMLSelectElement | null;
+    filterSelect?.addEventListener("change", () => {
+      this.simFilter = filterSelect.value;
+      this.renderSimPanel();
+    });
+    const scrub = document.getElementById("sim-scrub") as HTMLInputElement | null;
+    scrub?.addEventListener("input", () => {
+      if (!this.sim) return;
+      this.pauseSim();
+      const f = Number(scrub.value);
+      if (f >= this.sim.history.length - 1) this.backToPresent();
+      else this.showReplay(f);
+    });
+    document.getElementById("sim-present")?.addEventListener("click", () => this.backToPresent());
+    document.getElementById("sim-gif")?.addEventListener("click", () => this.exportGif());
 
     // --- Map controls ---
     const zoomBy = (factor: number) => {
@@ -537,6 +594,7 @@ export class Interface {
       "season",
       "night",
       "weather",
+      "wars",
     ] as const;
     const seasonRow = document.getElementById("season-row");
     overlays.forEach((overlay) => {
@@ -737,7 +795,9 @@ export class Interface {
   }
 
   private playSim() {
-    if (this.simTimer || this.generator.isGenerating) return;
+    if (this.simTimer || this.generator.isGenerating || this.exportingGif) return;
+    // Replays are view-only: history always continues from the present
+    this.backToPresent();
     // Chained timeouts: a slow year delays the next instead of piling up
     const tick = () => {
       const t0 = performance.now();
@@ -757,7 +817,8 @@ export class Interface {
   }
 
   private stepSim() {
-    if (this.generator.isGenerating) return;
+    if (this.generator.isGenerating || this.exportingGif) return;
+    this.backToPresent();
     const world = this.generator.getWorld();
     this.sim ??= new Simulation(world, this.generator.getNoise());
     const nationsBefore = world.nations.length;
@@ -768,7 +829,7 @@ export class Interface {
     if (changed) {
       if (this.nationsManager.hoveredNationIndex >= world.nations.length) this.nationsManager.hoveredNationIndex = -1;
       if (world.nations.length !== nationsBefore) this.nationsManager.selectedNationIndex = -1;
-      // Upload only the rows that changed (colours change for every row when nations come or go)
+      // Upload only the rows that changed (colors change for every row when nations come or go)
       const d = this.sim.dirty;
       if (d.provinces) this.gpuRenderer.updateProvincesDataTexture(world);
       const owner = this.sim.ownerArray;
@@ -784,7 +845,6 @@ export class Interface {
         this.simListAt = now;
         this.nationsManager.renderList();
       }
-      this.canvasManager.scheduleRender();
     }
     // Settlements grew, shrank, fell to ruin or were founded; trade was re-routed
     const ec = this.sim.econ;
@@ -799,8 +859,94 @@ export class Interface {
       ec.clearDirty();
       this.canvasManager.scheduleRender();
     }
+    // Offensive arrows and battle markers change every year
+    if (changed || this.activeLayers.wars) this.canvasManager.scheduleRender();
     this.inSimStep = false;
     this.renderSimPanel();
+  }
+
+  // Shows recorded year `f` in place of the live borders
+  private showReplay(f: number) {
+    const sim = this.sim;
+    const view = sim?.history.view(f);
+    if (!sim || !view) return;
+    const world = this.generator.getWorld();
+    const byUid = new Map(view.nations.map((s, i) => [s.uid, i]));
+    const nations: Nation[] = view.nations.map((s, i) => ({
+      id: i,
+      name: s.name,
+      color: s.color,
+      capitalX: s.capitalX,
+      capitalY: s.capitalY,
+      cultureId: s.cultureId,
+      flag: s.flag,
+      overlord: s.overlord >= 0 ? byUid.get(s.overlord) : undefined,
+    }));
+    // The live world seen through this year's nations; provinces are not recorded
+    const past = Object.create(world) as WorldData;
+    past.nations = nations;
+    past.provinces = [];
+    const owner = view.owner.slice(); // the recorder reuses its buffer
+    this.gpuRenderer.updateNationsDataTexture(past, undefined, owner);
+    const st = viewStats({ ...view, owner }, world.width, world.height, world.waterType);
+    this.replay = {
+      index: f,
+      year: view.year,
+      owner,
+      nations: view.nations,
+      world: past,
+      sizes: st.sizes,
+      centroids: st.centroids,
+      land: st.land,
+    };
+    this.nationsManager.hoveredNationIndex = -1;
+    this.tooltipManager.hide();
+    this.renderSimPanel();
+    this.canvasManager.scheduleRender();
+  }
+
+  private backToPresent() {
+    if (!this.replay) return;
+    this.replay = null;
+    // From the grid: the sim's owner array may lag behind edits made while paused
+    this.gpuRenderer.updateNationsDataTexture(this.generator.getWorld());
+    this.renderSimPanel();
+    this.canvasManager.scheduleRender();
+  }
+
+  private async exportGif() {
+    const sim = this.sim;
+    if (!sim || this.exportingGif || sim.history.length < 2) return;
+    this.pauseSim();
+    this.exportingGif = true;
+    const btn = document.getElementById("sim-gif") as HTMLButtonElement | null;
+    const label = btn?.querySelector(".sim-gif-label");
+    const progress = (p: number) => {
+      const pct = `${Math.round(p * 100)}%`;
+      btn?.style.setProperty("--progress", pct);
+      if (label) label.textContent = `Encoding frames… ${pct}`;
+    };
+    this.renderSimPanel();
+    progress(0);
+    try {
+      const world = this.generator.getWorld();
+      const blob = await exportHistoryGif(world, sim.history, sim.battles, progress);
+      const first = sim.history.frames[0].year;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `history-${this.generator.currentSeed}-years-${first}-${sim.year}.gif`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      console.error(err);
+      await this.uiManager.confirm("EXPORT GIF", `Could not export the animation: ${(err as Error).message}`);
+    } finally {
+      this.exportingGif = false;
+      btn?.style.removeProperty("--progress");
+      if (label) label.textContent = "Export GIF";
+      this.renderSimPanel();
+    }
   }
 
   private centerOn(x: number, y: number) {
@@ -829,10 +975,42 @@ export class Interface {
     if (bar) bar.style.display = this.sim ? "flex" : "none";
     const sim = this.sim;
     const world = this.generator.getWorld();
+    const replay = this.replay;
+    bar?.classList.toggle("replay", !!replay);
     const year = document.getElementById("sim-bar-year");
-    if (year) year.textContent = String(sim?.year ?? 0);
+    if (year) year.textContent = String(replay ? replay.year : (sim?.year ?? 0));
     const last = document.getElementById("sim-bar-event");
-    if (last) last.textContent = sim?.events[0] ? `${sim.events[0].year} · ${sim.events[0].text}` : "";
+    if (last)
+      last.textContent = replay
+        ? `Replay · borders of year ${replay.year} (present: ${sim?.year ?? 0})`
+        : sim?.events[0]
+          ? `${sim.events[0].year} · ${sim.events[0].text}`
+          : "";
+
+    // --- Timeline ---
+    const frames = sim?.history.length ?? 0;
+    const scrub = document.getElementById("sim-scrub") as HTMLInputElement | null;
+    if (scrub) {
+      scrub.max = String(Math.max(0, frames - 1));
+      scrub.value = String(replay ? replay.index : Math.max(0, frames - 1));
+      scrub.disabled = frames < 2 || this.exportingGif;
+      syncSliders(scrub.parentElement ?? document);
+    }
+    const firstYear = sim && frames ? sim.history.frames[0].year : null;
+    const setText = (id: string, t: string) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = t;
+    };
+    setText("sim-scrub-from", firstYear !== null ? `Year ${firstYear}` : "–");
+    setText("sim-scrub-to", sim && frames ? `Year ${sim.year}` : "–");
+    setText("sim-scrub-year", replay ? `Year ${replay.year} · replay` : sim ? `Year ${sim.year}` : "");
+    const present = document.getElementById("sim-present") as HTMLButtonElement | null;
+    if (present) present.disabled = !replay;
+    const gif = document.getElementById("sim-gif") as HTMLButtonElement | null;
+    if (gif) {
+      gif.disabled = frames < 2 || this.exportingGif;
+      gif.title = frames < 2 ? "Simulate a few years first" : `${frames} recorded years`;
+    }
 
     const summary = document.getElementById("sim-summary");
     if (summary) {
@@ -849,12 +1027,13 @@ export class Interface {
     const log = document.getElementById("sim-log");
     if (log && sim) {
       const esc = (t: string) => t.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]!);
-      log.innerHTML = sim.events.length
-        ? sim.events
+      const shown = this.simFilter === "all" ? sim.events : sim.events.filter((e) => EVENT_GROUP[e.kind] === this.simFilter);
+      log.innerHTML = shown.length
+        ? shown
             .slice(0, 120)
             .map((e) => `<div class="sim-event ${e.kind}" data-x="${e.x}" data-y="${e.y}"><span class="yr">${e.year}</span><span class="txt">${esc(e.text)}</span></div>`)
             .join("")
-        : '<p class="muted">A quiet year.</p>';
+        : `<p class="muted">${sim.events.length ? "Nothing of this kind yet." : "A quiet year."}</p>`;
     } else if (log) log.innerHTML = '<p class="muted">Nothing has happened yet.</p>';
   }
 
@@ -949,7 +1128,7 @@ export class Interface {
         row("rgb(120,110,100)", "Poorest") +
         row("rgb(160,180,70)", "Average") +
         row("rgb(240,200,30)", "Richest") +
-        '<div class="legend-hint">From resources, harbours, rivers and trade</div>';
+        '<div class="legend-hint">From resources, harbors, rivers and trade</div>';
     } else {
       const focus =
         this.nationsManager.selectedNationIndex >= 0
@@ -994,6 +1173,11 @@ export class Interface {
     }
 
     if (this.nationsManager.nationsStateDirty) {
+      // An edit while replaying returns to the present (the texture below is the live one)
+      if (this.replay) {
+        this.replay = null;
+        this.renderSimPanel();
+      }
       this.nationsManager.buildCache();
       this.gpuRenderer.updateNationsDataTexture(world);
       this.nationsManager.nationsStateDirty = false;
@@ -1006,6 +1190,7 @@ export class Interface {
       this.gpuCanvas.height = height;
     }
 
+    const replay = this.replay;
     const night = this.activeLayers.night;
     if (night) this.refreshLights(world);
     this.renderTerrain(width, height, scale, offsetX, offsetY, isInteracting);
@@ -1019,24 +1204,29 @@ export class Interface {
       this.cityRenderer.render(ctx, world, width, height, scale, offsetX, offsetY, this.theme, isInteracting);
     }
     if (night) this.drawNightOverlay(ctx, world, width, height, scale, offsetX, offsetY);
+    const sim = this.sim;
+    if (this.activeLayers.wars && sim) {
+      if (!replay) drawFronts(ctx, sim.frontLines(), sim.offensives, world.width, width, scale, offsetX, offsetY);
+      drawBattles(ctx, sim.battles, replay ? replay.year : sim.year, world.width, width, height, scale, offsetX, offsetY);
+    }
     if (this.activeLayers.labels) {
       if (this.activeLayers.rivers) {
         this.networkRenderer.renderRiverLabels(ctx, world, width, height, scale, offsetX, offsetY, theme);
       }
       this.labelRenderer.render(
         ctx,
-        world,
+        replay ? replay.world : world,
         width,
         height,
         scale,
         offsetX,
         offsetY,
         isInteracting,
-        this.nationsManager.nationSizes,
-        this.nationsManager.nationCentroids,
+        replay ? replay.sizes : this.nationsManager.nationSizes,
+        replay ? replay.centroids : this.nationsManager.nationCentroids,
         theme,
-        this.activeLayers.provinces,
-        this.nationsManager.nationLandArea,
+        this.activeLayers.provinces && !replay,
+        replay ? replay.land : this.nationsManager.nationLandArea,
         this.activeLayers.flags,
       );
     }
@@ -1111,8 +1301,9 @@ export class Interface {
   // GPU terrain for the live view (also used to restore it after export tiles)
   private renderTerrain(width: number, height: number, scale: number, offsetX: number, offsetY: number, isInteracting: boolean) {
     const world = this.generator.getWorld();
+    const replay = this.replay;
     const hoveredNation =
-      this.nationsManager.hoveredNationIndex < world.nations.length ? this.nationsManager.hoveredNationIndex : -1;
+      !replay && this.nationsManager.hoveredNationIndex < world.nations.length ? this.nationsManager.hoveredNationIndex : -1;
     this.gpuRenderer.hoverBloc = hoveredNation >= 0 ? blocOf(world, hoveredNation) : [];
     this.gpuRenderer.season = this.seasonMonth / 12;
     this.gpuRenderer.time = (performance.now() - this.weatherStart) / 1000;
@@ -1124,7 +1315,8 @@ export class Interface {
       scale,
       offsetX,
       offsetY,
-      this.activeLayers,
+      // Provinces are not recorded, so a replay shows nation borders only
+      replay ? { ...this.activeLayers, provinces: false } : this.activeLayers,
       hoveredNation,
       this.nationsManager.hoveredProvinceIndex,
       world.seed,
@@ -1237,7 +1429,7 @@ export class Interface {
         const t0 = performance.now();
         for (;;) {
           this.cityRenderer.render(scratch, world, lw, lh, ls, lox, loy, this.theme, false, true);
-          if (!this.cityRenderer.busy || performance.now() - t0 > 20000 || v.cancelled?.()) break;
+          if (!this.cityRenderer.busy || performance.now() - t0 > 20000 || v.canceled?.()) break;
           v.onProgress?.(0, "Laying out towns and cities");
           await new Promise((r) => setTimeout(r, 120));
         }
@@ -1258,7 +1450,7 @@ export class Interface {
       ctx.clip();
       const cm = this.canvasManager;
       for (let i = 0; i < tiles.length; i++) {
-        if (v.cancelled?.()) break;
+        if (v.canceled?.()) break;
         const t = tiles[i];
         gpu.pixelRatio = pr;
         gpu.frame = { x: t.x, y: t.y, w: v.w, h: v.h };
@@ -1272,7 +1464,7 @@ export class Interface {
         if (tiles.length > 1) await yieldToUI();
       }
 
-      if (!v.cancelled?.()) {
+      if (!v.canceled?.()) {
         v.onProgress?.(0.8, "Drawing rivers, roads and cities");
         await yieldToUI();
         const night = !!L.night;
@@ -1466,6 +1658,23 @@ export class Interface {
     const fy = (sy - cm.offsetY) / cm.scale;
     const wy = Math.floor(fy);
     const x = ((Math.floor(fx) % world.width) + world.width) % world.width;
+    // Replay: name the realm that held this ground in the shown year
+    const replay = this.replay;
+    if (replay) {
+      this.nationsManager.hoveredNationIndex = -1;
+      const k = wy >= 0 && wy < world.height && !world.sampler.isWater(fx, fy) ? replay.owner[wy * world.width + x] : -1;
+      const s = replay.nations[k];
+      if (!s) {
+        this.tooltipManager.hide();
+        return;
+      }
+      const over = replay.nations.find((o) => o.uid === s.overlord);
+      const lines = [`In the year ${replay.year}`];
+      if (s.ruler) lines.push(`Ruled by ${s.ruler}`);
+      if (over) lines.push(`Vassal of ${over.name}`);
+      this.tooltipManager.show(clientX, clientY, s.name, lines.join("\n"), nationFlagUrl(replay.world, k, 24, 16));
+      return;
+    }
     let newHovered = -1;
     let cell = null;
     const onLand = wy >= 0 && wy < world.height && !world.sampler.isWater(fx, fy);
@@ -1566,6 +1775,12 @@ export class Interface {
 
     if (nation) {
       lines.push(`${nation.government ?? "Realm"} of ${nation.name}`);
+      const r = nation.ruler;
+      if (r) {
+        const reign = world.year - r.since;
+        lines.push(`${rulerStyle(nation)}${nation.dynasty ? ` · House of ${nation.dynasty}` : ""}`);
+        lines.push(`Age ${world.year - r.born} · ${reign < 1 ? "newly crowned" : `${reign} year${reign === 1 ? "" : "s"} on the throne`}`);
+      }
       const prov = world.provinces[cell.provinceIndex ?? -1];
       if (prov) lines.push(`Province: ${prov.name}${prov.area ? ` (${prov.area.toLocaleString()} km²)` : ""}`);
       if (this.thematic === "diplomacy") {

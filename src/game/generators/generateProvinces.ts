@@ -191,7 +191,7 @@ export function partitionNation(
   lists.forEach((l, i) => l.forEach((c) => ownerOf.set(c, i)));
   const unclaimed = new Set<number>();
   for (const c of landCells) if (!ownerOf.has(c)) unclaimed.add(c);
-  const neighbours4 = (c: number): number[] => {
+  const neighbors4 = (c: number): number[] => {
     const x = c % W;
     const y = (c - x) / W;
     const out = [y * W + ((x + 1) % W), y * W + ((x - 1 + W) % W)];
@@ -210,7 +210,7 @@ export function partitionNation(
       while (stack.length) {
         const c = stack.pop()!;
         cells.push(c);
-        for (const n of neighbours4(c))
+        for (const n of neighbors4(c))
           if (unclaimed.has(n) && !seen.has(n)) {
             seen.add(n);
             stack.push(n);
@@ -273,7 +273,7 @@ export function partitionNation(
     if (lists[i].length === 0 || lists[i].length >= avg * 0.18 || lists.length <= 1) continue;
     const contact = new Map<number, number>();
     for (const c of lists[i]) {
-      for (const n of neighbours4(c)) {
+      for (const n of neighbors4(c)) {
         const o = ownerOf.get(n) ?? -1;
         if (o >= 0 && o !== i && lists[o].length > 0) contact.set(o, (contact.get(o) ?? 0) + 1);
       }
@@ -296,7 +296,7 @@ export function partitionNation(
   lists = keep.map((e) => e.l);
   seats = keep.map((e) => e.s);
 
-  // Replace this nation's provinces, keeping names/colours of surviving seats
+  // Replace this nation's provinces, keeping names/colors of surviving seats
   const nation = world.nations[nationId];
   const previous = new Map<string, Province>();
   for (const p of world.provinces)

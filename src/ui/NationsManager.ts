@@ -710,17 +710,17 @@ export class NationsManager {
       wrap.appendChild(vRow);
     }
 
-    // Relations: neighbours first, then everyone else
-    const neighbours = this.neighboursOf(nationIdx);
+    // Relations: neighbors first, then everyone else
+    const neighbors = this.neighborsOf(nationIdx);
     const options: RelationType[] = ["Alliance", "Friendly", "Neutral", "Rival", "War"];
     const list = document.createElement("div");
     list.className = "diplo-list";
-    const ordered = [...byName.filter((e) => neighbours.has(e.i)), ...byName.filter((e) => !neighbours.has(e.i))];
+    const ordered = [...byName.filter((e) => neighbors.has(e.i)), ...byName.filter((e) => !neighbors.has(e.i))];
     for (const { n, i } of ordered) {
       const rel = relation(world, nationIdx, i);
       const row = document.createElement("div");
       row.className = "diplo-row";
-      row.innerHTML = `<img class="diplo-flag" src="${nationFlagUrl(world, i, 18, 12)}" alt=""><span class="diplo-name" title="${n.name}">${n.name}${neighbours.has(i) ? "<small> · border</small>" : ""}</span>`;
+      row.innerHTML = `<img class="diplo-flag" src="${nationFlagUrl(world, i, 18, 12)}" alt=""><span class="diplo-name" title="${n.name}">${n.name}${neighbors.has(i) ? "<small> · border</small>" : ""}</span>`;
       const all: RelationType[] = rel === "Vassal" || rel === "Overlord" ? [rel, ...options] : options;
       const sel = createDropdown<RelationType>({
         className: "diplo-dd",
@@ -732,7 +732,7 @@ export class NationsManager {
           color: RELATION_COLORS[r],
         })),
         onChange: (v) => {
-          // Leaving a vassal bond restores an own colour
+          // Leaving a vassal bond restores an own color
           if (rel === "Vassal") releaseVassal(world, nationIdx);
           if (rel === "Overlord") releaseVassal(world, i);
           setRelation(world, nationIdx, i, v);
@@ -754,7 +754,7 @@ export class NationsManager {
     container.appendChild(wrap);
   }
 
-  private neighboursOf(nationIdx: number): Set<number> {
+  private neighborsOf(nationIdx: number): Set<number> {
     const world = this.generator.getWorld();
     const out = new Set<number>();
     const W = world.width;

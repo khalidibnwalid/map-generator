@@ -1,5 +1,5 @@
 // Themed dropdown: a trigger button plus a floating menu attached to <body>
-// (so scrolling panels never clip it). Options may carry a colour dot or an
+// (so scrolling panels never clip it). Options may carry a color dot or an
 // image (flags). Keyboard: arrows, Enter, Escape, type to search long lists.
 
 export interface DropdownOption<V extends string = string> {
@@ -15,7 +15,7 @@ export interface DropdownConfig<V extends string> {
   value: V;
   onChange: (value: V) => void;
   className?: string;
-  tintLabel?: boolean; // colour the trigger label with the option's colour
+  tintLabel?: boolean; // color the trigger label with the option's color
   title?: string;
 }
 

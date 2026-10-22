@@ -18,7 +18,7 @@ const DY = [0, 0, 1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 2, -2, 2, -2];
 const STEP = [1, 1, 1, 1, Math.SQRT2, Math.SQRT2, Math.SQRT2, Math.SQRT2, S5, S5, S5, S5, S5, S5, S5, S5];
 
 // Shipping lanes between ports over water. Lanes keep a little off the coast
-// (so they thread through straits), ride favourable currents, and merge into
+// (so they thread through straits), ride favorable currents, and merge into
 // shared trunk lanes; paths are straightened by line of sight, then smoothed.
 export async function generateSeaRoutes(ctx: GeneratorContext): Promise<void> {
   const { world, onProgress } = ctx;
@@ -182,7 +182,7 @@ export async function generateSeaRoutes(ctx: GeneratorContext): Promise<void> {
   };
   for (const a of list) {
     const r = rank(a);
-    link(a, 0, 1, 25, 0); // local harbour hop
+    link(a, 0, 1, 25, 0); // local harbor hop
     if (r >= 1) link(a, 1, 2, 100, 1); // coastal trade between towns
     if (r >= 2) link(a, 2, 3, 240, 2); // long-haul lanes between major ports
   }

@@ -24,8 +24,8 @@ export interface CostField {
   river: Uint8Array;
 }
 
-// 16-neighbourhood (incl. knight moves): distances are much closer to
-// Euclidean than 8-neighbour Dijkstra, which draws octagonal, staircase borders.
+// 16-neighborhood (incl. knight moves): distances are much closer to
+// Euclidean than 8-neighbor Dijkstra, which draws octagonal, staircase borders.
 const S5 = Math.sqrt(5);
 const DX = [1, -1, 0, 0, 1, 1, -1, -1, 2, 2, -2, -2, 1, 1, -1, -1];
 const DY = [0, 0, 1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 2, -2, 2, -2];

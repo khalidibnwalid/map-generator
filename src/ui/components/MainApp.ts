@@ -184,6 +184,7 @@ export default function renderMainApp() {
               ${toggle("layer-borders", "Borders", true)}
               ${toggle("layer-provinces", "Provinces", true)}
               ${toggle("layer-flags", "Flags", true, "above nation names")}
+              ${toggle("layer-wars", "Wars & battles", true, "fronts, offensives, battles")}
             </div>
             <div class="group">
               <div class="group-title">Nature</div>
@@ -244,7 +245,7 @@ export default function renderMainApp() {
 
           <!-- History -->
           <section id="content-history" class="tab-content">
-            <p class="muted">Let time run. Nations settle empty land, fight over their frontiers and break apart. Mountains, rivers and fortresses slow invaders. Cohesion comes from culture, and strength from population, wealth and government.</p>
+            <p class="muted">Let time run. Nations settle empty land, fight over their frontiers and break apart. Mountains, rivers and fortresses slow invaders. Cohesion comes from culture, and strength from population, wealth and government. Rulers age and die, and houses rise and fall.</p>
             <div class="sim-controls">
               <button id="sim-play" class="btn-primary">${ICONS.play}<span>Play</span></button>
               <button id="sim-step" class="btn-ghost" title="Advance one year">${ICONS.step}<span>Step</span></button>
@@ -264,8 +265,32 @@ export default function renderMainApp() {
               )}
             </div>
             <div class="sim-summary" id="sim-summary"></div>
+            <div class="field sim-timeline" id="sim-timeline">
+              <div class="field-label sim-timeline-head"><span>Timeline</span><span id="sim-scrub-year" class="sim-scrub-year"></span></div>
+              <input type="range" id="sim-scrub" min="0" max="0" value="0" step="1" disabled />
+              <div class="sim-timeline-row">
+                <span id="sim-scrub-from" class="muted">–</span>
+                <button id="sim-present" class="btn-ghost sim-present" disabled>Back to present</button>
+                <span id="sim-scrub-to" class="muted">–</span>
+              </div>
+              <p class="muted sim-note">Drag to replay past borders. Replays are view-only: playing or stepping always continues from the present.</p>
+              <button id="sim-gif" class="btn-ghost sim-gif" disabled><span class="sim-gif-label">Export GIF</span></button>
+            </div>
+            <div class="field">
             <div class="group-title">Chronicle</div>
+            ${picker(
+              "sim-filter",
+              "segmented",
+              [
+                { value: "all", label: "All" },
+                { value: "war", label: "Wars" },
+                { value: "realm", label: "Realms" },
+                { value: "ruler", label: "Rulers" },
+              ],
+              "all",
+            )}
             <div id="sim-log" class="sim-log"><p class="muted">Nothing has happened yet.</p></div>
+            </div>
           </section>
 
           <!-- File -->

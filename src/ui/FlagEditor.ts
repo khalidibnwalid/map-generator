@@ -15,11 +15,11 @@ import {
 
 const LAYOUT_NAMES: Record<string, string> = {
   plain: "Plain",
-  hbi: "Bicolour",
-  htri: "Tricolour",
+  hbi: "Bicolor",
+  htri: "Tricolor",
   fess: "Fess",
-  vbi: "Vertical bicolour",
-  vtri: "Vertical tricolour",
+  vbi: "Vertical bicolor",
+  vtri: "Vertical tricolor",
   pale: "Pale",
   diag: "Per bend",
   bend: "Bend",
@@ -55,7 +55,7 @@ const CHARGE_NAMES: Record<string, string> = {
 };
 
 const POSITIONS: { value: ChargePos; label: string }[] = [
-  { value: "center", label: "Centre" },
+  { value: "center", label: "Center" },
   { value: "hoist", label: "Hoist" },
   { value: "canton", label: "Canton" },
 ];
@@ -90,7 +90,7 @@ export class FlagEditor {
         <div class="field-label">Emblem</div>
         <div class="fe-grid" id="fe-charges"></div>
         <div class="fe-row">
-          <label class="fe-inline"><span>Colour</span><input type="color" id="fe-charge-color" /></label>
+          <label class="fe-inline"><span>Color</span><input type="color" id="fe-charge-color" /></label>
           <div class="fe-seg" id="fe-pos"></div>
           <label class="fe-inline fe-grow"><span>Size</span><input type="range" id="fe-scale" min="0.6" max="1.6" step="0.05" /></label>
         </div>

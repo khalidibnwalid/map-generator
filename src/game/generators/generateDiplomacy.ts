@@ -45,7 +45,7 @@ export async function generateDiplomacy(ctx: GeneratorContext): Promise<void> {
     }
   }
   const maxArea = Math.max(1, ...area);
-  // The largest realms gather vassals among their small neighbours
+  // The largest realms gather vassals among their small neighbors
   const bigRank = [...area.keys()].sort((p, q) => area[q] - area[p]);
   const isBig = new Set(bigRank.slice(0, Math.max(2, Math.round(n * 0.08))));
 
@@ -63,15 +63,15 @@ export async function generateDiplomacy(ctx: GeneratorContext): Promise<void> {
     for (let b = a + 1; b < n; b++) {
       const A = world.nations[a];
       const B = world.nations[b];
-      const neighbours = border[a][b] > 0;
+      const neighbors = border[a][b] > 0;
       let score = (noise.random() - 0.5) * 1.2;
       if (A.cultureId === B.cultureId) score += 0.5;
       if (A.religionId === B.religionId) score += 0.45;
       else score -= 0.25;
-      if (neighbours) score -= Math.min(0.9, border[a][b] / 60);
+      if (neighbors) score -= Math.min(0.9, border[a][b] / 60);
 
       let r: RelationType = "Neutral";
-      if (!neighbours) {
+      if (!neighbors) {
         if (score > 0.75) r = "Alliance";
         else if (score > 0.35) r = "Friendly";
         else if (score < -0.7) r = "Rival";
@@ -94,7 +94,7 @@ export async function generateDiplomacy(ctx: GeneratorContext): Promise<void> {
   }
   world.relations = rel;
 
-  // Vassal bonds go through makeVassal: overlord link, paler colour, shared
+  // Vassal bonds go through makeVassal: overlord link, paler color, shared
   // highlight. One overlord per vassal and no chains of vassals.
   for (let i = bonds.length - 1; i > 0; i--) {
     const j = Math.floor(noise.random() * (i + 1));

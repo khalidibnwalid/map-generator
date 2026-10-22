@@ -1374,6 +1374,75 @@ code {
 .sim-event.founding .txt { color: #a9c98a; }
 .sim-event.decline .txt { color: #b7a48c; }
 .sim-event.ruin .txt { color: #a08f80; font-style: italic; }
+.sim-event.battle .txt { color: #d9906a; }
+.sim-event.ruler .txt { color: #d8c08a; }
+
+/* Timeline scrubber and GIF export */
+.sim-timeline input[type="range"] {
+  width: 100%;
+}
+
+.sim-timeline-head {
+  display: flex;
+  justify-content: space-between;
+}
+
+.sim-scrub-year {
+  color: var(--accent);
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.sim-timeline-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sim-present {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.sim-note {
+  font-size: 11px;
+}
+
+.btn-ghost:disabled,
+input[type="range"]:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.sim-gif {
+  position: relative;
+  justify-content: center;
+  overflow: hidden;
+  width: 100%;
+}
+
+/* Progress fill while encoding (Interface sets --progress) */
+.sim-gif::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: var(--progress, 0%);
+  background: var(--accent);
+  opacity: 0.28;
+  transition: width 0.15s;
+}
+
+.sim-gif-label {
+  position: relative;
+}
+
+.sim-bar.replay .sim-bar-year strong {
+  color: var(--accent);
+}
 
 .sim-bar {
   position: absolute;
@@ -2135,7 +2204,7 @@ input[type="checkbox"]:disabled {
   cursor: not-allowed;
 }
 
-/* Colour pickers: rounded swatch */
+/* Color pickers: rounded swatch */
 input[type="color"] {
   padding: 2px;
   border: 1px solid var(--line-strong);
@@ -2735,7 +2804,7 @@ input[type="color"]::-moz-color-swatch {
   color: var(--gold);
 }
 
-.fs-neighbours {
+.fs-neighbors {
   display: flex;
   flex-direction: column;
   max-height: 260px;
@@ -2743,7 +2812,7 @@ input[type="color"]::-moz-color-swatch {
   scrollbar-width: thin;
 }
 
-.fs-neighbour {
+.fs-neighbor {
   display: flex;
   align-items: center;
   gap: 9px;
@@ -2754,11 +2823,11 @@ input[type="color"]::-moz-color-swatch {
   text-align: left;
 }
 
-.fs-neighbour:hover {
+.fs-neighbor:hover {
   background: var(--ink-hover);
 }
 
-.fs-neighbour > span:first-of-type {
+.fs-neighbor > span:first-of-type {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -2774,7 +2843,7 @@ input[type="color"]::-moz-color-swatch {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--rel) 45%, transparent);
   font-size: 11px;
   font-weight: 600;
-  /* lifted so dark relation colours (vassal purple) stay legible */
+  /* lifted so dark relation colors (vassal purple) stay legible */
   color: color-mix(in srgb, var(--rel) 70%, #fff);
 }
 

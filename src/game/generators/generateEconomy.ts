@@ -98,7 +98,7 @@ function candidateFor(world: WorldData, x: number, y: number, rand: () => number
   }
 }
 
-// Places resources, then scores every settlement (fertility, harbour, river,
+// Places resources, then scores every settlement (fertility, harbor, river,
 // centrality, nearby wealth) and re-tiers them into cities / towns / villages.
 export async function generateEconomy(ctx: GeneratorContext): Promise<void> {
   const { world, noise, width: W, height: H, onProgress } = ctx;
@@ -167,9 +167,9 @@ export async function generateEconomy(ctx: GeneratorContext): Promise<void> {
     let s = (cell?.populationDensity ?? 0) * 3;
     if (c.isPort) s += 1.2;
     if (cell?.hasRiver) s += 0.8;
-    let neighbours = 0;
-    around(cityBins, c.x, c.y, 15 * resScale, () => neighbours++);
-    s += Math.min(1.5, neighbours * 0.08); // market town for its hinterland
+    let neighbors = 0;
+    around(cityBins, c.x, c.y, 15 * resScale, () => neighbors++);
+    s += Math.min(1.5, neighbors * 0.08); // market town for its hinterland
     let wealth = 0;
     const local: string[] = [];
     around(bins, c.x, c.y, 14 * resScale, (r, d) => {

@@ -146,7 +146,7 @@ export class EconomySim {
   }
 
   // The settlement is gone: a ruin marks the spot, the roads through it
-  // stay as one road between its neighbours, ids are re-indexed
+  // stay as one road between its neighbors, ids are re-indexed
   private ruin(world: WorldData, c: City, by: string, log: Log) {
     const idx = world.cities.indexOf(c);
     if (idx < 0) return;
@@ -159,7 +159,7 @@ export class EconomySim {
     const mine = world.worldRoads.filter((r) => (r.a === id) !== (r.b === id));
     const kept = world.worldRoads.filter((r) => r.a !== id && r.b !== id);
     // Orient every road away from the ruin, then join the first to each other
-    // one (never into a loop back to the same neighbour)
+    // one (never into a loop back to the same neighbor)
     const out = mine.map((r) => (r.a === id ? r : { ...r, a: r.b, b: r.a, points: [...r.points].reverse() }));
     for (let k = 1; k < out.length; k++) if (out[k].b !== out[0].b) kept.push(join(out[0], out[k], world.width));
     world.worldRoads = kept;

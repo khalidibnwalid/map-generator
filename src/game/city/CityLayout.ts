@@ -17,7 +17,7 @@ import {
   voronoi,
 } from "./geom";
 
-// Procedural city plans in real-world meters, local to the city centre
+// Procedural city plans in real-world meters, local to the city center
 // (+x east, +y south). Built lazily; see CityRenderer for the LOD logic.
 
 export type WardType =
@@ -73,7 +73,7 @@ export interface Ward {
 
 export interface Landmark {
   kind: "castle" | "cathedral" | "church" | "temple" | "townhall" | "palace" | "windmill" | "lighthouse" | "fountain" | "keep";
-  polys: Poly[]; // roof-coloured parts
+  polys: Poly[]; // roof-colored parts
   accents: Poly[]; // darker parts (towers, apse)
   circles: number[]; // x, y, r triples (towers, fountains)
   stone: boolean;
@@ -544,7 +544,7 @@ export function* buildCityLayout(world: WorldData, city: City): Generator<void, 
       pts.push(p);
     }
     if (pts.length < 6) {
-      // Couldn't leave the centre (e.g. a narrow peninsula); stop trying
+      // Couldn't leave the center (e.g. a narrow peninsula); stop trying
       if (L.arteries.length > 0) break;
     }
     L.arteries.push({ pts, width: city.size >= 1 ? 9 : 6 });
@@ -576,7 +576,7 @@ export function* buildCityLayout(world: WorldData, city: City): Generator<void, 
 
   // Street names for the main roads
   const streetNames = ["High Street", "Sultan's Road", "Market Street", "Bridge Street", "Castle Way", "Mill Lane",
-    "Harbour Road", "Gate Street", "Mosque Street", "Old Road", "Caravan Way", "Smith Street", "Wool Street"];
+    "Harbor Road", "Gate Street", "Mosque Street", "Old Road", "Caravan Way", "Smith Street", "Wool Street"];
   L.arteries.forEach((a, i) => {
     if (a.pts.length < 6) return;
     const k = Math.min(a.pts.length - 2, Math.max(1, Math.floor(a.pts.length * 0.18)));
@@ -1195,7 +1195,7 @@ export function buildWardDetail(L: CityLayout, ward: Ward): WardDetail {
     return D;
   }
 
-  // --- Landmarks claiming the centre of their ward ---
+  // --- Landmarks claiming the center of their ward ---
   let core: Poly | null = null;
   if (ward.type === "castle") {
     const curtain = insetConvex(ward.poly, 8);
@@ -1293,7 +1293,7 @@ export function buildWardDetail(L: CityLayout, ward: Ward): WardDetail {
       if (P.ribbon > 0 && nearArtery(c.x, c.y) > P.ribbon) continue;
       if (D.landmarks.some((lm) => lm.polys.some((p) => pointInPoly(p, c.x, c.y)))) continue;
       if (ward.type === "market" || ward.type === "cathedral") {
-        // keep the plaza clear around the centrepiece
+        // keep the plaza clear around the centerpiece
         if (Math.hypot(c.x - wc.x, c.y - wc.y) < 55) continue;
       }
       if (depth > P.depth) {

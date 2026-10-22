@@ -1,5 +1,5 @@
-// Culture-flavoured name generation. Each culture picks a language family and
-// derives its own syllable mix, so neighbouring towns sound related.
+// Culture-flavored name generation. Each culture picks a language family and
+// derives its own syllable mix, so neighboring towns sound related.
 
 interface Family {
   key: string;
@@ -9,6 +9,8 @@ interface Family {
   townSuffixes: string[];
   nationSuffixes: string[];
   governments: string[];
+  given: string[]; // endings of personal names (rulers)
+  names?: string[]; // traditional given names, mixed in with generated ones
 }
 
 const FAMILIES: Family[] = [
@@ -20,6 +22,7 @@ const FAMILIES: Family[] = [
     townSuffixes: ["berg", "burg", "dorf", "furt", "heim", "stadt", "brück", "au"],
     nationSuffixes: ["ia", "land", "mark", "reich"],
     governments: ["Kingdom", "Duchy", "Margraviate", "Empire", "Electorate"],
+    given: ["bert", "mund", "ric", "wald", "helm", "fried", "hard", "win", "o"],
   },
   {
     key: "Latin",
@@ -29,6 +32,7 @@ const FAMILIES: Family[] = [
     townSuffixes: ["ona", "ano", "ento", "ia", "ella", "ica", "ora"],
     nationSuffixes: ["ia", "ium", "ana"],
     governments: ["Republic", "Principality", "Serene Republic", "Kingdom", "Empire"],
+    given: ["us", "ius", "o", "ian", "en", "ar"],
   },
   {
     key: "Slavic",
@@ -38,6 +42,7 @@ const FAMILIES: Family[] = [
     townSuffixes: ["grad", "ov", "sk", "ice", "ovo", "in", "ava"],
     nationSuffixes: ["ia", "ovia", "ania"],
     governments: ["Tsardom", "Grand Duchy", "Principality", "Kingdom", "Commonwealth"],
+    given: ["slav", "mir", "dan", "gost", "bor", "ko", "ek"],
   },
   {
     key: "Nordic",
@@ -47,6 +52,7 @@ const FAMILIES: Family[] = [
     townSuffixes: ["vik", "by", "holm", "stad", "nes", "dal", "havn"],
     nationSuffixes: ["heim", "land", "rike"],
     governments: ["Jarldom", "Kingdom", "Thing-Realm", "Union"],
+    given: ["ulf", "bjorn", "geir", "mund", "stein", "var", "rik"],
   },
   {
     key: "Desert",
@@ -56,6 +62,8 @@ const FAMILIES: Family[] = [
     townSuffixes: ["abad", "iya", "ar", "ah", "un", "esh"],
     nationSuffixes: ["ia", "istan", "ar"],
     governments: ["Sultanate", "Emirate", "Caliphate", "Khanate"],
+    given: ["im", "id", "ir", "an", "ad", "ib", "un"],
+    names: ["Rashid", "Idris", "Qasim", "Harun", "Yusuf", "Tariq", "Salim", "Karim", "Hamid", "Faisal", "Nasir", "Malik", "Zayd", "Jamal", "Mahmud", "Sulayman"],
   },
   {
     key: "Celtic",
@@ -65,6 +73,7 @@ const FAMILIES: Family[] = [
     townSuffixes: ["more", "dun", "ross", "wen", "lin", "ach"],
     nationSuffixes: ["ia", "land", "wy"],
     governments: ["High Kingdom", "Clanhold", "Kingdom", "Confederation"],
+    given: ["an", "ach", "wyn", "ric", "dan", "oc", "ed"],
   },
   {
     key: "Eastern",
@@ -74,6 +83,7 @@ const FAMILIES: Family[] = [
     townSuffixes: ["zhou", "an", "jin", "shan", "ning", "to"],
     nationSuffixes: ["", "an", "guo"],
     governments: ["Empire", "Shogunate", "Kingdom", "Dynasty"],
+    given: ["", "o", "ei", "shi", "ro", "ji", "ren"],
   },
 ];
 
@@ -112,6 +122,26 @@ export class Language {
 
   public nationName(): string {
     return this.cap(this.word() + this.pick(this.family.nationSuffixes));
+  }
+
+  // Rulers and houses draw on the caller's random stream, so the language's
+  // own stream (towns, nations) is left as world generation expects it
+  public personName(rand: () => number): string {
+    const f = this.family;
+    if (f.names && rand() < 0.6) return f.names[Math.floor(rand() * f.names.length)];
+    const on = this.onsets[Math.floor(rand() * this.onsets.length)];
+    // Vowel-less onsets ("St", "Kr") need a middle syllable to be pronounceable
+    const mid = rand() < 0.3 || !/[aeiouy]/i.test(on) ? f.middles[Math.floor(rand() * f.middles.length)] || "a" : "";
+    const end = f.given[Math.floor(rand() * f.given.length)];
+    return this.cap((on + mid + end).toLowerCase()).replace(/(.)\1\1/g, "$1$1");
+  }
+
+  public houseName(rand: () => number): string {
+    const f = this.family;
+    const on = this.onsets[Math.floor(rand() * this.onsets.length)];
+    const mid = /[aeiouy]/i.test(on) ? "" : f.middles[Math.floor(rand() * f.middles.length)] || "a";
+    const tail = rand() < 0.5 ? f.endings[Math.floor(rand() * f.endings.length)] : f.middles[Math.floor(rand() * f.middles.length)];
+    return this.cap((on + mid + tail).toLowerCase()).replace(/(.)\1\1/g, "$1$1");
   }
 
   public cultureName(): string {

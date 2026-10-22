@@ -38,7 +38,7 @@ interface Facts {
   areaRank: number;
   popRank: number;
   nations: number;
-  neighbours: { idx: number; rel: RelationType }[];
+  neighbors: { idx: number; rel: RelationType }[];
   overlord: number | null;
   vassals: number[];
   events: SimEvent[];
@@ -69,7 +69,7 @@ function computeFacts(host: AtlasHost, idx: number): Facts {
     for (let y = 0; y < H; y++) {
       const c = col[y];
       const a = c.nationIndex ?? -1;
-      // Shared edges with other realms (sea claims count: maritime neighbours)
+      // Shared edges with other realms (sea claims count: maritime neighbors)
       const b = right[y].nationIndex ?? -1;
       const d = y + 1 < H ? (col[y + 1].nationIndex ?? -1) : -1;
       if (a === idx) {
@@ -144,7 +144,7 @@ function computeFacts(host: AtlasHost, idx: number): Facts {
     areaRank: rank(host.landArea()),
     popRank: rank(pop),
     nations: world.nations.length,
-    neighbours: [...border.entries()]
+    neighbors: [...border.entries()]
       .filter(([j]) => world.nations[j])
       .sort((a, b) => b[1] - a[1])
       .map(([j]) => ({ idx: j, rel: relation(world, idx, j) })),
@@ -239,7 +239,7 @@ export class FactSheet {
         offsetY: -ext.y0 * scale,
         pixelRatio: pr,
         keep,
-        cancelled: () => token !== this.token,
+        canceled: () => token !== this.token,
       })
       .then(() => {
         if (token !== this.token) return;
@@ -325,11 +325,11 @@ export class FactSheet {
                   .join("")}</ol>`
               : `<p class="muted">No settlements.</p>`
           }</section>
-          <section><h3>Neighbours</h3>${
-            f.neighbours.length
-              ? `<div class="fs-neighbours">${f.neighbours
+          <section><h3>Neighbors</h3>${
+            f.neighbors.length
+              ? `<div class="fs-neighbors">${f.neighbors
                   .map(
-                    (n) => `<button class="fs-neighbour" data-nation="${n.idx}">${flagImg(n.idx, 21, 14)}<span>${escapeHtml(world.nations[n.idx].name)}</span>
+                    (n) => `<button class="fs-neighbor" data-nation="${n.idx}">${flagImg(n.idx, 21, 14)}<span>${escapeHtml(world.nations[n.idx].name)}</span>
                       <span class="fs-rel" style="--rel:${RELATION_COLORS[n.rel]}">${REL_LABEL[n.rel] ?? n.rel}</span></button>`,
                   )
                   .join("")}</div>`
@@ -589,7 +589,7 @@ function paintSheet(ctx: CanvasRenderingContext2D, world: WorldData, f: Facts, m
     yl += 30;
   }
 
-  // Right column: map, cities, neighbours
+  // Right column: map, cities, neighbors
   const rx = lx + lw + 44;
   const rw = W - M - rx;
   let yr = y;
@@ -640,14 +640,14 @@ function paintSheet(ctx: CanvasRenderingContext2D, world: WorldData, f: Facts, m
     yr += 30;
   });
   yr += 18;
-  yr = heading("Neighbours", rx, yr);
-  if (!f.neighbours.length) {
+  yr = heading("Neighbors", rx, yr);
+  if (!f.neighbors.length) {
     ctx.font = `italic 14px ${C.body}`;
     ctx.fillStyle = C.muted;
     ctx.fillText("An isolated realm.", rx, yr + 14);
     yr += 30;
   }
-  const shown = f.neighbours.slice(0, 10);
+  const shown = f.neighbors.slice(0, 10);
   for (const n of shown) {
     const nf = nationFlag(world, n.idx, 60, 40);
     if (nf) ctx.drawImage(nf, rx, yr + 4, 30, 20);
@@ -670,10 +670,10 @@ function paintSheet(ctx: CanvasRenderingContext2D, world: WorldData, f: Facts, m
     ctx.fillText(ellipsis(ctx, world.nations[n.idx].name, rw - pw - 52), rx + 42, yr + 19);
     yr += 32;
   }
-  if (f.neighbours.length > shown.length) {
+  if (f.neighbors.length > shown.length) {
     ctx.font = `italic 13px ${C.body}`;
     ctx.fillStyle = C.muted;
-    ctx.fillText(`and ${f.neighbours.length - shown.length} more`, rx + 42, yr + 12);
+    ctx.fillText(`and ${f.neighbors.length - shown.length} more`, rx + 42, yr + 12);
     yr += 24;
   }
 

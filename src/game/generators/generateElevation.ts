@@ -25,7 +25,7 @@ export async function generateElevation(ctx: GeneratorContext): Promise<void> {
     }
 
     // Pangea: a random supercontinent archetype, built as a thick "spine"
-    // (polylines in height-normalised map units, x spans ±aspect/2)
+    // (polylines in height-normalized map units, x spans ±aspect/2)
     const aspect = width / height;
     const arc = (a0: number, a1: number, r: number, n: number) =>
         Array.from({ length: n }, (_, i) => {

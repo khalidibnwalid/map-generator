@@ -38,7 +38,7 @@ export class PoiRenderer {
         if (x < v.x0 - 0.2 || x > v.x1 + 0.2) continue;
         const sx = x * scale + offsetX;
         const sy = p.y * scale + offsetY;
-        // Volcanoes are kilometres wide, so their relief shows from afar
+        // Volcanoes are kilometers wide, so their relief shows from afar
         const rA = p.kind === "volcano" ? Math.max(0, Math.min(1, (ppm - 0.0012) / 0.0012)) : realA;
         if (rA > 0 && p.kind !== "port") {
           ctx.globalAlpha = rA;
@@ -68,7 +68,7 @@ export class PoiRenderer {
     ctx.restore();
   }
 
-  // Small filled silhouettes in a single ink colour with a paper halo, in the
+  // Small filled silhouettes in a single ink color with a paper halo, in the
   // style of printed atlas symbols. Drawn around (0, 0), roughly 10 px tall.
   private glyph(ctx: CanvasRenderingContext2D, p: Poi, ink: string, paper: string) {
     const shape = new Path2D();

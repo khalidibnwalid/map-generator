@@ -19,7 +19,7 @@ export interface MapView {
   keep?: Set<number> | null; // nations drawn vividly; other land is dimmed
   waitForCities?: boolean; // wait (bounded) for detailed city plans in view
   onProgress?: (fraction: number, label: string) => void;
-  cancelled?: () => boolean;
+  canceled?: () => boolean;
 }
 
 // What the poster and fact sheet need from the app
@@ -151,7 +151,7 @@ export function dimMask(world: WorldData, keep: Set<number>): HTMLCanvasElement 
   return c;
 }
 
-// Greys out land outside `keep` inside the view, a strip at a time so even an
+// Grays out land outside `keep` inside the view, a strip at a time so even an
 // 8K poster needs only a small scratch canvas.
 export function dimOutside(ctx: CanvasRenderingContext2D, world: WorldData, v: MapView, keep: Set<number>, theme: MapTheme) {
   const mask = dimMask(world, keep);

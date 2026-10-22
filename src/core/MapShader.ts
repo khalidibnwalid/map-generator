@@ -29,7 +29,7 @@ uniform ivec2 u_worldSizeI;
 uniform uint u_seed;
 uniform float u_scale;          // screen pixels per cell
 uniform vec2 u_offsetLocal;     // screen offset of u_originI
-uniform ivec2 u_originI;        // integer cell near the view centre, wrapped
+uniform ivec2 u_originI;        // integer cell near the view center, wrapped
 uniform ivec2 u_fieldOriginI;   // integer part of rotated field lattice at origin
 uniform vec2 u_fieldOriginF;    // fractional part of the same
 
@@ -55,8 +55,8 @@ uniform float u_hoverProvinceIndex;
 uniform bool u_seasonOn;
 uniform float u_season;         // 0..1 through the year, 0 = mid-January
 uniform bool u_night;
-uniform sampler2D u_lightsTex;  // R city glow, G road threads, B harbour lights
-uniform vec3 u_lightMask;       // city, road and harbour light switches
+uniform sampler2D u_lightsTex;  // R city glow, G road threads, B harbor lights
+uniform vec3 u_lightMask;       // city, road and harbor light switches
 uniform bool u_weather;
 uniform float u_time;           // seconds; drifts the clouds
 // Exports: device pixels per layout pixel (line widths and glyph spacing
@@ -151,7 +151,7 @@ int classify(float e, float t, float m, float slope, float wd, float cd) {
   return 19;
 }
 
-// Tree cover per biome: density (0..1) and leaf colour
+// Tree cover per biome: density (0..1) and leaf color
 float treeDensity(int b) {
   if (b == 15 || b == 36) return 0.9;
   if (b == 12 || b == 29) return 0.85;
@@ -175,7 +175,7 @@ vec3 leafColor(int b) {
 
 // Season at signed latitude latS (-1 north pole .. 1 south pole); the
 // hemispheres run six months apart and all terms are smooth in u_season.
-// x: winter (-1 high summer .. 1 deep winter), y: autumn colour (0..1),
+// x: winter (-1 high summer .. 1 deep winter), y: autumn color (0..1),
 // z: spring thaw (0..1), w: seasonal amplitude (0 at the equator).
 // Keep seasonFlood in sync with Season.ts.
 vec4 seasonState(float latS) {
@@ -570,8 +570,8 @@ void main() {
     ivec2 gq;
     vec2 gf;
     lattice(ci, l, fsym, gq, gf);
-    vec2 centre = (vec2(gq) + 0.5) / fsym;
-    vec2 cuv = vec2(fract(centre.x / u_worldSize.x), clamp(centre.y / u_worldSize.y, 0.0, 1.0));
+    vec2 center = (vec2(gq) + 0.5) / fsym;
+    vec2 cuv = vec2(fract(center.x / u_worldSize.x), clamp(center.y / u_worldSize.y, 0.0, 1.0));
     vec4 cd = texture(u_mapTexture, cuv);
     float jx = hashU(gq.x, gq.y, u_seed + 3u) - 0.5;
     vec2 g = gf - vec2(0.5 + jx * 0.3, 0.5);
@@ -706,7 +706,7 @@ void main() {
     }
   }
 
-  // Antialias the shoreline: blend toward the other side's colour across the
+  // Antialias the shoreline: blend toward the other side's color across the
   // one-pixel band where the coast field crosses zero.
   if (landMask > 0.001 && landMask < 0.999 && !u_showElevation) {
     vec3 other;
@@ -845,7 +845,7 @@ void main() {
       float lm = max(landMask, isletMask);
       float alpha = landA * lm * politicalFade * (1.0 - 0.75 * iceMask);
       if (u_theme == 1) {
-        // Vintage ribbon: strong colour wash just inside each border
+        // Vintage ribbon: strong color wash just inside each border
         float rib = getBorderStrength(c00, c10, c01, c11, noisy_fxy, 4.0 * field_per_pixel, aa * 3.0);
         alpha += rib * 0.4 * landMask;
       }
@@ -945,9 +945,9 @@ void main() {
     night = mix(night, sea, water * 0.9);
 
     // Lights pre-splatted per world: warm pools by population, beaded road
-    // threads (gone once roads are drawn for real) and harbour reflections
+    // threads (gone once roads are drawn for real) and harbor reflections
     vec3 lt = texture(u_lightsTex, vec2(nx, ny)).rgb;
-    // The pools are kilometres wide; up close they shrink to a faint halo and
+    // The pools are kilometers wide; up close they shrink to a faint halo and
     // the overlay lights each drawn city instead
     float closeUp = 1.0 - 0.85 * smoothstep(10.0, 60.0, u_scale);
     lt.rb *= closeUp;

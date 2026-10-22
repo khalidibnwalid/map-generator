@@ -41,7 +41,7 @@ export async function generateCultures(ctx: GeneratorContext): Promise<void> {
 
   world.cultures = [];
   world.languages = [];
-  // Neighbouring hearths often share a language family
+  // Neighboring hearths often share a language family
   const families: number[] = [];
   cultureSeeds.forEach((cell, id) => {
     const x = cell % W;

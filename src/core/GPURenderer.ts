@@ -278,7 +278,7 @@ export class GPURenderer {
       dirtyRect = undefined;
       fresh = true;
     }
-    // Colours parsed once per nation, not per texel
+    // Colors parsed once per nation, not per texel
     const lut = new Uint8Array(world.nations.length * 3);
     world.nations.forEach((n, i) => {
       const v = parseInt(n.color.slice(1, 7), 16);
@@ -355,7 +355,7 @@ export class GPURenderer {
     );
   }
 
-  // Colours one RGBA texel per cell for the thematic overlay. `colorOf` returns
+  // Colors one RGBA texel per cell for the thematic overlay. `colorOf` returns
   // [r, g, b, a] (0-255) for a land cell or null; water copies the nearest land.
   public updateThematicTexture(
     world: WorldData,
@@ -380,7 +380,7 @@ export class GPURenderer {
   // Night lights as soft Gaussian splats into a low-res texture, built once per
   // world (and when cities or roads change) so the shader only samples it.
   // R: city pools by population, G: threads along roads and highways,
-  // B: harbour lights, used on water only.
+  // B: harbor lights, used on water only.
   public updateLightsTexture(world: WorldData) {
     const W = world.width;
     const H = world.height;
@@ -483,7 +483,7 @@ export class GPURenderer {
     bind(5, this.nationIdxTexture, "u_nationIdxTex");
     bind(6, this.lightsTexture, "u_lightsTex");
 
-    // Split the camera into an integer cell near the screen centre plus a
+    // Split the camera into an integer cell near the screen center plus a
     // small local offset so the shader keeps sub-meter precision.
     const centerWX = (width / 2 - offsetX) / scale;
     const centerWY = (height / 2 - offsetY) / scale;

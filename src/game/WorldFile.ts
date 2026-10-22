@@ -26,6 +26,7 @@ interface WorldFileData {
   provinceGrid: string;
   roads?: string; // only when edits changed the road network
   pois?: Poi[]; // only when landmarks were edited
+  year?: number; // simulated year, so ruler ages carry on after loading
 }
 
 const RELATION_CODES: RelationType[] = ["Neutral", "Alliance", "Friendly", "Rival", "War", "Vassal", "Overlord"];
@@ -156,6 +157,7 @@ export async function saveWorld(generator: MapGenerator): Promise<Blob> {
     provinceGrid: rleEncode(provinceGrid),
     roads: world.roadsEdited ? encodeRoads(world.worldRoads) : undefined,
     pois: world.poisEdited ? world.pois : undefined,
+    year: world.year || undefined,
   };
   // Trim float noise from city coordinates to keep the file small
   const json = JSON.stringify(data, (_k, v) => (typeof v === "number" && !Number.isInteger(v) ? Math.round(v * 1000) / 1000 : v));
@@ -181,6 +183,7 @@ export async function loadWorld(
   world.nations = data.nations;
   world.provinces = data.provinces;
   world.cities = data.cities;
+  world.year = data.year ?? 0;
   const n = world.nations.length;
   world.relations = Array.from({ length: n }, (_, a) =>
     Array.from({ length: n }, (_, b) => RELATION_CODES[Number(data.relations[a * n + b] ?? 0)] ?? "Neutral"),

@@ -19,8 +19,8 @@ function shade(hex: string, amt: number): string {
   return `#${ch(16)}${ch(8)}${ch(0)}`;
 }
 
-// Greedy map colouring: neighbours never share a palette colour; when a
-// colour is reused elsewhere it gets a slightly different shade.
+// Greedy map coloring: neighbors never share a palette color; when a
+// color is reused elsewhere it gets a slightly different shade.
 export function assignNationColors(world: WorldData) {
   const n = world.nations.length;
   const W = world.width;
@@ -57,9 +57,9 @@ export function assignNationColors(world: WorldData) {
   }
 }
 
-// A palette colour for a nation founded in the editor, avoiding its neighbours
-export function colorForNewNation(world: WorldData, neighbours: number[]): string {
-  const used = new Set(neighbours.map((j) => world.nations[j]?.color));
+// A palette color for a nation founded in the editor, avoiding its neighbors
+export function colorForNewNation(world: WorldData, neighbors: number[]): string {
+  const used = new Set(neighbors.map((j) => world.nations[j]?.color));
   const free = NATION_PALETTE.filter((c) => !used.has(c));
   const pool = free.length ? free : NATION_PALETTE;
   return pool[Math.floor(Math.random() * pool.length)];

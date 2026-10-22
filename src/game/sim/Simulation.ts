@@ -11,13 +11,41 @@ import {
 } from "../politics";
 import { colorForNewNation, partitionNation, refreshTerritorialWaters } from "../generators";
 import { EconomySim, type EconEventKind } from "./economySim";
+import { HistoryRecorder } from "./History";
+import { crownRulers, foundHouse, installCadet, reignYear, rulerStyle, succeed, usurp } from "./Rulers";
 
 export interface SimEvent {
   year: number;
   text: string;
-  kind: "war" | "peace" | "conquest" | "civil" | "vassal" | "independence" | "fall" | "annex" | EconEventKind;
+  kind: "war" | "peace" | "conquest" | "civil" | "vassal" | "independence" | "fall" | "annex" | "battle" | "ruler" | EconEventKind;
   x: number;
   y: number;
+}
+
+// A large army advance: where it broke through (x, y) and how far it got
+export interface Battle {
+  year: number;
+  x: number;
+  y: number;
+  winner: string;
+  loser: string;
+  size: number; // cells taken
+}
+
+// This year's offensive arrows, world cells (x1 may lie past the wrap)
+export interface Offensive {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  size: number;
+}
+
+// Contact frontier of a war, as polylines in world cells (x unwrapped)
+export interface FrontLine {
+  a: number;
+  b: number;
+  chains: Float32Array[];
 }
 
 interface War {
@@ -26,7 +54,7 @@ interface War {
   start: number;
   aLand0: number; // land each side held when the war began
   bLand0: number;
-  mom: number; // momentum: >0 favours a, <0 favours b
+  mom: number; // momentum: >0 favors a, <0 favors b
   ends: number; // year after which a negotiated peace becomes likely
 }
 
@@ -101,6 +129,12 @@ class Heap {
 export class Simulation {
   public year = 0;
   public events: SimEvent[] = [];
+  public history: HistoryRecorder;
+  public battles: Battle[] = []; // oldest first
+  public offensives: Offensive[] = []; // advances of the latest year
+  private frontCache: { year: number; lines: FrontLine[] } | null = null;
+  private prongs: { seed: number; dx: number; dy: number; n: number }[] = []; // filled by thrust()
+  private lastBattleLog = -99;
   public changedCities = new Set<number>(); // city ids whose owner changed since last read
   // Rows touched since the UI last read them, and whether provinces changed
   public dirty = { y0: Infinity, y1: -1, provinces: false };
@@ -147,6 +181,9 @@ export class Simulation {
     this.owner = new Int16Array(N);
     this.prov = new Int32Array(N);
     this.stamp = new Int32Array(N);
+    this.year = world.year;
+    this.history = new HistoryRecorder(N);
+    crownRulers(world, this.rand);
     for (let x = 0; x < W; x++) {
       const col = world.grid[x];
       for (let y = 0; y < H; y++) {
@@ -177,7 +214,7 @@ export class Simulation {
 
   private log(kind: SimEvent["kind"], text: string, x: number, y: number) {
     this.events.unshift({ year: this.year, text, kind, x, y });
-    if (this.events.length > 300) this.events.length = 300;
+    if (this.events.length > 500) this.events.length = 500;
   }
 
   private nameOf(i: number) {
@@ -223,6 +260,11 @@ export class Simulation {
     this.changedCities.add(city.id);
     if (wasCapital && from >= 0) {
       this.log("conquest", `${this.nameOf(to)} takes ${city.name}, capital of ${this.nameOf(from)}`, city.x, city.y);
+      const fallen = this.world.nations[from];
+      if (fallen?.ruler && this.rand() < 0.3) {
+        const s = succeed(this.world, fallen, this.year, this.rand, `is slain as ${city.name} falls`);
+        if (s.text) this.log("ruler", s.text, city.x, city.y);
+      }
       relocateCapital(this.world, from);
     }
   }
@@ -311,10 +353,25 @@ export class Simulation {
       this.sync();
       this.needsSync = false;
     }
+    // The starting borders are the first recorded year
+    if (!this.history.length) this.history.record(this.year - 1, this.owner, w.nations);
+    w.year = this.year;
+    this.offensives = [];
     this.byProv = null;
     let changed = false;
     let m = this.measure();
     const n = w.nations.length;
+
+    // --- Reigns: rulers age and die; only large realms make the chronicle ---
+    const ranked = Array.from(m.land).sort((p, q) => q - p);
+    const notableLand = Math.min(ranked[Math.min(4, ranked.length - 1)] ?? 0, (ranked[0] ?? 0) * 0.4);
+    reignYear(
+      w,
+      this.year,
+      rand,
+      (i) => m.land[i] > 0 && m.land[i] >= notableLand,
+      (i, text) => this.log("ruler", text, w.nations[i].capitalX, w.nations[i].capitalY),
+    );
 
     // Wars follow the relations matrix (the user may declare or end them)
     for (const [k, war] of this.wars)
@@ -362,6 +419,8 @@ export class Simulation {
       }
 
     // --- Campaigns ---
+    let biggest: Battle | null = null;
+    let biggestCell = -1;
     for (const [k, war] of this.wars) {
       const f = fronts.get(k);
       const sa = m.strength[war.a];
@@ -376,8 +435,43 @@ export class Simulation {
       const loserLand0 = aWins ? war.bLand0 : war.aLand0;
       const budget = Math.round(loserLand0 * (0.025 + 0.09 * edge + 0.05 * rand()) + 6);
       const seeds = aWins ? f.b : f.a; // loser cells on the front
-      if (this.thrust(winner, loser, seeds, budget) > 0) changed = true;
+      if (this.thrust(winner, loser, seeds, budget) === 0) continue;
+      changed = true;
+      // Each prong is an offensive; the largest one is the year's battle on this front
+      let best = null;
+      for (const p of this.prongs) {
+        if (p.n < 3) continue;
+        const sx = (p.seed % W) + 0.5;
+        const sy = Math.floor(p.seed / W) + 0.5;
+        const k2 = 1.7 / p.n;
+        this.offensives.push({ x0: sx, y0: sy, x1: sx + p.dx * k2, y1: sy + p.dy * k2, size: p.n });
+        if (!best || p.n > best.n) best = p;
+      }
+      if (best && best.n >= 8) {
+        const b: Battle = {
+          year: this.year,
+          x: (best.seed % W) + 0.5,
+          y: Math.floor(best.seed / W) + 0.5,
+          winner: this.nameOf(winner),
+          loser: this.nameOf(loser),
+          size: best.n,
+        };
+        this.battles.push(b);
+        if (!biggest || b.size > biggest.size) {
+          biggest = b;
+          biggestCell = best.seed;
+        }
+      }
     }
+    // Only the year's largest battle, if large, reaches the chronicle (and not every year)
+    if (biggest && biggest.size >= 80 && this.year - this.lastBattleLog >= 4) {
+      this.lastBattleLog = this.year;
+      this.log("battle", `Battle of ${this.placeName(biggestCell)}: ${biggest.winner} defeats ${biggest.loser}`, biggest.x, biggest.y);
+    }
+    // Battles are kept as long as the recorded history (timeline and GIF show them)
+    const oldest = this.history.frames[0]?.year ?? this.year;
+    if (this.battles.length > 6000 || (this.battles.length && this.battles[0].year < oldest))
+      this.battles = this.battles.filter((b) => b.year >= oldest).slice(-6000);
 
     // --- Peace treaties ---
     let dropped = false; // a nation vanished: indices shifted, skip the rest of this year's diplomacy
@@ -415,6 +509,10 @@ export class Simulation {
             if (L.overlord === undefined && w.nations[winner].overlord === undefined && rand() < 0.55) {
               makeVassal(w, loser, winner);
               this.log("vassal", `${L.name} capitulates and becomes a vassal of ${this.nameOf(winner)}`, pos.x, pos.y);
+              if (rand() < 0.4) {
+                const t = installCadet(w, L, w.nations[winner], this.year, rand);
+                if (t) this.log("ruler", t, pos.x, pos.y);
+              }
             } else {
               setRelation(w, winner, loser, "Rival");
               this.log("peace", `${L.name} capitulates to ${this.nameOf(winner)} and cedes its occupied provinces`, pos.x, pos.y);
@@ -535,7 +633,74 @@ export class Simulation {
       refreshTerritorialWaters(w, this.dirty, this.owner);
     }
     if (this.year % 10 === 0) this.pruneProvinces();
+    this.history.record(this.year, this.owner, w.nations);
     return changed;
+  }
+
+  public get warPairs(): { a: number; b: number }[] {
+    return [...this.wars.values()].map((war) => ({ a: war.a, b: war.b }));
+  }
+
+  // "Kargrad" for the city nearest a cell, else its province's name
+  private placeName(cell: number): string {
+    const w = this.world;
+    const W = this.W;
+    const x = cell % W;
+    const y = Math.floor(cell / W);
+    let best: City | null = null;
+    let bd = 14;
+    for (const c of w.cities) {
+      let dx = Math.abs(c.x - x);
+      if (dx > W / 2) dx = W - dx;
+      const d = Math.hypot(dx, c.y - y);
+      if (d < bd) {
+        bd = d;
+        best = c;
+      }
+    }
+    return best?.name ?? w.provinces[this.prov[cell]]?.name ?? "the frontier";
+  }
+
+  // Contact frontiers of active wars, traced into polylines along cell edges.
+  // Cached per year; the overlay asks for it every frame.
+  public frontLines(): FrontLine[] {
+    if (this.frontCache?.year === this.year) return this.frontCache.lines;
+    const W = this.W;
+    const H = this.H;
+    const n = this.world.nations.length;
+    const pairs = new Map<number, number[]>(); // war key -> vertex pairs
+    for (const war of this.wars.values()) if (war.a < n && war.b < n) pairs.set(this.pair(war.a, war.b), []);
+    if (pairs.size) {
+      const owner = this.owner;
+      for (let y = 0; y < H; y++)
+        for (let x = 0; x < W; x++) {
+          const i = y * W + x;
+          const o = owner[i];
+          if (o < 0 || !this.land[i]) continue;
+          const r = y * W + ((x + 1) % W);
+          const p = owner[r];
+          if (p >= 0 && p !== o && this.land[r]) {
+            const e = pairs.get(this.pair(o, p));
+            // Vertical edge on the right side of the cell; vertex = vy * W + vx
+            if (e) e.push(y * W + ((x + 1) % W), (y + 1) * W + ((x + 1) % W));
+          }
+          if (y + 1 < H) {
+            const d = i + W;
+            const q = owner[d];
+            if (q >= 0 && q !== o && this.land[d]) {
+              const e = pairs.get(this.pair(o, q));
+              if (e) e.push((y + 1) * W + x, (y + 1) * W + ((x + 1) % W));
+            }
+          }
+        }
+    }
+    const lines: FrontLine[] = [];
+    for (const [key, edges] of pairs) {
+      if (edges.length < 6) continue;
+      lines.push({ a: Math.floor(key / 4096), b: key % 4096, chains: traceChains(edges, W) });
+    }
+    this.frontCache = { year: this.year, lines };
+    return lines;
   }
 
   // Army advance: cheapest-path growth into the loser's land from a few
@@ -550,6 +715,7 @@ export class Simulation {
     const prongs = 1 + Math.floor(this.rand() * 3);
     let taken = 0;
     const stampId = ++this.stampId;
+    this.prongs = [];
     for (let k = 0; k < prongs && front.length; k++) {
       const seed = front[Math.floor(this.rand() * front.length)];
       if (this.owner[seed] !== loser) continue;
@@ -558,6 +724,11 @@ export class Simulation {
       this.stamp[seed] = stampId;
       const cost = new Map<number, number>([[seed, 0]]);
       let quota = Math.ceil(budget / prongs);
+      // Summed offset of taken cells from the seed (wrap-aware) for the offensive arrow
+      const sx0 = seed % W;
+      const sy0 = (seed / W) | 0;
+      const prong = { seed, dx: 0, dy: 0, n: 0 };
+      this.prongs.push(prong);
       while (heap.size && quota > 0) {
         const c = heap.pop();
         if (this.owner[c] !== loser) continue;
@@ -567,6 +738,12 @@ export class Simulation {
         const g = cost.get(c)!;
         const x = c % W;
         const y = (c / W) | 0;
+        let ox = x - sx0;
+        if (ox > W / 2) ox -= W;
+        else if (ox < -W / 2) ox += W;
+        prong.dx += ox;
+        prong.dy += y - sy0;
+        prong.n++;
         for (let d = 0; d < 4; d++) {
           const nx = d === 0 ? (x + 1) % W : d === 1 ? (x - 1 + W) % W : x;
           const ny = d === 2 ? y - 1 : d === 3 ? y + 1 : y;
@@ -817,7 +994,13 @@ export class Simulation {
     land[idx] = region.length;
     this.startWar(idx, parent, land);
     const NT = w.nations[idx];
-    this.log("civil", `Civil war in ${parentName}: ${NT.name} breaks away`, NT.capitalX, NT.capitalY);
+    foundHouse(w, NT, this.year, rand);
+    this.log("civil", `Civil war in ${parentName}: ${NT.name} breaks away under ${rulerStyle(NT)}`, NT.capitalX, NT.capitalY);
+    // The turmoil sometimes topples the old house too
+    if (rand() < 0.3) {
+      const P = w.nations[parent];
+      this.log("ruler", usurp(w, P, this.year, rand), P.capitalX, P.capitalY);
+    }
     return true;
   }
 
@@ -841,4 +1024,60 @@ export class Simulation {
     this.dirty.provinces = true;
     this.sync();
   }
+}
+
+// Joins unit cell edges (pairs of lattice vertices, vertex = vy * W + vx with
+// vx wrapped) into polylines, then smooths the stairs away. x is unwrapped
+// along each chain so it can run across the date line.
+function traceChains(edges: number[], W: number): Float32Array[] {
+  const E = edges.length / 2;
+  const at = new Map<number, number[]>();
+  for (let e = 0; e < E; e++)
+    for (let s = 0; s < 2; s++) {
+      const v = edges[e * 2 + s];
+      const l = at.get(v);
+      if (l) l.push(e);
+      else at.set(v, [e]);
+    }
+  const used = new Uint8Array(E);
+  const chains: Float32Array[] = [];
+  const walk = (start: number) => {
+    const pts: number[] = [start % W, Math.floor(start / W)];
+    let v = start;
+    let px = start % W;
+    for (;;) {
+      const list = at.get(v)!;
+      let next = -1;
+      for (const e of list)
+        if (!used[e]) {
+          next = e;
+          break;
+        }
+      if (next < 0) break;
+      used[next] = 1;
+      v = edges[next * 2] === v ? edges[next * 2 + 1] : edges[next * 2];
+      let nx = v % W;
+      while (nx - px > W / 2) nx -= W;
+      while (px - nx > W / 2) nx += W;
+      pts.push(nx, Math.floor(v / W));
+      px = nx;
+    }
+    if (pts.length < 8) return; // stray bits of frontier
+    // Keep every other vertex, then one round of Chaikin corner cutting
+    const thin: number[] = [];
+    for (let k = 0; k < pts.length; k += 4) thin.push(pts[k], pts[k + 1]);
+    if (thin[thin.length - 2] !== pts[pts.length - 2] || thin[thin.length - 1] !== pts[pts.length - 1])
+      thin.push(pts[pts.length - 2], pts[pts.length - 1]);
+    const out: number[] = [thin[0], thin[1]];
+    for (let k = 0; k + 3 < thin.length; k += 2) {
+      const x0 = thin[k], y0 = thin[k + 1], x1 = thin[k + 2], y1 = thin[k + 3];
+      out.push(x0 * 0.75 + x1 * 0.25, y0 * 0.75 + y1 * 0.25, x0 * 0.25 + x1 * 0.75, y0 * 0.25 + y1 * 0.75);
+    }
+    out.push(thin[thin.length - 2], thin[thin.length - 1]);
+    chains.push(Float32Array.from(out));
+  };
+  // Open ends first so chains are not split in the middle, then closed loops
+  for (const [v, list] of at) if (list.length % 2 === 1) walk(v);
+  for (const [v, list] of at) while (list.some((e) => !used[e])) walk(v);
+  return chains;
 }

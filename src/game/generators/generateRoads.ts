@@ -211,7 +211,7 @@ export async function generateRoads(ctx: GeneratorContext): Promise<void> {
   const resScale = world.width / 800;
   const maxD = 55 * resScale;
 
-  // Candidate edges: k nearest same-landmass neighbours
+  // Candidate edges: k nearest same-landmass neighbors
   const edges: { a: number; b: number; d: number }[] = [];
   const seen = new Set<string>();
   for (const a of cities) {
@@ -262,7 +262,7 @@ export async function generateRoads(ctx: GeneratorContext): Promise<void> {
   world.worldRoads = roads;
 }
 
-// Coarse cells (as world cell centres) where roads cross rivers
+// Coarse cells (as world cell centers) where roads cross rivers
 export function roadBridges(world: WorldData): Point[] {
   const G = getGrid(world);
   return [...G.bridges].map((c) => ({
@@ -271,7 +271,7 @@ export function roadBridges(world: WorldData): Point[] {
   }));
 }
 
-// Links a newly founded city to its nearest neighbours (editor use).
+// Links a newly founded city to its nearest neighbors (editor use).
 export function connectCity(world: WorldData, city: City) {
   const G = getGrid(world);
   const lm = landmassOf(world, city);

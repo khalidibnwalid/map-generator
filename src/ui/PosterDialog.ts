@@ -25,7 +25,7 @@ const SIZES = [
 const DECOR = [
   { key: "title", label: "Title cartouche" },
   { key: "compass", label: "Compass rose" },
-  { key: "scaleBar", label: "Scale bar", hint: "kilometres" },
+  { key: "scaleBar", label: "Scale bar", hint: "kilometers" },
   { key: "legend", label: "Legend", hint: "realms, or the thematic key" },
   { key: "frame", label: "Border & frame", hint: "styled after the map theme" },
   { key: "flags", label: "Row of flags" },
@@ -343,7 +343,7 @@ export class PosterDialog {
     spec: PosterSpec,
     waitForCities: boolean,
     onProgress?: (f: number, label: string) => void,
-    cancelled?: () => boolean,
+    canceled?: () => boolean,
   ): Promise<HTMLCanvasElement> {
     await loadPosterFonts();
     const L = posterLayout(spec);
@@ -352,7 +352,7 @@ export class PosterDialog {
     canvas.height = L.H;
     const ctx = canvas.getContext("2d")!;
     paintBackground(ctx, L, spec);
-    await this.host.renderMapTo(ctx, { ...posterView(L, spec), waitForCities, onProgress, cancelled });
+    await this.host.renderMapTo(ctx, { ...posterView(L, spec), waitForCities, onProgress, canceled });
     paintDecorations(ctx, L, spec, this.host.getWorld(), this.host.landArea());
     return canvas;
   }
@@ -433,7 +433,7 @@ export class PosterDialog {
     try {
       canvas = await this.paint(spec, true, (f, label) => this.setProgress(f, label), () => this.cancelRequested);
       if (this.cancelRequested) {
-        this.setProgress(null, "Cancelled");
+        this.setProgress(null, "Canceled");
         return;
       }
       this.setProgress(0.92, "Encoding image");

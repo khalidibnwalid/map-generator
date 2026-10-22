@@ -1,6 +1,6 @@
 import type { WorldData } from "./WorldData";
 
-// Procedural flags. A flag is a field layout (up to three colours) plus an
+// Procedural flags. A flag is a field layout (up to three colors) plus an
 // optional emblem; vassals fly their overlord's flag in the canton. Fields are
 // rendered per pixel (supersampled) from a region function, emblems as paths.
 
@@ -164,7 +164,7 @@ function luminance(hex: string) {
   return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
 }
 
-// The nation's map colour, deepened into a flag-worthy tincture
+// The nation's map color, deepened into a flag-worthy tincture
 function deepen(hex: string): string {
   const [r, g, b] = rgb(hex).map((c) => c / 255);
   const mx = Math.max(r, g, b);
@@ -188,7 +188,7 @@ function deepen(hex: string): string {
   return `#${to(r1)}${to(g1)}${to(b1)}`;
 }
 
-// Which colour (0-2) covers the point (u, v) of the field, both in [0, 1]
+// Which color (0-2) covers the point (u, v) of the field, both in [0, 1]
 export function regionAt(layout: FlagLayout, u: number, v: number): number {
   switch (layout) {
     case "plain":
@@ -233,7 +233,7 @@ export function regionAt(layout: FlagLayout, u: number, v: number): number {
       return u < 0.22 + 0.09 * (1 - Math.abs(2 * t - 1)) ? 1 : 0;
     }
     case "rays": {
-      // Sunburst from just left of centre
+      // Sunburst from just left of center
       const a = Math.atan2(v - 0.5, (u - 0.42) * 1.5);
       return Math.floor(((a + Math.PI) / (2 * Math.PI)) * 16) % 2 === 0 ? 0 : 1;
     }
@@ -263,7 +263,7 @@ export function generateFlag(seedText: string, nationColor: string, family: stri
   let c2 = pick(st.colors);
   for (let k = 0; k < 4 && c2 === c0; k++) c2 = pick([...st.colors, T.black, own]);
   const layout = pick(st.layouts);
-  // Metal between colours keeps fields legible; some layouts read better swapped
+  // Metal between colors keeps fields legible; some layouts read better swapped
   let colors: [string, string, string] = [c0, metal, c2];
   if (layout === "border" || layout === "canton") colors = [c0, rand() < 0.5 ? metal : c2, c2];
   if (layout === "stripes" || layout === "hbi") colors = rand() < 0.5 ? [metal, c0, c2] : [c0, metal, c2];
@@ -294,7 +294,7 @@ export function generateFlag(seedText: string, nationColor: string, family: stri
   return spec;
 }
 
-// An emblem colour that stands out from the field under it
+// An emblem color that stands out from the field under it
 export function contrastCharge(spec: FlagSpec, preferred: string): string {
   const [cx, cy] = chargeCenter(spec.chargePos, 1.5, 1);
   const under = spec.badge && spec.badge !== "none" && spec.badgeColor ? spec.badgeColor : spec.colors[regionAt(spec.layout, cx / 1.5, cy)];

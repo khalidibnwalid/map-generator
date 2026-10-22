@@ -151,6 +151,17 @@ export interface Nation {
   government?: string;
   overlord?: number; // index of the nation this one is a vassal of
   flag?: FlagSpec; // custom or generated flag (see flags.ts)
+  dynasty?: string; // ruling house (see sim/Rulers.ts)
+  ruler?: Ruler;
+  regnal?: Record<string, number>; // how many rulers of this realm bore each name
+}
+
+export interface Ruler {
+  name: string;
+  ordinal: number; // regnal number: 2 for "Idris II"
+  born: number; // simulation year
+  since: number; // year of accession
+  title: string; // Sultan, King, Doge... follows the government
 }
 
 export interface Province {
@@ -204,7 +215,7 @@ export interface City {
   seed: number;
   isPort?: boolean;
   wealth?: number; // income proxy from resources and trade
-  baseWealth?: number; // the part from resources, harbour and river; trade is added on top
+  baseWealth?: number; // the part from resources, harbor and river; trade is added on top
   wealthTier?: number; // index into WEALTH_TIERS
   resources?: string[]; // notable resource kinds nearby
 }
@@ -257,6 +268,7 @@ export class WorldData {
   public width: number;
   public height: number;
   public seed: number = 0;
+  public year = 0; // simulated calendar year (History tab)
   public grid: CellData[][];
   public rivers: River[] = [];
   public worldRoads: Road[] = [];

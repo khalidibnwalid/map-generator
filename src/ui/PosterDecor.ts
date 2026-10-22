@@ -403,7 +403,7 @@ function paintCartouche(ctx: CanvasRenderingContext2D, st: Style, theme: MapThem
   ctx.fillText(text, cx, ty);
   if (sub) {
     if (theme === "Historical") {
-      // Flourish: rule with a centre lozenge
+      // Flourish: rule with a center lozenge
       const fy = ty + gap * 0.55;
       const half = Math.min(w / 2 - padX, 120);
       ctx.strokeStyle = st.ink;
