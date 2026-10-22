@@ -31,7 +31,6 @@ interface Facts {
   topCities: City[];
   provinces: number;
   cultures: Share[];
-  faiths: Share[];
   resources: { label: string; color: string; count: number }[];
   wealthTier: string;
   wealthRank: number;
@@ -60,7 +59,6 @@ function computeFacts(host: AtlasHost, idx: number): Facts {
   const W = world.width;
   const H = world.height;
   const cult = new Map<number, number>();
-  const faith = new Map<number, number>();
   const border = new Map<number, number>();
   let land = 0;
   for (let x = 0; x < W; x++) {
@@ -79,7 +77,6 @@ function computeFacts(host: AtlasHost, idx: number): Facts {
       if (a !== idx || world.waterType[y * W + x] !== 0) continue;
       land++;
       if ((c.cultureIndex ?? -1) >= 0) cult.set(c.cultureIndex!, (cult.get(c.cultureIndex!) ?? 0) + 1);
-      if ((c.religionIndex ?? -1) >= 0) faith.set(c.religionIndex!, (faith.get(c.religionIndex!) ?? 0) + 1);
     }
   }
   const shares = (m: Map<number, number>, list: { name: string; color: string }[]): Share[] => {
@@ -135,7 +132,6 @@ function computeFacts(host: AtlasHost, idx: number): Facts {
     topCities: [...own].sort((a, b) => b.population - a.population).slice(0, 5),
     provinces: world.provinces.filter((p) => p.nationIndex === idx).length,
     cultures: shares(cult, world.cultures),
-    faiths: shares(faith, world.religions),
     resources: [...res.entries()]
       .sort((a, b) => RESOURCE_INFO[b[0]].value - RESOURCE_INFO[a[0]].value || b[1] - a[1])
       .map(([k, n]) => ({ label: RESOURCE_INFO[k].label, color: RESOURCE_INFO[k].color, count: n })),
@@ -307,7 +303,6 @@ export class FactSheet {
             ${f.vassals.length ? row("Vassals", `<span class="fs-links">${f.vassals.map(link).join("")}</span>`) : ""}
           </dl>
           <section><h3>Peoples</h3>${bars(f.cultures)}</section>
-          <section><h3>Faiths</h3>${bars(f.faiths)}</section>
           <section><h3>Resources</h3>${
             f.resources.length
               ? `<div class="fs-chips">${f.resources
@@ -489,7 +484,7 @@ function paintSheet(ctx: CanvasRenderingContext2D, world: WorldData, f: Facts, m
     return yy + 32;
   };
 
-  // Left column: facts, peoples, faiths, resources
+  // Left column: facts, peoples, resources
   const lx = M;
   const lw = 468;
   let yl = y;
@@ -551,7 +546,6 @@ function paintSheet(ctx: CanvasRenderingContext2D, world: WorldData, f: Facts, m
     yl += 10;
   };
   bars("Peoples", f.cultures);
-  bars("Faiths", f.faiths);
   yl = heading("Resources", lx, yl);
   if (f.resources.length) {
     let cx = lx;

@@ -1,3 +1,4 @@
+import { CELL_KM2 } from "../game/WorldData";
 import { MapGenerator } from "../game/MapGenerator";
 import type { Preset } from "../game/MapGenerator";
 import { CanvasManager } from "../core/CanvasManager";
@@ -25,6 +26,7 @@ import { Simulation, type SimEvent } from "../game/sim/Simulation";
 import { viewStats, type SnapNation } from "../game/sim/History";
 import { crownRulers, rulerStyle, seededRand } from "../game/sim/Rulers";
 import { BuildTool } from "./BuildTool";
+import { createDropdown } from "./components/Dropdown";
 import { dimOutside, layoutContext, yieldToUI, type AtlasHost, type MapView } from "./AtlasRender";
 import { PosterDialog } from "./PosterDialog";
 import { FactSheet } from "./FactSheet";
@@ -125,6 +127,10 @@ export class Interface {
   private simSpeed = 2;
   private simListAt = 0; // last nations-list refresh while history runs
   private inSimStep = false;
+  // Command a battle: chosen realms (kept as objects, indices shift) and aim mode
+  private warAttacker: Nation | null = null;
+  private pointerDown = { x: 0, y: 0 }; // a click after a drag is a pan, not an attack
+  private warPicking = false; // next map click chooses the army's realm
   private theme: MapTheme = "Realistic";
   private thematic: ThematicMode = "none";
   private thematicFocus = -2; // nation the diplomacy texture was built for
@@ -219,6 +225,9 @@ export class Interface {
 
   private onWorldGenerated() {
     this.pauseSim();
+    this.warAttacker = null;
+    this.warPicking = false;
+    this.renderWarRoom();
     if (this.buildTool) {
       this.buildTool.selected = null;
       this.buildTool.render();
@@ -257,7 +266,8 @@ export class Interface {
         this.nationsManager.cityPlacementMode !== -1 ||
         this.nationsManager.provincePlacementMode !== -1 ||
         this.nationsManager.nationPlacementMode ||
-        (this.activeTab === "build" && this.buildTool.tool)
+        (this.activeTab === "build" && this.buildTool.tool) ||
+        (this.activeTab === "history" && (this.warAttacker || this.warPicking))
       ) {
         this.canvasManager.canvas.style.cursor = "crosshair";
         this.updateTooltipBar();
@@ -298,7 +308,24 @@ export class Interface {
         }
       }
 
-      if (this.activeTab === "build" && wy >= 0 && wy < world.height) {
+      const dragged = Math.hypot(e.clientX - this.pointerDown.x, e.clientY - this.pointerDown.y) > 5;
+      if (this.activeTab === "history" && this.warPicking && !dragged && wy >= 0 && wy < world.height) {
+        // Pick mode: the clicked realm becomes the army
+        const cell = world.grid[Math.floor(x)][wy];
+        const owner = cell.isWater ? -1 : (cell.nationIndex ?? -1);
+        if (owner >= 0) {
+          this.warPicking = false;
+          this.warAttacker = world.nations[owner];
+          this.setWarHint(`Commanding the army of ${this.warAttacker.name}. Click any other realm's land to attack it there.`);
+          this.renderWarRoom();
+        }
+      } else if (this.activeTab === "history" && this.warAttacker && !dragged && wy >= 0 && wy < world.height) {
+        // Any other realm's land is a target; the army's own land does nothing
+        const cell = world.grid[Math.floor(x)][wy];
+        const owner = cell.isWater ? -1 : (cell.nationIndex ?? -1);
+        const att = world.nations.indexOf(this.warAttacker);
+        if (owner >= 0 && owner !== att) this.launchBattle(owner, { x, y: fy });
+      } else if (this.activeTab === "build" && wy >= 0 && wy < world.height) {
         if (this.buildTool.tool) this.buildTool.place(x, fy);
         else {
           this.buildTool.selected = this.buildTool.pick(x, fy, cm.scale);
@@ -336,6 +363,7 @@ export class Interface {
     });
 
     canvas.addEventListener("mousedown", (e) => {
+      this.pointerDown = { x: e.clientX, y: e.clientY };
       if (
         this.activeTab === "nations" &&
         this.nationsManager.isEditingNations &&
@@ -480,6 +508,7 @@ export class Interface {
           if (title) title.textContent = titles[tab];
           if (tab === "nations") this.nationsManager.renderList();
           if (tab === "build") this.buildTool.render();
+          if (tab === "history") this.renderWarRoom();
           else if (this.buildTool.tool || this.buildTool.selected) {
             this.buildTool.tool = null;
             this.buildTool.selected = null;
@@ -492,6 +521,17 @@ export class Interface {
     // --- History simulation ---
     document.getElementById("sim-play")?.addEventListener("click", () => this.toggleSim());
     document.getElementById("sim-bar-play")?.addEventListener("click", () => this.toggleSim());
+    document.getElementById("war-pick")?.addEventListener("click", () => {
+      this.warPicking = !this.warPicking;
+      if (this.warPicking) this.setWarHint("Click a realm on the map to command its army.");
+      this.renderWarRoom();
+    });
+    document.getElementById("war-clear")?.addEventListener("click", () => {
+      if (!this.sim) return;
+      this.sim.clearWarMarks();
+      this.setWarHint("Battle marks and conquest borders cleared. Conquered land stays with its new owner.");
+      this.canvasManager.scheduleRender();
+    });
     document.getElementById("sim-step")?.addEventListener("click", () => {
       this.pauseSim();
       this.stepSim();
@@ -826,6 +866,16 @@ export class Interface {
     const colorsBefore = world.nations.map((n) => n.color).join();
     this.inSimStep = true;
     const changed = this.sim.step();
+    this.applySimChanges(changed, nationsBefore, citiesBefore, colorsBefore);
+    this.inSimStep = false;
+    this.renderSimPanel();
+  }
+
+  // Uploads and caches after the simulation changed the world (a year or a
+  // commanded battle)
+  private applySimChanges(changed: boolean, nationsBefore: number, citiesBefore: number, colorsBefore: string) {
+    const world = this.generator.getWorld();
+    if (!this.sim) return;
     if (changed) {
       if (this.nationsManager.hoveredNationIndex >= world.nations.length) this.nationsManager.hoveredNationIndex = -1;
       if (world.nations.length !== nationsBefore) this.nationsManager.selectedNationIndex = -1;
@@ -861,8 +911,71 @@ export class Interface {
     }
     // Offensive arrows and battle markers change every year
     if (changed || this.activeLayers.wars) this.canvasManager.scheduleRender();
+  }
+
+  // --- Command a battle ---
+  private renderWarRoom() {
+    const world = this.generator.getWorld();
+    const host = (id: string) => document.getElementById(id);
+    const attHost = host("war-attacker");
+    if (!attHost) return;
+    if (this.warAttacker && !world.nations.includes(this.warAttacker)) this.warAttacker = null;
+    const att = this.warAttacker ? world.nations.indexOf(this.warAttacker) : -1;
+    const byName = world.nations.map((n, i) => ({ n, i })).sort((a, b) => a.n.name.localeCompare(b.n.name));
+    const opt = (i: number) => ({ value: String(i), label: world.nations[i].name, image: nationFlagUrl(world, i, 18, 12) });
+    attHost.replaceChildren(
+      createDropdown({
+        className: "war-dd",
+        value: String(att),
+        options: [{ value: "-1", label: "Choose a realm" }, ...byName.map((e) => opt(e.i))],
+        onChange: (v) => {
+          this.warPicking = false;
+          this.warAttacker = world.nations[Number(v)] ?? null;
+          this.setWarHint(
+            this.warAttacker ? `Commanding the army of ${this.warAttacker.name}. Click any other realm's land to attack it there.` : "Choose an army, then click any other realm's land on the map to attack it there. Your army always wins: it advances over the easiest ground, slowed by mountains, rivers and castles, and lands by sea when needed. Each battle is a step on the timeline.",
+          );
+          this.renderWarRoom();
+        },
+      }),
+    );
+    document.getElementById("war-pick")?.classList.toggle("active", this.warPicking);
+    const history = this.activeTab === "history";
+    this.canvasManager.canvas.style.cursor = history && this.warPicking ? "pointer" : history && this.warAttacker ? "crosshair" : "grab";
+  }
+
+  private setWarHint(text: string) {
+    const el = document.getElementById("war-hint");
+    if (el) el.textContent = text;
+  }
+
+  // The chosen army wins outright against `defender`, aiming at a point or the capital
+  private launchBattle(defender: number, aim?: { x: number; y: number }) {
+    if (this.generator.isGenerating || this.exportingGif) return;
+    const world = this.generator.getWorld();
+    const attacker = this.warAttacker ? world.nations.indexOf(this.warAttacker) : -1;
+    if (attacker < 0 || defender < 0 || attacker === defender) return;
+    this.pauseSim();
+    this.backToPresent();
+    this.sim ??= new Simulation(world, this.generator.getNoise());
+    const nationsBefore = world.nations.length;
+    const citiesBefore = world.cities.length;
+    const colorsBefore = world.nations.map((n) => n.color).join();
+    const A = world.nations[attacker];
+    const D = world.nations[defender];
+    const force = Number((document.getElementById("war-force") as HTMLSelectElement | null)?.value) || 2;
+    this.inSimStep = true;
+    const res = this.sim.commandBattle(attacker, defender, force, aim);
+    this.applySimChanges(!!res, nationsBefore, citiesBefore, colorsBefore);
     this.inSimStep = false;
+    const fallen = !world.nations.includes(D);
+    this.setWarHint(
+      res
+        ? `${A.name} wins at ${res.place} and takes ${Math.round(res.taken * CELL_KM2).toLocaleString()} km² from ${D.name}.${fallen ? ` ${D.name} has fallen.` : ""}`
+        : `${A.name} found no way to strike ${D.name} there.`,
+    );
     this.renderSimPanel();
+    this.renderWarRoom();
+    if (this.activeTab === "nations") this.nationsManager.renderList();
   }
 
   // Shows recorded year `f` in place of the live borders
@@ -1074,13 +1187,12 @@ export class Interface {
         const p = world.grid[x][y].provinceIndex ?? -1;
         return p >= 0 && ramp[p] ? ramp[p] : null;
       });
-    } else if (this.thematic === "cultures" || this.thematic === "religions") {
-      const list = this.thematic === "cultures" ? world.cultures : world.religions;
+    } else if (this.thematic === "cultures") {
+      const list = world.cultures;
       const colors = list.map((c) => hexRgb(c.color));
-      const cult = this.thematic === "cultures";
       this.gpuRenderer.updateThematicTexture(world, (x, y) => {
         const cell = world.grid[x][y];
-        const id = cult ? cell.cultureIndex : cell.religionIndex;
+        const id = cell.cultureIndex;
         if (id === undefined || id < 0 || !colors[id]) return null;
         const c = colors[id];
         return [c[0], c[1], c[2], 200];
@@ -1120,8 +1232,6 @@ export class Interface {
         world.cultures
           .map((c) => row(c.color, `${c.name} <span style="opacity:.6">(${world.languages[c.id]?.family.key ?? ""})</span>`))
           .join("");
-    } else if (this.thematic === "religions") {
-      html = `<div class="legend-title">Religions</div>` + world.religions.map((r) => row(r.color, r.name)).join("");
     } else if (this.thematic === "wealth") {
       html =
         '<div class="legend-title">Provincial wealth</div>' +
@@ -1206,7 +1316,9 @@ export class Interface {
     if (night) this.drawNightOverlay(ctx, world, width, height, scale, offsetX, offsetY);
     const sim = this.sim;
     if (this.activeLayers.wars && sim) {
-      if (!replay) drawFronts(ctx, sim.frontLines(), sim.offensives, world.width, width, scale, offsetX, offsetY);
+      // Recently won land is outlined in offensive mode (the History panel)
+      const gains = !replay && this.activeTab === "history" ? sim.recentGains() : [];
+      if (!replay) drawFronts(ctx, gains, sim.offensives, world.width, width, scale, offsetX, offsetY);
       drawBattles(ctx, sim.battles, replay ? replay.year : sim.year, world.width, width, height, scale, offsetX, offsetY);
     }
     if (this.activeLayers.labels) {
@@ -1791,9 +1903,7 @@ export class Interface {
       }
     }
     const culture = world.cultures[cell.cultureIndex ?? -1];
-    const religion = world.religions[cell.religionIndex ?? -1];
     if (culture) lines.push(`Culture: ${culture.name}`);
-    if (religion) lines.push(`Faith: ${religion.name}`);
     lines.push(`${cell.biome} · ${WorldData.elevationMeters(cell.elevation).toLocaleString()} m · ${WorldData.temperatureC(cell.temperature)}°C`);
     lines.push(`Density ~${peoplePerKm2(cell.populationDensity)} /km²${cell.hasRiver ? " · River" : ""}`);
     if (nation) lines.push("Alt+click for the fact sheet");

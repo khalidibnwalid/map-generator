@@ -6,7 +6,9 @@ import type { Battle, FrontLine, Offensive } from "../game/sim/Simulation";
 const RED = "#b8322a";
 const BRASS = "#d4a85a";
 const INK = "rgba(28, 14, 8, 0.7)";
-export const BATTLE_FADE_YEARS = 25;
+export const BATTLE_FADE_YEARS = 8;
+// At most this many marks per country (as winner or loser), newest first
+export const BATTLE_MARKS_PER_NATION = 8;
 
 // Crossed swords centered on (x, y), r = half the blade length in pixels
 export function drawSwords(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, alpha: number) {
@@ -56,10 +58,17 @@ export function drawBattles(
   offY: number,
 ) {
   const zoom = Math.max(0.75, Math.min(1.6, scale / 3));
-  for (const b of battles) {
+  const shown = new Map<string, number>();
+  for (let k = battles.length - 1; k >= 0; k--) {
+    const b = battles[k];
     const age = year - b.year;
-    if (age < 0 || age > BATTLE_FADE_YEARS) continue;
-    const alpha = Math.pow(1 - age / (BATTLE_FADE_YEARS + 1), 1.4);
+    if (age < 0) continue;
+    if (age > BATTLE_FADE_YEARS) break; // oldest first: the rest are older still
+    const rank = Math.max(shown.get(b.winner) ?? 0, shown.get(b.loser) ?? 0);
+    if (rank >= BATTLE_MARKS_PER_NATION) continue;
+    shown.set(b.winner, (shown.get(b.winner) ?? 0) + 1);
+    shown.set(b.loser, (shown.get(b.loser) ?? 0) + 1);
+    const alpha = Math.pow(1 - age / (BATTLE_FADE_YEARS + 1), 1.4) * (1 - (rank / BATTLE_MARKS_PER_NATION) * 0.7);
     const r = Math.min(15, 4 + Math.sqrt(b.size) * 0.7) * zoom;
     for (let copy = -1; copy <= 1; copy++) {
       const sx = (b.x + copy * worldW) * scale + offX;

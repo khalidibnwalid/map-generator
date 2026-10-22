@@ -65,9 +65,9 @@ export async function generateDiplomacy(ctx: GeneratorContext): Promise<void> {
       const B = world.nations[b];
       const neighbors = border[a][b] > 0;
       let score = (noise.random() - 0.5) * 1.2;
-      if (A.cultureId === B.cultureId) score += 0.5;
-      if (A.religionId === B.religionId) score += 0.45;
-      else score -= 0.25;
+      // Kinship is cultural: shared culture eases relations, strangers less so
+      if (A.cultureId === B.cultureId) score += 0.8;
+      else score -= 0.15;
       if (neighbors) score -= Math.min(0.9, border[a][b] / 60);
 
       let r: RelationType = "Neutral";

@@ -754,7 +754,7 @@ export class NationsManager {
     container.appendChild(wrap);
   }
 
-  private neighborsOf(nationIdx: number): Set<number> {
+  public neighborsOf(nationIdx: number): Set<number> {
     const world = this.generator.getWorld();
     const out = new Set<number>();
     const W = world.width;

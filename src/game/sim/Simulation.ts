@@ -132,7 +132,6 @@ export class Simulation {
   public history: HistoryRecorder;
   public battles: Battle[] = []; // oldest first
   public offensives: Offensive[] = []; // advances of the latest year
-  private frontCache: { year: number; lines: FrontLine[] } | null = null;
   private prongs: { seed: number; dx: number; dy: number; n: number }[] = []; // filled by thrust()
   private lastBattleLog = -99;
   public changedCities = new Set<number>(); // city ids whose owner changed since last read
@@ -147,7 +146,13 @@ export class Simulation {
   private W: number;
   private H: number;
   private land: Uint8Array;
-  private defense: Float32Array;
+  private defense: Float32Array; // fortifications: castles, forts, towers (1 = open country)
+  private elev: Float32Array;
+  private river: Uint8Array;
+  // Land won in battle: year + 1 it was taken, and by whom (outlined while recent)
+  private gainedAt: Int32Array;
+  private gainedBy: Int16Array;
+  private gainCache: { key: string; lines: FrontLine[] } | null = null;
   private culture: Int16Array;
   private people: Float32Array;
   private owner: Int16Array;
@@ -176,6 +181,10 @@ export class Simulation {
     const N = W * H;
     this.land = new Uint8Array(N);
     this.defense = new Float32Array(N);
+    this.elev = new Float32Array(N);
+    this.river = new Uint8Array(N);
+    this.gainedAt = new Int32Array(N);
+    this.gainedBy = new Int16Array(N).fill(-1);
     this.culture = new Int16Array(N);
     this.people = new Float32Array(N);
     this.owner = new Int16Array(N);
@@ -190,7 +199,9 @@ export class Simulation {
         const i = y * W + x;
         const c = col[y];
         this.land[i] = world.waterType[i] === 0 ? 1 : 0;
-        this.defense[i] = 1 + Math.max(0, c.elevation - 0.6) * 9 + (c.hasRiver ? 1.2 : 0);
+        this.defense[i] = 1;
+        this.elev[i] = c.elevation;
+        this.river[i] = c.hasRiver || world.waterType[i] === 2 ? 1 : 0;
         this.culture[i] = c.cultureIndex ?? -1;
         this.people[i] = c.populationDensity * 900;
       }
@@ -373,12 +384,7 @@ export class Simulation {
       (i, text) => this.log("ruler", text, w.nations[i].capitalX, w.nations[i].capitalY),
     );
 
-    // Wars follow the relations matrix (the user may declare or end them)
-    for (const [k, war] of this.wars)
-      if (war.a >= n || war.b >= n || relation(w, war.a, war.b) !== "War") this.wars.delete(k);
-    for (let a = 0; a < n; a++)
-      for (let b = a + 1; b < n; b++)
-        if (relation(w, a, b) === "War" && !this.wars.has(this.pair(a, b))) this.startWar(a, b, m.land);
+    this.syncWars(m.land);
 
     // --- One pass: borders, war fronts, settlement fronts ---
     const border = new Int32Array(n * n);
@@ -433,7 +439,7 @@ export class Simulation {
       const loser = aWins ? war.b : war.a;
       const edge = Math.abs(pa - 0.5) * 2;
       const loserLand0 = aWins ? war.bLand0 : war.aLand0;
-      const budget = Math.round(loserLand0 * (0.025 + 0.09 * edge + 0.05 * rand()) + 6);
+      const budget = Math.round(loserLand0 * (0.018 + 0.06 * edge + 0.03 * rand()) + 6);
       const seeds = aWins ? f.b : f.a; // loser cells on the front
       if (this.thrust(winner, loser, seeds, budget) === 0) continue;
       changed = true;
@@ -542,8 +548,8 @@ export class Simulation {
         const sa = m.strength[a];
         const sb = m.strength[b];
         const ratio = Math.max(sa, sb) / Math.max(1, Math.min(sa, sb));
-        const sameFaith = w.nations[a].religionId === w.nations[b].religionId;
-        let p = rel === "Rival" ? 0.022 : rel === "Friendly" ? 0.0025 : sameFaith ? 0.005 : 0.009;
+        const kin = w.nations[a].cultureId === w.nations[b].cultureId;
+        let p = rel === "Rival" ? 0.022 : rel === "Friendly" ? 0.0025 : kin ? 0.005 : 0.009;
         p *= Math.min(2.5, 0.4 + (ratio - 1)) * Math.min(1.5, 0.4 + len / 40);
         if (rand() >= p) continue;
         const attacker = sa >= sb ? a : b;
@@ -616,25 +622,175 @@ export class Simulation {
 
   private finish(changed: boolean): boolean {
     const w = this.world;
-    // --- Fallen nations ---
-    if (changed) {
-      const land = new Int32Array(w.nations.length);
-      const N = this.W * this.H;
-      for (let i = 0; i < N; i++) {
-        const o = this.owner[i];
-        if (o >= 0 && o < land.length && this.land[i]) land[o]++;
-      }
-      for (let i = w.nations.length - 1; i >= 0; i--) {
-        if (land[i] > 0) continue;
-        const nt = w.nations[i];
-        this.log("fall", `${nt.name} has fallen`, nt.capitalX, nt.capitalY);
-        this.dropNation(i);
-      }
-      refreshTerritorialWaters(w, this.dirty, this.owner);
-    }
+    if (changed) this.settle();
     if (this.year % 10 === 0) this.pruneProvinces();
     this.history.record(this.year, this.owner, w.nations);
     return changed;
+  }
+
+  // Fallen nations leave the map; sea control follows the new coasts
+  private settle() {
+    const w = this.world;
+    const land = new Int32Array(w.nations.length);
+    const N = this.W * this.H;
+    for (let i = 0; i < N; i++) {
+      const o = this.owner[i];
+      if (o >= 0 && o < land.length && this.land[i]) land[o]++;
+    }
+    for (let i = w.nations.length - 1; i >= 0; i--) {
+      if (land[i] > 0) continue;
+      const nt = w.nations[i];
+      this.log("fall", `${nt.name} has fallen`, nt.capitalX, nt.capitalY);
+      this.dropNation(i);
+    }
+    refreshTerritorialWaters(w, this.dirty, this.owner);
+  }
+
+  // A battle ordered by the player: the attacker wins outright and advances
+  // into the defender's land exactly like a simulated offensive (cheapest
+  // ground, fortresses and rivers resist), toward `aim` or the enemy capital.
+  // Declares war if needed, lands by sea when the realms share no border, and
+  // is recorded as a battle, an offensive arrow and a step on the timeline.
+  public commandBattle(attacker: number, defender: number, level: number, aim?: { x: number; y: number }): { taken: number; place: string } | null {
+    const w = this.world;
+    const W = this.W;
+    const H = this.H;
+    if (attacker === defender || !w.nations[attacker] || !w.nations[defender]) return null;
+    if (this.needsSync) {
+      this.sync();
+      this.needsSync = false;
+    }
+    if (!this.history.length) this.history.record(this.year, this.owner, w.nations);
+    w.year = this.year;
+    const A = w.nations[attacker];
+    const D = w.nations[defender];
+
+    // Front: the defender's land touching the attacker's; otherwise a landing
+    // on the defender's coast nearest the attacker (or the aimed point)
+    const N = W * H;
+    let front: number[] = [];
+    let defLand = 0;
+    for (let i = 0; i < N; i++) {
+      if (!this.land[i] || this.owner[i] !== defender) continue;
+      defLand++;
+      const x = i % W;
+      const y = (i / W) | 0;
+      const nb = [y * W + ((x + 1) % W), y * W + ((x - 1 + W) % W), y > 0 ? i - W : -1, y < H - 1 ? i + W : -1];
+      if (nb.some((j) => j >= 0 && this.land[j] && this.owner[j] === attacker)) front.push(i);
+    }
+    if (!defLand) return null;
+    // An aimed attack goes for the landmass that was clicked (an island, an
+    // exclave): only the defender's land connected to the aim point counts
+    let region = -1;
+    if (aim) {
+      const ax = ((Math.floor(aim.x) % W) + W) % W;
+      const ay = Math.max(0, Math.min(H - 1, Math.floor(aim.y)));
+      let start = -1;
+      for (let r = 0; r <= 4 && start < 0; r++)
+        for (let dy = -r; dy <= r && start < 0; dy++)
+          for (let dx = -r; dx <= r; dx++) {
+            const y = ay + dy;
+            if (y < 0 || y >= H) continue;
+            const i = y * W + (((ax + dx) % W) + W) % W;
+            if (this.land[i] && this.owner[i] === defender) {
+              start = i;
+              break;
+            }
+          }
+      if (start >= 0) {
+        region = ++this.stampId;
+        this.stamp[start] = region;
+        const stack = [start];
+        while (stack.length) {
+          const c = stack.pop()!;
+          const x = c % W;
+          const y = (c / W) | 0;
+          for (const j of [y * W + ((x + 1) % W), y * W + ((x - 1 + W) % W), y > 0 ? c - W : -1, y < H - 1 ? c + W : -1])
+            if (j >= 0 && this.stamp[j] !== region && this.land[j] && this.owner[j] === defender) {
+              this.stamp[j] = region;
+              stack.push(j);
+            }
+        }
+        front = front.filter((i) => this.stamp[i] === region);
+      }
+    }
+    let landing = false;
+    const toward = aim ?? { x: A.capitalX, y: A.capitalY };
+    const dist = (i: number) => {
+      let dx = Math.abs((i % W) + 0.5 - toward.x);
+      if (dx > W / 2) dx = W - dx;
+      return Math.hypot(dx, ((i / W) | 0) + 0.5 - toward.y);
+    };
+    if (!front.length) {
+      landing = true;
+      const coast: number[] = [];
+      for (let i = 0; i < N; i++) {
+        if (!this.land[i] || this.owner[i] !== defender) continue;
+        if (region >= 0 && this.stamp[i] !== region) continue;
+        const x = i % W;
+        const y = (i / W) | 0;
+        const nb = [y * W + ((x + 1) % W), y * W + ((x - 1 + W) % W), y > 0 ? i - W : -1, y < H - 1 ? i + W : -1];
+        if (nb.some((j) => j >= 0 && !this.land[j])) coast.push(i);
+      }
+      if (!coast.length) return null;
+      front = coast;
+    }
+    // An aimed attack breaks through on the part of the front nearest the aim
+    if (aim || landing) front = front.sort((p, q) => dist(p) - dist(q)).slice(0, Math.max(6, Math.ceil(front.length * 0.08)));
+
+    this.syncWars();
+    // War is declared first (vassal bonds between the two break)
+    if (relation(w, attacker, defender) !== "War") {
+      if (A.overlord === defender) releaseVassal(w, attacker);
+      if (D.overlord === attacker) releaseVassal(w, defender);
+      this.startWar(attacker, defender, this.measure().land);
+      this.log("war", `${A.name} declares war on ${D.name}`, D.capitalX, D.capitalY);
+    }
+    const war = this.wars.get(this.pair(attacker, defender));
+    if (war) war.mom = attacker === war.a ? 1 : -1;
+
+    this.offensives = [];
+    // Skirmish / battle / rout: a share of the defender, capped so a large
+    // realm never loses a whole region to one engagement
+    const [share, cap] = [[0.015, 45], [0.035, 120], [0.08, 320]][Math.max(0, Math.min(2, Math.round(level) - 1))];
+    const rs = W / 800;
+    const budget = Math.round(Math.min(defLand * share + 6, cap * rs * rs));
+    const taken = this.thrust(attacker, defender, front, budget, aim, aim ? 1 : 2);
+    if (!taken) return null;
+    let best: { seed: number; dx: number; dy: number; n: number } | null = null;
+    for (const p of this.prongs) {
+      if (p.n < 1) continue;
+      const sx = (p.seed % W) + 0.5;
+      const sy = Math.floor(p.seed / W) + 0.5;
+      const k2 = 1.7 / p.n;
+      this.offensives.push({ x0: sx, y0: sy, x1: sx + p.dx * k2, y1: sy + p.dy * k2, size: p.n });
+      if (!best || p.n > best.n) best = p;
+    }
+    const seed = best?.seed ?? front[0];
+    const bx = (seed % W) + 0.5;
+    const by = Math.floor(seed / W) + 0.5;
+    const place = this.placeName(seed);
+    this.battles.push({ year: this.year, x: bx, y: by, winner: A.name, loser: D.name, size: taken });
+    this.log("battle", `${landing ? "Landing at" : "Battle of"} ${place}: ${A.name} defeats ${D.name}`, bx, by);
+    this.settle();
+    this.history.record(this.year, this.owner, w.nations);
+    return { taken, place };
+  }
+
+  // Wars follow the relations matrix (generation, the diplomacy editor or
+  // the user may declare or end them)
+  private syncWars(land?: Float64Array) {
+    const w = this.world;
+    const n = w.nations.length;
+    for (const [k, war] of this.wars)
+      if (war.a >= n || war.b >= n || relation(w, war.a, war.b) !== "War") this.wars.delete(k);
+    let l = land;
+    for (let a = 0; a < n; a++)
+      for (let b = a + 1; b < n; b++)
+        if (relation(w, a, b) === "War" && !this.wars.has(this.pair(a, b))) {
+          l ??= this.measure().land;
+          this.startWar(a, b, l);
+        }
   }
 
   public get warPairs(): { a: number; b: number }[] {
@@ -661,58 +817,66 @@ export class Simulation {
     return best?.name ?? w.provinces[this.prov[cell]]?.name ?? "the frontier";
   }
 
-  // Contact frontiers of active wars, traced into polylines along cell edges.
-  // Cached per year; the overlay asks for it every frame.
-  public frontLines(): FrontLine[] {
-    if (this.frontCache?.year === this.year) return this.frontCache.lines;
+  // Forgets battle marks, offensive arrows and conquest outlines (the
+  // conquered land itself stays with its new owner)
+  public clearWarMarks() {
+    this.battles = [];
+    this.offensives = [];
+    this.gainedAt.fill(0);
+    this.gainedBy.fill(-1);
+    this.gainCache = null;
+  }
+
+  // Outline of land won in battle during the last `maxAge` years and still
+  // held by the winner, traced along cell edges (coasts excluded)
+  public recentGains(maxAge = 8): FrontLine[] {
+    const key = `${this.year}|${this.battles.length}|${this.world.nations.length}|${maxAge}`;
+    if (this.gainCache?.key === key) return this.gainCache.lines;
     const W = this.W;
     const H = this.H;
-    const n = this.world.nations.length;
-    const pairs = new Map<number, number[]>(); // war key -> vertex pairs
-    for (const war of this.wars.values()) if (war.a < n && war.b < n) pairs.set(this.pair(war.a, war.b), []);
-    if (pairs.size) {
-      const owner = this.owner;
-      for (let y = 0; y < H; y++)
-        for (let x = 0; x < W; x++) {
-          const i = y * W + x;
-          const o = owner[i];
-          if (o < 0 || !this.land[i]) continue;
-          const r = y * W + ((x + 1) % W);
-          const p = owner[r];
-          if (p >= 0 && p !== o && this.land[r]) {
-            const e = pairs.get(this.pair(o, p));
-            // Vertical edge on the right side of the cell; vertex = vy * W + vx
-            if (e) e.push(y * W + ((x + 1) % W), (y + 1) * W + ((x + 1) % W));
-          }
-          if (y + 1 < H) {
-            const d = i + W;
-            const q = owner[d];
-            if (q >= 0 && q !== o && this.land[d]) {
-              const e = pairs.get(this.pair(o, q));
-              if (e) e.push((y + 1) * W + x, (y + 1) * W + ((x + 1) % W));
-            }
+    const owner = this.owner;
+    const minYear = this.year - maxAge + 1; // gainedAt stores year + 1
+    const won = (i: number) => this.gainedAt[i] >= minYear && this.gainedAt[i] > 0 && owner[i] === this.gainedBy[i];
+    const edges: number[] = [];
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W; x++) {
+        const i = y * W + x;
+        if (!this.land[i]) continue;
+        const wi = won(i);
+        const r = y * W + ((x + 1) % W);
+        if (this.land[r]) {
+          const wr = won(r);
+          if ((wi || wr) && !(wi && wr && owner[i] === owner[r])) edges.push(y * W + ((x + 1) % W), (y + 1) * W + ((x + 1) % W));
+        }
+        if (y + 1 < H) {
+          const d = i + W;
+          if (this.land[d]) {
+            const wd = won(d);
+            if ((wi || wd) && !(wi && wd && owner[i] === owner[d])) edges.push((y + 1) * W + x, (y + 1) * W + ((x + 1) % W));
           }
         }
-    }
-    const lines: FrontLine[] = [];
-    for (const [key, edges] of pairs) {
-      if (edges.length < 6) continue;
-      lines.push({ a: Math.floor(key / 4096), b: key % 4096, chains: traceChains(edges, W) });
-    }
-    this.frontCache = { year: this.year, lines };
+      }
+    const lines: FrontLine[] = edges.length ? [{ a: -1, b: -1, chains: traceChains(edges, W) }] : [];
+    this.gainCache = { key, lines };
     return lines;
   }
 
   // Army advance: cheapest-path growth into the loser's land from a few
   // points on the front, biased toward the enemy capital
-  private thrust(winner: number, loser: number, front: number[], budget: number): number {
+  private thrust(
+    winner: number,
+    loser: number,
+    front: number[],
+    budget: number,
+    aim?: { x: number; y: number },
+    prongs = 1 + Math.floor(this.rand() * 3),
+  ): number {
     const w = this.world;
     const W = this.W;
     const H = this.H;
     const L = w.nations[loser];
-    const capX = L?.capitalX ?? 0;
-    const capY = L?.capitalY ?? 0;
-    const prongs = 1 + Math.floor(this.rand() * 3);
+    const capX = aim?.x ?? L?.capitalX ?? 0;
+    const capY = aim?.y ?? L?.capitalY ?? 0;
     let taken = 0;
     const stampId = ++this.stampId;
     this.prongs = [];
@@ -724,6 +888,10 @@ export class Simulation {
       this.stamp[seed] = stampId;
       const cost = new Map<number, number>([[seed, 0]]);
       let quota = Math.ceil(budget / prongs);
+      // How deep this push can go: open country costs ~1 per cell, so a flat
+      // advance spends its whole quota, while a river crossing or a climb
+      // costs many cells' worth and usually halts it at the barrier
+      const reach = 1.7 * Math.sqrt(quota) + 3;
       // Summed offset of taken cells from the seed (wrap-aware) for the offensive arrow
       const sx0 = seed % W;
       const sy0 = (seed / W) | 0;
@@ -732,7 +900,10 @@ export class Simulation {
       while (heap.size && quota > 0) {
         const c = heap.pop();
         if (this.owner[c] !== loser) continue;
+        if (cost.get(c)! > reach) break;
         this.setOwner(c, winner);
+        this.gainedAt[c] = this.year + 1;
+        this.gainedBy[c] = winner;
         taken++;
         quota--;
         const g = cost.get(c)!;
@@ -753,11 +924,14 @@ export class Simulation {
           this.stamp[j] = stampId;
           // Liberating own provinces is easier than taking new ground
           const home = this.provOwner(this.prov[j]) === winner ? 0.4 : 1;
-          const gj = g + this.defense[j] * home * (0.6 + this.rand() * 0.8);
+          // Rivers are crossed, not followed; climbing and high ground are slow
+          const crossing = this.river[j] && !this.river[c] ? 7 : 0;
+          const climb = Math.max(0, this.elev[j] - this.elev[c]) * 70 + Math.max(0, this.elev[j] - 0.66) * 30;
+          const gj = g + (this.defense[j] + crossing + climb) * home * (0.7 + this.rand() * 0.6);
           let dx = Math.abs(nx - capX);
           if (dx > W / 2) dx = W - dx;
           cost.set(j, gj);
-          heap.push(gj + Math.hypot(dx, ny - capY) * 0.35, j);
+          heap.push(gj + Math.hypot(dx, ny - capY) * 0.15, j);
         }
       }
     }
@@ -885,6 +1059,11 @@ export class Simulation {
     }
     this.wars = shifted;
     removeNation(w, i);
+    for (let c = 0; c < this.gainedBy.length; c++) {
+      const g = this.gainedBy[c];
+      if (g === i) this.gainedBy[c] = -1;
+      else if (g > i) this.gainedBy[c] = g - 1;
+    }
     this.dirty.provinces = true;
     this.sync(); // removeNation re-indexed nations and provinces
   }

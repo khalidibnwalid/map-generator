@@ -276,6 +276,27 @@ export default function renderMainApp() {
               <p class="muted sim-note">Drag to replay past borders. Replays are view-only: playing or stepping always continues from the present.</p>
               <button id="sim-gif" class="btn-ghost sim-gif" disabled><span class="sim-gif-label">Export GIF</span></button>
             </div>
+            <div class="field war-room" id="war-room">
+              <div class="field-label">Command a battle</div>
+              <div class="war-room-row">
+                <span class="war-room-label">Army of</span><div id="war-attacker" class="war-room-pick"></div>
+                <button id="war-pick" class="icon-btn boxed war-pick" title="Pick the army's realm on the map">
+                  <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l5 15 2.5-6.5L19 9z"/><path d="m13 13 6 6"/></svg>
+                </button>
+              </div>
+              ${picker(
+                "war-force",
+                "segmented",
+                [
+                  { value: "1", label: "Skirmish" },
+                  { value: "2", label: "Battle" },
+                  { value: "3", label: "Rout" },
+                ],
+                "2",
+              )}
+              <button id="war-clear" class="btn-ghost war-clear" title="Remove battle marks, arrows and conquest borders; conquered land stays">Clear battle marks</button>
+              <p class="muted sim-note" id="war-hint">Choose an army, then click any other realm's land on the map to attack it there. Your army always wins: it advances over the easiest ground, slowed by mountains, rivers and castles, and lands by sea when needed. Each battle is a step on the timeline.</p>
+            </div>
             <div class="field">
             <div class="group-title">Chronicle</div>
             ${picker(

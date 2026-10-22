@@ -87,7 +87,7 @@ export class UIManager {
         [42, "Setting climate and rainfall..."],
         [50, "Carving rivers..."],
         [56, "Spreading forests and deserts..."],
-        [64, "Settling peoples and faiths..."],
+        [64, "Settling peoples and cultures..."],
         [74, "Establishing national borders..."],
         [82, "Founding cities and villages..."],
         [90, "Drawing provinces..."],

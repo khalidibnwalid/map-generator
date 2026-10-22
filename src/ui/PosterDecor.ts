@@ -585,9 +585,8 @@ function paintLegend(
   let title = "Realms";
   let rows: Row[] = [];
   let more = 0;
-  if (spec.thematic === "cultures" || spec.thematic === "religions") {
-    const cult = spec.thematic === "cultures";
-    title = cult ? "Cultures" : "Faiths";
+  if (spec.thematic === "cultures") {
+    title = "Cultures";
     // Only those present in view, by land share
     const count = new Map<number, number>();
     const W = world.width;
@@ -599,11 +598,11 @@ function paintLegend(
         if (c.isWater) continue;
         const n = c.nationIndex ?? -1;
         if (spec.keep && !spec.keep.has(n)) continue;
-        const id = (cult ? c.cultureIndex : c.religionIndex) ?? -1;
+        const id = c.cultureIndex ?? -1;
         if (id >= 0) count.set(id, (count.get(id) ?? 0) + 1);
       }
     }
-    const list = cult ? world.cultures : world.religions;
+    const list = world.cultures;
     const ids = [...count.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id).filter((id) => list[id]);
     more = Math.max(0, ids.length - LEGEND_ROWS);
     rows = ids.slice(0, LEGEND_ROWS).map((id) => ({ label: list[id].name, color: list[id].color }));
