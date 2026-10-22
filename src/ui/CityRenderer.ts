@@ -315,6 +315,13 @@ export class CityRenderer {
     }
   }
 
+  // Layouts or ward details still being built in the background
+  public get busy(): boolean {
+    return this.layoutQueue.length > 0 || this.detailQueue.length > 0;
+  }
+
+  // `direct` draws detailed cities straight onto ctx, bypassing the cached
+  // layer (exports draw at a higher resolution than the layout size).
   public render(
     ctx: CanvasRenderingContext2D,
     world: WorldData,
@@ -325,6 +332,7 @@ export class CityRenderer {
     offsetY: number,
     theme: MapTheme,
     isInteracting: boolean,
+    direct = false,
   ) {
     if (world !== this.world) this.reset(world);
     this.frame++;
@@ -381,6 +389,14 @@ export class CityRenderer {
     const canBlit = compatible && (unchanged || (isInteracting && ratio > 0.08 && ratio < 12));
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (direct) {
+      for (const d of detailed) this.drawCity(ctx, d.e, d.e.layout!, d.sx, d.sy, ppm, d.alpha, theme, width, height, false);
+      ctx.restore();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = 1;
+      this.afterCities(ctx, dots, detailed, scale, ppm, theme, ct.cityDot);
+      return;
+    }
     if (canBlit) {
       ctx.imageSmoothingEnabled = true;
       ctx.drawImage(this.layer, offsetX - ls!.offX * ratio, offsetY - ls!.offY * ratio, width * ratio, height * ratio);

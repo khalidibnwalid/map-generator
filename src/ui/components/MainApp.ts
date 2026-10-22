@@ -21,6 +21,7 @@ const ICONS = {
   pause: icon(`<path d="M7 4h3.5v16H7zM13.5 4H17v16h-3.5z" fill="currentColor"/>`),
   step: icon(`<path d="M5 4.5v15l10-7.5z" fill="currentColor"/><path d="M18 5v14"/>`),
   edit: icon(`<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13 7 4 4"/>`),
+  poster: icon(`<rect x="3" y="4" width="18" height="16" rx="1.5"/><rect x="6" y="7" width="12" height="10" rx="0.5"/><path d="m6 15 3.5-3.5 2.5 2.5 2-2 4 4"/>`),
 };
 
 const toggle = (id: string, label: string, checked: boolean, hint = "") => /* html */ `
@@ -279,6 +280,11 @@ export default function renderMainApp() {
               <span><strong>Open world</strong><small>Load a .world file</small></span>
             </button>
             <input type="file" id="open-world-input" accept=".world" style="display:none" />
+            <div class="group-title">Atlas</div>
+            <button id="export-poster" class="file-card">
+              ${ICONS.poster}
+              <span><strong>Export poster</strong><small>High-resolution map with title, legend and frame</small></span>
+            </button>
           </section>
         </div>
       </aside>

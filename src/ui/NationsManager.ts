@@ -35,6 +35,8 @@ const SORTS: { key: SortKey; label: string }[] = [
   { key: "wealth", label: "Wealth" },
 ];
 
+const INFO_ICON = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.6v.1"/></svg>`;
+
 function compact(n: number): string {
   if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M";
   if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + "k";
@@ -54,6 +56,7 @@ export class NationsManager {
   public nationSizes: number[] = [];
   public nationLandArea: number[] = []; // land cells only; water is never counted
   public onTerritoryChanged: (() => void) | null = null;
+  public onShowFacts: ((nationIdx: number) => void) | null = null;
   public nationsStateDirty: boolean = true;
   public cityPlacementMode: number = -1; // Index of the nation being founded for
   public provincePlacementMode: number = -1; // Index of the nation for new province
@@ -259,6 +262,21 @@ export class NationsManager {
       territoryCount.id = `nation-territory-count-${idx}`;
       territoryCount.textContent = this.metricText(idx);
 
+      // Fact sheet button: takes the metric's place while the row is hovered,
+      // so rows keep their width
+      const metric = document.createElement("span");
+      metric.className = "nation-metric";
+      const infoBtn = document.createElement("button");
+      infoBtn.className = "nation-info-btn";
+      infoBtn.title = "Fact sheet";
+      infoBtn.innerHTML = INFO_ICON;
+      infoBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        this.onShowFacts?.(idx);
+      });
+      metric.appendChild(territoryCount);
+      metric.appendChild(infoBtn);
+
       const deleteNationBtn = document.createElement("button");
       deleteNationBtn.className = "nation-delete-btn";
       deleteNationBtn.innerHTML = `
@@ -291,7 +309,7 @@ export class NationsManager {
       item.appendChild(swatchContainer);
       item.appendChild(flagImg);
       item.appendChild(nameInput);
-      item.appendChild(territoryCount);
+      item.appendChild(metric);
       item.appendChild(deleteNationBtn);
 
       item.addEventListener("click", () => {
@@ -355,6 +373,15 @@ export class NationsManager {
         subTabs.appendChild(citiesTab);
         subTabs.appendChild(provincesTab);
         subTabs.appendChild(diplomacyTab);
+        const factsBtn = document.createElement("button");
+        factsBtn.className = "nation-sub-tab-btn nation-facts-btn";
+        factsBtn.title = "Fact sheet";
+        factsBtn.innerHTML = INFO_ICON;
+        factsBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.onShowFacts?.(idx);
+        });
+        subTabs.appendChild(factsBtn);
         listContainer.appendChild(subTabs);
 
         const contentContainer = document.createElement("div");

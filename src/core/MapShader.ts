@@ -59,6 +59,10 @@ uniform sampler2D u_lightsTex;  // R city glow, G road threads, B harbour lights
 uniform vec3 u_lightMask;       // city, road and harbour light switches
 uniform bool u_weather;
 uniform float u_time;           // seconds; drifts the clouds
+// Exports: device pixels per layout pixel (line widths and glyph spacing
+// scale with it) and where this tile sits in the whole image.
+uniform float u_pixelRatio;
+uniform vec4 u_frame; // tile offset xy, full image size zw
 
 out vec4 fragColor;
 
@@ -498,7 +502,7 @@ void main() {
     isLand = coast > 0.0;
   }
   bool lake = lakeF > 0.5;
-  float coastLine = 1.0 - smoothstep(0.5, 1.5, abs(coast) / coastW);
+  float coastLine = 1.0 - smoothstep(0.5, 1.5, abs(coast) / (coastW * u_pixelRatio));
 
   // Terrain shading
   float eps = 1.0 / u_worldSize.x;
@@ -554,7 +558,7 @@ void main() {
       vec3 sea = mix(vec3(0.60, 0.70, 0.68), vec3(0.72, 0.79, 0.74), smoothstep(-2.0, 0.0, coast));
       color = mix(paper, sea, 0.85);
       // Concentric ripple lines hugging the coast
-      float spacing = 5.0 * px;
+      float spacing = 5.0 * px * u_pixelRatio;
       float k = -coast / spacing;
       if (k < 5.0) {
         float line = smoothstep(0.0, 1.0, 1.0 - abs(fract(k) - 0.5) * 2.0 * 4.0);
@@ -562,7 +566,7 @@ void main() {
       }
     }
     // Glyph lattice ~14 px apart: mountains, hills, forests
-    float fsym = exp2(floor(log2(max(u_scale / 14.0, 1.0 / 64.0))));
+    float fsym = exp2(floor(log2(max(u_scale / (14.0 * u_pixelRatio), 1.0 / 64.0))));
     ivec2 gq;
     vec2 gf;
     lattice(ci, l, fsym, gq, gf);
@@ -572,7 +576,7 @@ void main() {
     float jx = hashU(gq.x, gq.y, u_seed + 3u) - 0.5;
     vec2 g = gf - vec2(0.5 + jx * 0.3, 0.5);
     float pxPerSym = u_scale / fsym;
-    float inkW = 1.1 / pxPerSym;
+    float inkW = 1.1 * u_pixelRatio / pxPerSym;
     vec3 ink = vec3(0.30, 0.22, 0.15);
     if (isLand && cd.r > 0.62 && coast > 2.0 / fsym) {
       float hgt = cd.r > 0.72 ? 0.42 : 0.24;
@@ -783,11 +787,12 @@ void main() {
   float warp_f = (fbm(wxwy * 0.15) - 0.5) * 0.15;
   float warp_d = (fbm(wxwy * 1.5) - 0.5) * 0.05;
   vec2 noisy_fxy = clamp(fxy + warp_f + warp_d, 0.0, 1.0);
-  float field_per_pixel = 1.0 / max(0.01, u_scale);
-  float zoomVisibility = clamp(1.6 / pow(u_scale, 0.4), 1.0, 2.5);
-  float aa = 1.2 * field_per_pixel;
+  float vScale = u_scale / u_pixelRatio; // layout pixels per cell
+  float field_per_pixel = 1.0 / max(0.01, vScale);
+  float zoomVisibility = clamp(1.6 / pow(vScale, 0.4), 1.0, 2.5);
+  float aa = 1.2 / max(0.01, u_scale);
   // Political fill fades out as you zoom into city scale
-  float politicalFade = 1.0 - smoothstep(30.0, 250.0, u_scale) * 0.85;
+  float politicalFade = 1.0 - smoothstep(30.0, 250.0, vScale) * 0.85;
 
   // --- Thematic (cultures / religions / diplomacy) ---
   if (u_thematic > 0) {
@@ -799,7 +804,7 @@ void main() {
     float a = tc.a * landMask * politicalFade;
     if (u_thematic == 3 && tc.a > 0.9) {
       // Focus nation in diplomacy view: diagonal hatching
-      float hatch = step(0.5, fract((sc.x + sc.y) / 7.0));
+      float hatch = step(0.5, fract((sc.x + sc.y + u_frame.x + u_frame.y) / (7.0 * u_pixelRatio)));
       color = mix(color, tc.rgb, a * (0.45 + 0.25 * hatch));
     } else {
       color = mix(color, tc.rgb, a * 0.55);
@@ -879,10 +884,10 @@ void main() {
       if (u_hoverNationIndex >= 0.0) {
         float own = max(max(inHover(n00) * n00.a, inHover(n10) * n10.a),
                         max(inHover(n01) * n01.a, inHover(n11) * n11.a));
-        float dash = step(0.45, fract((sc.x + sc.y) / 9.0));
+        float dash = step(0.45, fract((sc.x + sc.y) / (9.0 * u_pixelRatio)));
         seaPart = getBorderStrength(n00, n10, n01, n11, noisy_fxy, thickness * 0.45, aa) * 0.45 * dash * own * (1.0 - landMask);
       }
-      if (u_theme == 1) landPart *= step(0.3, fract((wxwy.x - wxwy.y) * (u_scale / 7.0)));
+      if (u_theme == 1) landPart *= step(0.3, fract((wxwy.x - wxwy.y) * (vScale / 7.0)));
       color = mix(color, bc, landPart + seaPart);
     }
   }
@@ -896,7 +901,7 @@ void main() {
     float provBorderStrength = getBorderStrength(p00, p10, p01, p11, noisy_fxy, thickness, aa);
     provBorderStrength *= (1.0 - natBorderStrength) * landMask;
     if (provBorderStrength > 0.01) {
-      float dash = step(0.4, fract((wxwy.x + wxwy.y) * 1.5 * max(1.0, u_scale / 6.0)));
+      float dash = step(0.4, fract((wxwy.x + wxwy.y) * 1.5 * max(1.0, vScale / 6.0)));
       vec3 pcol = u_theme == 1 ? vec3(0.42, 0.28, 0.18) : vec3(0.0);
       color = mix(color, pcol, provBorderStrength * 0.4 * (0.6 + 0.4 * dash));
     }
@@ -958,7 +963,7 @@ void main() {
 
   if (u_theme == 1) {
     // Aged-paper vignette
-    vec2 uv = sc / u_resolution - 0.5;
+    vec2 uv = (sc + u_frame.xy) / u_frame.zw - 0.5;
     color *= 1.0 - 0.35 * smoothstep(0.35, 0.75, length(uv));
   }
 

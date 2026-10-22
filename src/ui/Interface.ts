@@ -23,6 +23,9 @@ import { nationFlagUrl } from "../game/flags";
 import { installSliders, syncSliders } from "./components/Slider";
 import { Simulation } from "../game/sim/Simulation";
 import { BuildTool } from "./BuildTool";
+import { dimOutside, layoutContext, yieldToUI, type AtlasHost, type MapView } from "./AtlasRender";
+import { PosterDialog } from "./PosterDialog";
+import { FactSheet } from "./FactSheet";
 
 export type ViewLayer =
   | "Biomes"
@@ -86,6 +89,10 @@ export class Interface {
   private theme: MapTheme = "Realistic";
   private thematic: ThematicMode = "none";
   private thematicFocus = -2; // nation the diplomacy texture was built for
+  private exporting = false; // a poster or fact-sheet map is being rendered
+  private renderChain: Promise<void> = Promise.resolve();
+  private posterDialog: PosterDialog | null = null;
+  private factSheet: FactSheet | null = null;
 
   // Sub-managers
   private tooltipManager!: TooltipManager;
@@ -139,6 +146,7 @@ export class Interface {
         if (this.activeTab === "nations") this.nationsManager.renderList();
         this.canvasManager.scheduleRender();
       };
+      this.nationsManager.onShowFacts = (idx) => this.showFacts(idx);
       this.nationsManager.onTerritoryChanged = () => {
         this.thematicFocus = -2;
         if (!this.inSimStep) this.sim?.markEdited();
@@ -162,6 +170,12 @@ export class Interface {
     this.canvasManager.onRender = this.renderMap.bind(this);
 
     this.setupEventListeners();
+  }
+
+  private showFacts(idx: number) {
+    if (this.generator.isGenerating || !this.generator.getWorld().nations[idx]) return;
+    this.factSheet ??= new FactSheet(this.atlasHost());
+    this.factSheet.open(idx);
   }
 
   private onWorldGenerated() {
@@ -231,6 +245,16 @@ export class Interface {
       const fy = (sy - cm.offsetY) / cm.scale;
       const wy = Math.floor(fy);
       const x = ((fx % world.width) + world.width) % world.width;
+
+      // Alt+click a realm for its fact sheet
+      if (e.altKey && wy >= 0 && wy < world.height && !world.sampler.isWater(fx, fy)) {
+        const n = world.grid[Math.floor(x)][wy].nationIndex ?? -1;
+        if (n >= 0) {
+          this.tooltipManager.hide();
+          this.showFacts(n);
+          return;
+        }
+      }
 
       if (this.activeTab === "build" && wy >= 0 && wy < world.height) {
         if (this.buildTool.tool) this.buildTool.place(x, fy);
@@ -621,6 +645,11 @@ export class Interface {
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     });
     openBtn?.addEventListener("click", () => openInput?.click());
+    document.getElementById("export-poster")?.addEventListener("click", () => {
+      if (this.generator.isGenerating) return; // textures and statistics are not ready
+      this.posterDialog ??= new PosterDialog(this.atlasHost());
+      this.posterDialog.open(this.nationsManager.selectedNationIndex);
+    });
     openInput?.addEventListener("change", async () => {
       const file = openInput.files?.[0];
       openInput.value = "";
@@ -979,12 +1008,13 @@ export class Interface {
 
     const night = this.activeLayers.night;
     if (night) this.refreshLights(world);
-    this.renderTerrain(world, width, height, scale, offsetX, offsetY, isInteracting);
+    this.renderTerrain(width, height, scale, offsetX, offsetY, isInteracting);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
 
     const theme = night ? NIGHT_THEMES[this.theme] : THEMES[this.theme];
     this.drawVectorLayers(ctx, world, width, height, scale, offsetX, offsetY, isInteracting);
-    if (this.activeLayers.cities) {
+    // An export shares the city cache; live frames would evict its plans
+    if (this.activeLayers.cities && !this.exporting) {
       this.cityRenderer.hoveredNationIndex = this.nationsManager.hoveredNationIndex;
       this.cityRenderer.render(ctx, world, width, height, scale, offsetX, offsetY, this.theme, isInteracting);
     }
@@ -1078,18 +1108,11 @@ export class Interface {
     this.renderMapIndicators();
   }
 
-  private renderTerrain(
-    world: WorldData,
-    width: number,
-    height: number,
-    scale: number,
-    offsetX: number,
-    offsetY: number,
-    isInteracting: boolean,
-  ) {
+  // GPU terrain for the live view (also used to restore it after export tiles)
+  private renderTerrain(width: number, height: number, scale: number, offsetX: number, offsetY: number, isInteracting: boolean) {
+    const world = this.generator.getWorld();
     const hoveredNation =
       this.nationsManager.hoveredNationIndex < world.nations.length ? this.nationsManager.hoveredNationIndex : -1;
-
     this.gpuRenderer.hoverBloc = hoveredNation >= 0 ? blocOf(world, hoveredNation) : [];
     this.gpuRenderer.season = this.seasonMonth / 12;
     this.gpuRenderer.time = (performance.now() - this.weatherStart) / 1000;
@@ -1124,7 +1147,7 @@ export class Interface {
         const w = this.gpuCanvas.width;
         const h = this.gpuCanvas.height;
         if (!w || !h) return;
-        this.renderTerrain(this.generator.getWorld(), w, h, cm.scale, cm.offsetX, cm.offsetY, false);
+        this.renderTerrain(w, h, cm.scale, cm.offsetX, cm.offsetY, false);
       }, 80);
     } else if (!on && this.weatherTimer) {
       clearInterval(this.weatherTimer);
@@ -1184,6 +1207,149 @@ export class Interface {
       }
     }
     ctx.restore();
+  }
+
+  // Renders the map (current theme, thematic mode and layers) into a
+  // rectangle of any 2D context at any resolution. The terrain is drawn in
+  // tiles through the live WebGL canvas, each copied out immediately (its
+  // buffer is not preserved) and the live frame restored before yielding.
+  public async renderMapTo(ctx: CanvasRenderingContext2D, v: MapView) {
+    const world = this.generator.getWorld();
+    const L = this.activeLayers;
+    const pr = v.pixelRatio;
+    const lw = v.w / pr;
+    const lh = v.h / pr;
+    const ls = v.scale / pr;
+    const lox = v.offsetX / pr;
+    const loy = v.offsetY / pr;
+    if (this.nationsManager.nationsStateDirty) {
+      this.nationsManager.buildCache();
+      this.gpuRenderer.updateNationsDataTexture(world);
+      this.nationsManager.nationsStateDirty = false;
+      this.thematicFocus = -2;
+    }
+    this.refreshThematic(world);
+    this.exporting = true;
+    try {
+      // City plans build in the background: wait (bounded) for those in view
+      if (L.cities && v.waitForCities) {
+        const scratch = document.createElement("canvas").getContext("2d")!;
+        const t0 = performance.now();
+        for (;;) {
+          this.cityRenderer.render(scratch, world, lw, lh, ls, lox, loy, this.theme, false, true);
+          if (!this.cityRenderer.busy || performance.now() - t0 > 20000 || v.cancelled?.()) break;
+          v.onProgress?.(0, "Laying out towns and cities");
+          await new Promise((r) => setTimeout(r, 120));
+        }
+      }
+
+      const gpu = this.gpuRenderer;
+      const lim = gpu.tileLimit;
+      const tw = Math.max(16, Math.min(lim.w, 2048));
+      const th = Math.max(16, Math.min(lim.h, 2048));
+      const tiles: { x: number; y: number; w: number; h: number }[] = [];
+      for (let y = 0; y < v.h; y += th)
+        for (let x = 0; x < v.w; x += tw) tiles.push({ x, y, w: Math.min(tw, v.w - x), h: Math.min(th, v.h - y) });
+
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.beginPath();
+      ctx.rect(v.x, v.y, v.w, v.h);
+      ctx.clip();
+      const cm = this.canvasManager;
+      for (let i = 0; i < tiles.length; i++) {
+        if (v.cancelled?.()) break;
+        const t = tiles[i];
+        gpu.pixelRatio = pr;
+        gpu.frame = { x: t.x, y: t.y, w: v.w, h: v.h };
+        gpu.hoverBloc = [];
+        gpu.render(t.w, t.h, world.width, world.height, v.scale, v.offsetX - t.x, v.offsetY - t.y, L, -1, -1, world.seed, this.theme, this.thematic, [1, 1, 1], false);
+        ctx.drawImage(this.gpuCanvas, 0, lim.bufferH - t.h, t.w, t.h, v.x + t.x, v.y + t.y, t.w, t.h);
+        gpu.pixelRatio = 1;
+        gpu.frame = null;
+        this.renderTerrain(cm.getWidth(), cm.getHeight(), cm.scale, cm.offsetX, cm.offsetY, false);
+        v.onProgress?.(((i + 1) / tiles.length) * 0.75, "Rendering terrain");
+        if (tiles.length > 1) await yieldToUI();
+      }
+
+      if (!v.cancelled?.()) {
+        v.onProgress?.(0.8, "Drawing rivers, roads and cities");
+        await yieldToUI();
+        const night = !!L.night;
+        const theme = night ? NIGHT_THEMES[this.theme] : THEMES[this.theme];
+        // At night the drawn layers are dimmed on their own canvas (like the
+        // live overlay), so the terrain underneath isn't darkened twice
+        const layer = night ? document.createElement("canvas") : null;
+        if (layer) {
+          layer.width = v.w;
+          layer.height = v.h;
+        }
+        const lctx = layer ? layer.getContext("2d")! : ctx;
+        let restore = layoutContext(lctx, pr, layer ? 0 : v.x, layer ? 0 : v.y);
+        if (L.rivers) {
+          const H = world.height;
+          const month = this.seasonMonth;
+          const swell = L.season ? (y: number) => 1 + 0.35 * seasonFlood(month, (y / H) * 2 - 1) : undefined;
+          this.networkRenderer.renderRivers(lctx, world, lw, lh, ls, lox, loy, theme, swell);
+        }
+        if (L.currents) this.networkRenderer.renderCurrents(lctx, world, lw, lh, ls, lox, loy);
+        if (L.searoutes) this.networkRenderer.renderSeaRoutes(lctx, world, lw, lh, ls, lox, loy, theme);
+        if (L.roads) this.networkRenderer.renderRoads(lctx, world, lw, lh, ls, lox, loy, theme);
+        if (L.trade) this.networkRenderer.renderTrade(lctx, world, lw, lh, ls, lox, loy);
+        if (L.resources) this.networkRenderer.renderResources(lctx, world, lw, lh, ls, lox, loy, theme);
+        if (L.pois) this.poiRenderer.render(lctx, world, lw, lh, ls, lox, loy, this.theme);
+        if (L.cities) {
+          const hovered = this.cityRenderer.hoveredNationIndex;
+          this.cityRenderer.hoveredNationIndex = -1;
+          this.cityRenderer.render(lctx, world, lw, lh, ls, lox, loy, this.theme, false, true);
+          this.cityRenderer.hoveredNationIndex = hovered;
+        }
+        if (layer) {
+          this.drawNightOverlay(lctx, world, lw, lh, ls, lox, loy);
+          restore();
+          ctx.drawImage(layer, v.x, v.y);
+          restore = layoutContext(ctx, pr, v.x, v.y);
+        }
+        if (L.labels) {
+          if (L.rivers) this.networkRenderer.renderRiverLabels(ctx, world, lw, lh, ls, lox, loy, theme);
+          this.labelRenderer.render(
+            ctx, world, lw, lh, ls, lox, loy, false,
+            this.nationsManager.nationSizes,
+            this.nationsManager.nationCentroids,
+            theme,
+            L.provinces,
+            this.nationsManager.nationLandArea,
+            L.flags,
+          );
+        }
+        restore();
+        if (v.keep) dimOutside(ctx, world, v, v.keep, this.theme);
+      }
+      ctx.restore();
+    } finally {
+      this.gpuRenderer.pixelRatio = 1;
+      this.gpuRenderer.frame = null;
+      this.exporting = false;
+      this.canvasManager.scheduleRender();
+    }
+  }
+
+  // The narrow view of the app the poster and fact sheet work with
+  private atlasHost(): AtlasHost {
+    return {
+      getWorld: () => this.generator.getWorld(),
+      mapTheme: () => this.theme,
+      thematicMode: () => this.thematic,
+      simYear: () => this.sim?.year ?? 0,
+      simEvents: () => this.sim?.events ?? [],
+      landArea: () => this.nationsManager.nationLandArea,
+      // One at a time: renders share the WebGL canvas and the city cache
+      renderMapTo: (ctx, view) => {
+        const run = this.renderChain.then(() => this.renderMapTo(ctx, view));
+        this.renderChain = run.catch(() => undefined);
+        return run;
+      },
+    };
   }
 
   private drawVectorLayers(
@@ -1415,6 +1581,7 @@ export class Interface {
     if (religion) lines.push(`Faith: ${religion.name}`);
     lines.push(`${cell.biome} · ${WorldData.elevationMeters(cell.elevation).toLocaleString()} m · ${WorldData.temperatureC(cell.temperature)}°C`);
     lines.push(`Density ~${peoplePerKm2(cell.populationDensity)} /km²${cell.hasRiver ? " · River" : ""}`);
+    if (nation) lines.push("Alt+click for the fact sheet");
     this.tooltipManager.show(
       clientX,
       clientY,

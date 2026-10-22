@@ -55,6 +55,10 @@ export class GPURenderer {
   public season = 0; // 0..1 through the year (0 = mid-January), when layers.season
   public time = 0; // seconds, when layers.weather
   private lightsTexture: WebGLTexture | null = null;
+  // Export rendering: device pixels per layout pixel, and the tile's place in
+  // the whole image (null = the frame is the whole image)
+  public pixelRatio = 1;
+  public frame: Rect | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     const gl = canvas.getContext("webgl2", {
@@ -68,6 +72,18 @@ export class GPURenderer {
     this.program = this.createProgram(VERTEX_SHADER_SOURCE, FRAGMENT_SHADER_SOURCE);
     this.setupQuad();
     this.biomeColors = this.prepareBiomeColors();
+  }
+
+  // Largest tile render() can draw: the canvas's real drawing buffer, capped
+  // by the viewport limit. Frames render into its bottom-left corner.
+  public get tileLimit(): { w: number; h: number; bufferH: number } {
+    const gl = this.gl;
+    const dims = gl.getParameter(gl.MAX_VIEWPORT_DIMS) as Int32Array;
+    return {
+      w: Math.min(gl.drawingBufferWidth, dims[0]),
+      h: Math.min(gl.drawingBufferHeight, dims[1]),
+      bufferH: gl.drawingBufferHeight,
+    };
   }
 
   private createShader(type: number, source: string): WebGLShader {
@@ -520,6 +536,9 @@ export class GPURenderer {
     gl.uniform3f(this.u("u_lightMask"), cityLights, layers.roads === false ? 0 : 1, cityLights);
     gl.uniform1i(this.u("u_weather"), layers.weather ? 1 : 0);
     gl.uniform1f(this.u("u_time"), this.time);
+    gl.uniform1f(this.u("u_pixelRatio"), this.pixelRatio);
+    const f = this.frame ?? { x: 0, y: 0, w: width, h: height };
+    gl.uniform4f(this.u("u_frame"), f.x, f.y, f.w, f.h);
 
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     gl.bindVertexArray(null);
