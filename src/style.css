@@ -101,6 +101,7 @@ button {
 .map-controls,
 .map-ruler,
 .map-legend,
+.sim-bar,
 .nation-tooltip,
 .modal-content {
   background: var(--paper-bg);
@@ -614,6 +615,29 @@ code {
 }
 
 /* === Nations tab === */
+/* Controls and table header stay pinned while the nations scroll */
+.nations-sticky {
+  position: sticky;
+  top: -14px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: -14px -18px -10px;
+  padding: 14px 18px 6px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(24, 20, 15, 0.97);
+}
+
+.nations-head {
+  display: flex;
+  flex-direction: column;
+}
+
+.nations-head .nation-add-btn {
+  margin: 0 0 6px;
+}
+
 .edit-mode-controls {
   display: flex;
   align-items: center;
@@ -1234,4 +1258,210 @@ code {
     top: 10px;
     left: calc(10px + var(--rail-w) + 8px);
   }
+}
+
+/* === History simulation === */
+.sim-controls {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.sim-controls .btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.sim-controls svg {
+  width: 16px;
+  height: 16px;
+}
+
+.sim-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.sim-stat {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--ink-hover);
+}
+
+.sim-stat strong {
+  display: block;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sim-stat small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sim-log {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.sim-event {
+  display: grid;
+  grid-template-columns: 44px 1fr;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.sim-event:hover {
+  background: var(--ink-hover);
+}
+
+.sim-event .yr {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.sim-event.war .txt { color: #e08a74; }
+.sim-event.civil .txt { color: #e0a95e; }
+.sim-event.vassal .txt,
+.sim-event.annex .txt { color: #b9a4e0; }
+.sim-event.independence .txt { color: #8fc7a2; }
+.sim-event.fall .txt { color: #c9786e; font-weight: 600; }
+
+.sim-bar {
+  position: absolute;
+  left: 50%;
+  top: 14px;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(560px, calc(100vw - 32px));
+  padding: 4px 14px 4px 4px;
+  border-radius: 12px;
+  transform: translateX(-50%);
+  font-size: 13px;
+}
+
+.sim-bar-year strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.sim-bar-event {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* === Nation diplomacy sub-tab === */
+.diplo-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 6px 2px 10px 22px;
+}
+
+.diplo-label {
+  flex: 0 0 64px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.diplo-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  font-size: 12px;
+}
+
+.diplo-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diplo-name small {
+  color: var(--faint);
+}
+
+.diplo-dot {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+.diplo-select {
+  flex: 0 0 104px;
+  height: 24px;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--well);
+  font-size: 11px;
+}
+
+.diplo-overlord .diplo-select {
+  flex: 1;
+  color: var(--text);
+}
+
+.diplo-vassals {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.diplo-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--ink-hover);
+  font-size: 11px;
+}
+
+.diplo-chip:hover {
+  border-color: var(--danger);
+}
+
+.diplo-x {
+  color: var(--faint);
+}
+
+.diplo-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 260px;
+  overflow-y: auto;
+  border-top: 1px solid var(--line);
+  padding-top: 4px;
+  scrollbar-width: thin;
+}
+
+.diplo-list .diplo-row:hover {
+  background: var(--ink-hover);
+  border-radius: 6px;
 }

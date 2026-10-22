@@ -16,6 +16,8 @@ import { THEMES } from "./themes";
 import { refreshPickers } from "./components/MainApp";
 import { WorldData } from "../game/WorldData";
 import { RELATION_COLORS } from "../game/generators/generateDiplomacy";
+import { blocOf } from "../game/politics";
+import { Simulation } from "../game/sim/Simulation";
 
 export type ViewLayer =
   | "Biomes"
@@ -58,7 +60,12 @@ export class Interface {
     labels: true,
     cities: true,
   };
-  private activeTab: "generate" | "layers" | "nations" | "file" = "generate";
+  private activeTab: "generate" | "layers" | "nations" | "history" | "file" = "generate";
+  private sim: Simulation | null = null;
+  private simTimer = 0;
+  private simSpeed = 2;
+  private simListAt = 0; // last nations-list refresh while history runs
+  private inSimStep = false;
   private theme: MapTheme = "Realistic";
   private thematic: ThematicMode = "none";
   private thematicFocus = -2; // nation the diplomacy texture was built for
@@ -105,7 +112,10 @@ export class Interface {
         this.uiManager,
         this.cityRenderer,
       );
-      this.nationsManager.onTerritoryChanged = () => (this.thematicFocus = -2);
+      this.nationsManager.onTerritoryChanged = () => {
+        this.thematicFocus = -2;
+        if (!this.inSimStep) this.sim?.markEdited();
+      };
 
       console.log("Starting initial generation...");
       this.uiManager.showLoadingModal();
@@ -128,6 +138,9 @@ export class Interface {
   }
 
   private onWorldGenerated() {
+    this.pauseSim();
+    this.sim = null;
+    this.renderSimPanel();
     const world = this.generator.getWorld();
     this.gpuRenderer.updateWorldTexture(world);
     this.gpuRenderer.updateProvincesDataTexture(world);
@@ -304,8 +317,8 @@ export class Interface {
     }
 
     // --- Rail tabs: one panel at a time; clicking the open one closes it ---
-    const tabs = ["generate", "layers", "nations", "file"] as const;
-    const titles = { generate: "World", layers: "Layers", nations: "Nations", file: "File" };
+    const tabs = ["generate", "layers", "nations", "history", "file"] as const;
+    const titles = { generate: "World", layers: "Layers", nations: "Nations", history: "History", file: "File" };
     tabs.forEach((tab) => {
       const btn = document.getElementById(`tab-${tab}`);
       const content = document.getElementById(`content-${tab}`);
@@ -330,6 +343,27 @@ export class Interface {
           if (tab === "nations") this.nationsManager.renderList();
         });
       }
+    });
+
+    // --- History simulation ---
+    document.getElementById("sim-play")?.addEventListener("click", () => this.toggleSim());
+    document.getElementById("sim-bar-play")?.addEventListener("click", () => this.toggleSim());
+    document.getElementById("sim-step")?.addEventListener("click", () => {
+      this.pauseSim();
+      this.stepSim();
+    });
+    const speedSelect = document.getElementById("sim-speed") as HTMLSelectElement | null;
+    speedSelect?.addEventListener("change", () => {
+      this.simSpeed = Number(speedSelect.value) || 2;
+      if (this.simTimer) {
+        this.pauseSim();
+        this.playSim();
+      }
+    });
+    document.getElementById("sim-log")?.addEventListener("click", (e) => {
+      const row = (e.target as HTMLElement).closest<HTMLElement>(".sim-event");
+      if (!row) return;
+      this.centerOn(Number(row.dataset.x), Number(row.dataset.y));
     });
 
     // --- Map controls ---
@@ -551,6 +585,119 @@ export class Interface {
     });
   }
 
+  private toggleSim() {
+    if (this.simTimer) this.pauseSim();
+    else this.playSim();
+  }
+
+  private playSim() {
+    if (this.simTimer || this.generator.isGenerating) return;
+    // Chained timeouts: a slow year delays the next instead of piling up
+    const tick = () => {
+      const t0 = performance.now();
+      this.stepSim();
+      if (!this.simTimer) return;
+      this.simTimer = window.setTimeout(tick, Math.max(16, 1000 / this.simSpeed - (performance.now() - t0)));
+    };
+    this.simTimer = window.setTimeout(tick, 0);
+    this.renderSimPanel();
+  }
+
+  private pauseSim() {
+    if (!this.simTimer) return;
+    clearTimeout(this.simTimer);
+    this.simTimer = 0;
+    this.renderSimPanel();
+  }
+
+  private stepSim() {
+    if (this.generator.isGenerating) return;
+    const world = this.generator.getWorld();
+    this.sim ??= new Simulation(world, this.generator.getNoise());
+    const nationsBefore = world.nations.length;
+    const colorsBefore = world.nations.map((n) => n.color).join();
+    this.inSimStep = true;
+    const changed = this.sim.step();
+    if (changed) {
+      if (this.nationsManager.hoveredNationIndex >= world.nations.length) this.nationsManager.hoveredNationIndex = -1;
+      if (world.nations.length !== nationsBefore) this.nationsManager.selectedNationIndex = -1;
+      // Upload only the rows that changed (colours change for every row when nations come or go)
+      const d = this.sim.dirty;
+      if (d.provinces) this.gpuRenderer.updateProvincesDataTexture(world);
+      const owner = this.sim.ownerArray;
+      if (world.nations.map((n) => n.color).join() !== colorsBefore) this.gpuRenderer.updateNationsDataTexture(world, undefined, owner);
+      else if (d.y1 >= d.y0)
+        this.gpuRenderer.updateNationsDataTexture(world, { x: 0, y: d.y0, w: world.width, h: d.y1 - d.y0 + 1 }, owner);
+      this.sim.dirty = { y0: Infinity, y1: -1, provinces: false };
+      this.nationsManager.buildCache(owner);
+      this.sim.changedCities.clear();
+      this.thematicFocus = -2;
+      const now = performance.now();
+      if (this.activeTab === "nations" && (!this.simTimer || now - this.simListAt > 1500)) {
+        this.simListAt = now;
+        this.nationsManager.renderList();
+      }
+      this.canvasManager.scheduleRender();
+    }
+    this.inSimStep = false;
+    this.renderSimPanel();
+  }
+
+  private centerOn(x: number, y: number) {
+    if (!isFinite(x) || !isFinite(y)) return;
+    const cm = this.canvasManager;
+    cm.offsetX = cm.getWidth() / 2 - x * cm.scale;
+    cm.offsetY = cm.getHeight() / 2 - y * cm.scale;
+    cm.scheduleRender();
+  }
+
+  private renderSimPanel() {
+    const playing = !!this.simTimer;
+    const play = document.getElementById("sim-play");
+    if (play) {
+      play.innerHTML = playing
+        ? `<svg viewBox="0 0 24 24" width="16" height="16"><path d="M7 4h3.5v16H7zM13.5 4H17v16h-3.5z" fill="currentColor"/></svg><span>Pause</span>`
+        : `<svg viewBox="0 0 24 24" width="16" height="16"><path d="M7 4.5v15l12-7.5z" fill="currentColor"/></svg><span>${this.sim ? "Resume" : "Play"}</span>`;
+    }
+    const barPlay = document.getElementById("sim-bar-play");
+    if (barPlay) {
+      barPlay.innerHTML = playing
+        ? `<svg viewBox="0 0 24 24" width="18" height="18"><path d="M7 4h3.5v16H7zM13.5 4H17v16h-3.5z" fill="currentColor"/></svg>`
+        : `<svg viewBox="0 0 24 24" width="18" height="18"><path d="M7 4.5v15l12-7.5z" fill="currentColor"/></svg>`;
+    }
+    const bar = document.getElementById("sim-bar");
+    if (bar) bar.style.display = this.sim ? "flex" : "none";
+    const sim = this.sim;
+    const world = this.generator.getWorld();
+    const year = document.getElementById("sim-bar-year");
+    if (year) year.textContent = String(sim?.year ?? 0);
+    const last = document.getElementById("sim-bar-event");
+    if (last) last.textContent = sim?.events[0] ? `${sim.events[0].year} · ${sim.events[0].text}` : "";
+
+    const summary = document.getElementById("sim-summary");
+    if (summary) {
+      let wars = 0;
+      let vassals = 0;
+      world.nations.forEach((n, i) => {
+        if (n.overlord !== undefined) vassals++;
+        for (let j = i + 1; j < world.nations.length; j++) if (world.relations[i]?.[j] === "War") wars++;
+      });
+      const stat = (v: number | string, label: string) => `<div class="sim-stat"><strong>${v}</strong><small>${label}</small></div>`;
+      summary.innerHTML = stat(sim?.year ?? 0, "Year") + stat(world.nations.length, "Nations") + stat(wars, "Wars") ;
+      summary.title = `${vassals} vassal state${vassals === 1 ? "" : "s"}`;
+    }
+    const log = document.getElementById("sim-log");
+    if (log && sim) {
+      const esc = (t: string) => t.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]!);
+      log.innerHTML = sim.events.length
+        ? sim.events
+            .slice(0, 120)
+            .map((e) => `<div class="sim-event ${e.kind}" data-x="${e.x}" data-y="${e.y}"><span class="yr">${e.year}</span><span class="txt">${esc(e.text)}</span></div>`)
+            .join("")
+        : '<p class="muted">A quiet year.</p>';
+    } else if (log) log.innerHTML = '<p class="muted">Nothing has happened yet.</p>';
+  }
+
   // Rebuilds the thematic overlay texture when the mode or focus changes
   private refreshThematic(world: WorldData) {
     if (this.thematic === "none") return;
@@ -702,6 +849,7 @@ export class Interface {
     const hoveredNation =
       this.nationsManager.hoveredNationIndex < world.nations.length ? this.nationsManager.hoveredNationIndex : -1;
 
+    this.gpuRenderer.hoverBloc = hoveredNation >= 0 ? blocOf(world, hoveredNation) : [];
     this.gpuRenderer.render(
       width,
       height,

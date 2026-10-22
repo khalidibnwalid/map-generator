@@ -148,6 +148,7 @@ export interface Nation {
   cultureId?: number;
   religionId?: number;
   government?: string;
+  overlord?: number; // index of the nation this one is a vassal of
 }
 
 export interface Province {

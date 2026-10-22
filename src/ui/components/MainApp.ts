@@ -15,6 +15,10 @@ const ICONS = {
   home: icon(`<path d="M4 10 12 4l8 6v9a1 1 0 0 1-1 1h-5v-6h-4v6H5a1 1 0 0 1-1-1z"/>`),
   save: icon(`<path d="M5 3h11l3 3v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M7 3v5h8V3M7 21v-7h10v7"/>`),
   open: icon(`<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v1"/><path d="M3 7v11a2 2 0 0 0 2 2h13l3-8H6l-3 8"/>`),
+  history: icon(`<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 3"/>`),
+  play: icon(`<path d="M7 4.5v15l12-7.5z" fill="currentColor"/>`),
+  pause: icon(`<path d="M7 4h3.5v16H7zM13.5 4H17v16h-3.5z" fill="currentColor"/>`),
+  step: icon(`<path d="M5 4.5v15l10-7.5z" fill="currentColor"/><path d="M18 5v14"/>`),
   edit: icon(`<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13 7 4 4"/>`),
 };
 
@@ -63,6 +67,7 @@ export default function renderMainApp() {
         <button id="tab-generate" class="rail-btn active" title="World">${ICONS.world}<span>World</span></button>
         <button id="tab-layers" class="rail-btn" title="Layers">${ICONS.layers}<span>Layers</span></button>
         <button id="tab-nations" class="rail-btn" title="Nations">${ICONS.nations}<span>Nations</span></button>
+        <button id="tab-history" class="rail-btn" title="History">${ICONS.history}<span>History</span></button>
         <button id="tab-file" class="rail-btn" title="File">${ICONS.file}<span>File</span></button>
       </nav>
 
@@ -186,6 +191,7 @@ export default function renderMainApp() {
 
           <!-- Nations -->
           <section id="content-nations" class="tab-content">
+            <div class="nations-sticky">
             <div class="edit-mode-controls">
               <button id="btn-edit-nations" class="btn-ghost" title="Paint borders">${ICONS.edit}<span>Edit borders</span></button>
               <div class="brush-size-control">
@@ -194,9 +200,37 @@ export default function renderMainApp() {
                 <input type="number" id="brush-size-input" class="brush-number-input" min="1" max="100" value="2" />
               </div>
             </div>
+            <div id="nations-head" class="nations-head"></div>
+            </div>
             <div id="nations-list" class="nations-list">
               <!-- Dynamically populated -->
             </div>
+          </section>
+
+          <!-- History -->
+          <section id="content-history" class="tab-content">
+            <p class="muted">Let time run. Nations settle empty land, fight over their frontiers and break apart. Mountains, rivers and fortresses slow invaders. Cohesion comes from culture, and strength from population, wealth and government.</p>
+            <div class="sim-controls">
+              <button id="sim-play" class="btn-primary">${ICONS.play}<span>Play</span></button>
+              <button id="sim-step" class="btn-ghost" title="Advance one year">${ICONS.step}<span>Step</span></button>
+            </div>
+            <div class="field">
+              <div class="field-label">Speed (years per second)</div>
+              ${picker(
+                "sim-speed",
+                "segmented",
+                [
+                  { value: "1", label: "1" },
+                  { value: "2", label: "2" },
+                  { value: "5", label: "5" },
+                  { value: "10", label: "10" },
+                ],
+                "2",
+              )}
+            </div>
+            <div class="sim-summary" id="sim-summary"></div>
+            <div class="group-title">Chronicle</div>
+            <div id="sim-log" class="sim-log"><p class="muted">Nothing has happened yet.</p></div>
           </section>
 
           <!-- File -->
@@ -221,6 +255,12 @@ export default function renderMainApp() {
         <button id="zoom-in" class="icon-btn" title="Zoom in">${ICONS.plus}</button>
         <button id="zoom-out" class="icon-btn" title="Zoom out">${ICONS.minus}</button>
         <button id="zoom-reset" class="icon-btn" title="Show whole world">${ICONS.home}</button>
+      </div>
+
+      <div id="sim-bar" class="sim-bar" style="display:none;">
+        <button id="sim-bar-play" class="icon-btn" title="Play / pause">${ICONS.play}</button>
+        <span class="sim-bar-year">Year <strong id="sim-bar-year">0</strong></span>
+        <span id="sim-bar-event" class="sim-bar-event"></span>
       </div>
 
       <div id="nation-tooltip" class="nation-tooltip" style="display:none;">

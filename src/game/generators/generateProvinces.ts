@@ -134,8 +134,15 @@ export function partitionNation(
       if (p.nationIndex === nationId && p.seatX !== undefined && p.seatY !== undefined)
         seats.push({ x: p.seatX, y: p.seatY, cityId: p.capitalCityId });
   } else {
-    const target = Math.max(1, Math.round(landCells.length / (BASE_PROVINCE_CELLS * resScale * resScale)));
-    const baseSpacing = Math.sqrt(BASE_PROVINCE_CELLS) * resScale * 0.8;
+    // Province count grows sub-linearly with the realm: small nations still get
+    // several provinces, large ones don't explode into dozens of tiny ones
+    const k = landCells.length / (BASE_PROVINCE_CELLS * resScale * resScale);
+    const minCells = 25 * resScale * resScale;
+    const target = Math.max(
+      1,
+      Math.min(Math.floor(landCells.length / minCells), Math.max(3, Math.round(k * 0.55 + 2 * Math.sqrt(k)))),
+    );
+    const baseSpacing = Math.sqrt(landCells.length / target) * 0.8;
     for (const city of nationCities) {
       if (seats.length >= target * 1.3) break;
       const cell = world.getCell(city.x, city.y);
@@ -147,6 +154,30 @@ export function partitionNation(
         return Math.hypot(dx, s.y - city.y) >= spacing;
       });
       if (ok || seats.length === 0) seats.push({ x: city.x, y: city.y, cityId: city.id });
+    }
+    // Too few towns: seat the remaining provinces on the land farthest from
+    // existing seats (sampled to stay cheap)
+    const sample = Math.min(landCells.length, 600);
+    while (seats.length < target) {
+      let best = -1;
+      let bestD = -1;
+      for (let s = 0; s < sample; s++) {
+        const c = landCells[Math.floor((s * landCells.length) / sample)];
+        const cx = (c % W) + 0.5;
+        const cy = Math.floor(c / W) + 0.5;
+        let d = Infinity;
+        for (const st of seats) {
+          let dx = Math.abs(st.x - cx);
+          if (dx > W / 2) dx = W - dx;
+          d = Math.min(d, Math.hypot(dx, st.y - cy));
+        }
+        if (d > bestD) {
+          bestD = d;
+          best = c;
+        }
+      }
+      if (best < 0 || bestD < baseSpacing * 0.5) break;
+      seats.push({ x: (best % W) + 0.5, y: Math.floor(best / W) + 0.5, cityId: -1 });
     }
   }
   seats.push(...extraSeats);

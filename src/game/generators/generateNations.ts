@@ -65,42 +65,136 @@ export function colorForNewNation(world: WorldData, neighbours: number[]): strin
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
-// Re-derives sea control inside a box (x may wrap) after land changed hands:
-// each water cell follows the owner of the nearest coast within the limit;
-// lakes always belong to their shores. Returns false if nothing changed.
-export function refreshTerritorialWaters(
-  world: WorldData,
-  x0: number,
-  y0: number,
-  x1: number,
-  y1: number,
-): boolean {
+// Coast geometry for sea claims never changes, so it is computed once per
+// world: nearest land for every water cell, which water is claimable
+// (territorial band, plus gulf mouths and straits narrower than twice the
+// closing radius, which also links close islands to the mainland), and the
+// enclosed pockets behind those closed mouths.
+interface WaterGeometry {
+  nearest: Int32Array; // nearest land cell of each water cell
+  claim: Uint8Array; // 1 claimable sea, 2 lake, 0 land or open sea
+  pockets: { cells: Int32Array; rim: Int32Array }[]; // rim: nearest land of the claimed water around it
+}
+const GULF_CLOSE_CELLS = 10; // closes mouths up to ~100 km wide
+const waterGeometryCache = new WeakMap<WorldData, WaterGeometry>();
+
+function waterGeometry(world: WorldData): WaterGeometry {
+  const cached = waterGeometryCache.get(world);
+  if (cached) return cached;
   const W = world.width;
   const H = world.height;
   const N = W * H;
   const landSite = new Uint8Array(N);
-  for (let x = 0; x < W; x++)
+  for (let i = 0; i < N; i++) if (world.waterType[i] === 0) landSite[i] = 1;
+  const { dist, nearest } = distanceTransform(W, H, landSite);
+  // Morphological closing of the land: water out of reach of any open-sea
+  // disc of the closing radius is a narrow gulf or strait
+  const far = new Uint8Array(N);
+  for (let i = 0; i < N; i++) if (world.waterType[i] === 1 && dist[i] > GULF_CLOSE_CELLS) far[i] = 1;
+  const distFar = distanceTransform(W, H, far).dist;
+  const claim = new Uint8Array(N);
+  for (let i = 0; i < N; i++) {
+    const t = world.waterType[i];
+    if (t === 2) claim[i] = 2;
+    else if (t !== 0 && nearest[i] >= 0 && (dist[i] <= TERRITORIAL_WATERS_CELLS || distFar[i] > GULF_CLOSE_CELLS)) claim[i] = 1;
+  }
+  // Enclosed seas: open water cut off from the ocean by claimed water
+  const free = new Uint8Array(N);
+  for (let i = 0; i < N; i++) if (world.waterType[i] === 1 && claim[i] === 0) free[i] = 1;
+  const comps = labelComponents(W, H, free);
+  const maxPocket = N * 0.015;
+  const members: number[][] = comps.sizes.map(() => []);
+  for (let i = 0; i < N; i++) if (free[i] && comps.sizes[comps.labels[i]] <= maxPocket) members[comps.labels[i]].push(i);
+  const pockets: WaterGeometry["pockets"] = [];
+  for (const cells of members) {
+    if (!cells.length) continue;
+    const rim = new Set<number>();
+    let open = false;
+    for (const c of cells) {
+      const x = c % W;
+      const y = (c - x) / W;
+      if (y === 0 || y === H - 1) open = true;
+      for (const n of [y * W + ((x + 1) % W), y * W + ((x - 1 + W) % W), y > 0 ? c - W : -1, y < H - 1 ? c + W : -1]) {
+        if (n >= 0 && !free[n] && nearest[n] >= 0) rim.add(world.waterType[n] === 0 ? n : nearest[n]);
+      }
+    }
+    if (!open && rim.size) pockets.push({ cells: Int32Array.from(cells), rim: Int32Array.from(rim) });
+  }
+  const geo = { nearest, claim, pockets };
+  waterGeometryCache.set(world, geo);
+  return geo;
+}
+
+// Fills the water entries of a flat owner array from its land entries:
+// claimable sea follows the nearest coast, lakes their shores, and enclosed
+// pockets go whole to a sole surrounding owner (else by proximity).
+export function claimWaters(world: WorldData, owner: Int32Array | Int16Array) {
+  const { nearest, claim, pockets } = waterGeometry(world);
+  const N = owner.length;
+  for (let i = 0; i < N; i++) {
+    if (world.waterType[i] === 0) continue;
+    owner[i] = claim[i] ? owner[nearest[i]] : -1;
+  }
+  for (const { cells, rim } of pockets) {
+    let sole = -1;
+    let mixed = false;
+    for (let k = 0; k < rim.length; k++) {
+      const o = owner[rim[k]];
+      if (o < 0) continue;
+      if (sole < 0) sole = o;
+      else if (o !== sole) mixed = true;
+    }
+    if (sole < 0) continue;
+    for (let k = 0; k < cells.length; k++) owner[cells[k]] = mixed ? owner[nearest[cells[k]]] : sole;
+  }
+}
+
+// Re-derives sea control after land changed hands. Returns false if nothing
+// changed; `rows` grows to cover the rows that did.
+// A caller that already keeps a flat owner array passes it to skip the grid read.
+export function refreshTerritorialWaters(
+  world: WorldData,
+  rows?: { y0: number; y1: number },
+  flatOwner?: Int16Array | Int32Array,
+): boolean {
+  const W = world.width;
+  const H = world.height;
+  if (flatOwner) {
+    // The grid already matches the flat array: write back only what changed
+    const before = flatOwner.slice();
+    claimWaters(world, flatOwner);
+    let changed = false;
+    for (let i = 0; i < flatOwner.length; i++) {
+      if (before[i] === flatOwner[i]) continue;
+      const y = (i / W) | 0;
+      world.grid[i % W][y].nationIndex = flatOwner[i];
+      changed = true;
+      if (rows) {
+        if (y < rows.y0) rows.y0 = y;
+        if (y > rows.y1) rows.y1 = y;
+      }
+    }
+    return changed;
+  }
+  const owner = new Int32Array(W * H);
+  for (let x = 0; x < W; x++) {
+    const col = world.grid[x];
+    for (let y = 0; y < H; y++) owner[y * W + x] = col[y].nationIndex ?? -1;
+  }
+  claimWaters(world, owner);
+  let changed = false;
+  for (let x = 0; x < W; x++) {
+    const col = world.grid[x];
     for (let y = 0; y < H; y++) {
       const i = y * W + x;
-      if (world.waterType[i] === 0 && (world.grid[x][y].nationIndex ?? -1) >= 0) landSite[i] = 1;
-    }
-  const { dist, nearest } = distanceTransform(W, H, landSite);
-  let changed = false;
-  for (let y = Math.max(0, y0); y <= Math.min(H - 1, y1); y++) {
-    for (let xx = x0; xx <= x1; xx++) {
-      const x = ((xx % W) + W) % W;
-      const i = y * W + x;
       if (world.waterType[i] === 0) continue;
-      const cell = world.grid[x][y];
-      const lake = world.waterType[i] === 2;
-      const n = nearest[i];
-      const owner =
-        n >= 0 && (lake || dist[i] <= TERRITORIAL_WATERS_CELLS)
-          ? (world.grid[n % W][(n - (n % W)) / W].nationIndex ?? -1)
-          : -1;
-      if (owner !== (cell.nationIndex ?? -1)) {
-        cell.nationIndex = owner;
+      if ((col[y].nationIndex ?? -1) !== owner[i]) {
+        col[y].nationIndex = owner[i];
         changed = true;
+        if (rows) {
+          if (y < rows.y0) rows.y0 = y;
+          if (y > rows.y1) rows.y1 = y;
+        }
       }
     }
   }
@@ -113,7 +207,6 @@ export const TERRITORIAL_WATERS_CELLS = 4.4;
 export async function generateNations(ctx: GeneratorContext): Promise<void> {
   const { world, noise, width, height, onProgress } = ctx;
   const W = width;
-  const N = width * height;
   world.nations = [];
 
   // Base number of nations based on map scale
@@ -197,46 +290,8 @@ export async function generateNations(ctx: GeneratorContext): Promise<void> {
 
   // 3. Territorial waters: each water cell belongs to the nearest coast's
   // owner within the limit; lakes are internal waters of their shores.
-  const landSite = new Uint8Array(N);
-  for (let i = 0; i < N; i++) if (owner[i] >= 0 && world.waterType[i] === 0) landSite[i] = 1;
-  const { dist, nearest } = distanceTransform(W, height, landSite);
-  for (let i = 0; i < N; i++) {
-    if (world.waterType[i] === 0) continue;
-    const isLake = world.waterType[i] === 2;
-    owner[i] =
-      nearest[i] >= 0 && (isLake || dist[i] <= TERRITORIAL_WATERS_CELLS)
-        ? owner[nearest[i]]
-        : -1;
-  }
-
-  // Enclosed seas: unclaimed pockets cut off from the open ocean by claimed
-  // waters become internal waters (whole to a sole owner, else by proximity)
-  const free = new Uint8Array(N);
-  for (let i = 0; i < N; i++) if (world.waterType[i] !== 0 && owner[i] < 0) free[i] = 1;
-  const pockets = labelComponents(W, height, free);
-  const maxPocket = N * 0.01;
-  const members: number[][] = pockets.sizes.map(() => []);
-  for (let i = 0; i < N; i++) if (free[i] && pockets.sizes[pockets.labels[i]] <= maxPocket) members[pockets.labels[i]].push(i);
-  for (const cells of members) {
-    if (cells.length === 0) continue;
-    const owners = new Set<number>();
-    let open = false;
-    for (const c of cells) {
-      const x = c % W;
-      const y = (c - x) / W;
-      if (y === 0 || y === height - 1) open = true;
-      for (const n of [y * W + ((x + 1) % W), y * W + ((x - 1 + W) % W), y > 0 ? c - W : -1, y < height - 1 ? c + W : -1]) {
-        if (n >= 0 && !free[n] && owner[n] >= 0) owners.add(owner[n]);
-      }
-    }
-    if (open || owners.size === 0) continue;
-    if (owners.size === 1) {
-      const o = [...owners][0];
-      for (const c of cells) owner[c] = o;
-    } else {
-      for (const c of cells) if (nearest[c] >= 0) owner[c] = owner[nearest[c]];
-    }
-  }
+  // Enclosed seas, gulfs and straits between close shores become internal waters.
+  claimWaters(world, owner);
   onProgress?.(75);
   await yieldFrame();
 

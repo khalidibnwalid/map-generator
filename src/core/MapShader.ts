@@ -47,6 +47,8 @@ uniform int u_thematic;         // 0 none, 1 cultures, 2 religions, 3 diplomacy
 uniform vec3 u_biomeColors[40];
 uniform float u_hoverNationIndex;
 uniform vec3 u_hoverNationColor;
+uniform float u_hoverBloc[16]; // hovered nation plus its overlord/vassals
+uniform int u_hoverBlocCount;
 uniform bool u_showIce;
 uniform bool u_fast; // view is moving: skip fine detail, keep full resolution
 uniform float u_hoverProvinceIndex;
@@ -158,6 +160,17 @@ vec3 leafColor(int b) {
   if (b == 22 || b == 28) return vec3(0.33, 0.38, 0.18);   // acacia / scrub
   if (b == 14) return vec3(0.22, 0.36, 0.14);
   return vec3(0.19, 0.34, 0.15);                           // broadleaf
+}
+
+float decodeIdx(vec4 color);
+
+float inHover(vec4 c) {
+  float idx = decodeIdx(c);
+  for (int i = 0; i < 16; i++) {
+    if (i >= u_hoverBlocCount) break;
+    if (abs(idx - u_hoverBloc[i]) < 0.5) return 1.0;
+  }
+  return 0.0;
 }
 
 float decodeIdx(vec4 color) {
@@ -707,7 +720,7 @@ void main() {
     vec4 nationColor = fetchW(u_nationsTexture, ownerTexel);
     vec4 ownerIdx = fetchW(u_nationIdxTex, ownerTexel);
     if (nationColor.a > 0.1) {
-      bool hovered = u_hoverNationIndex >= 0.0 && abs(decodeIdx(ownerIdx) - u_hoverNationIndex) < 0.5;
+      bool hovered = u_hoverNationIndex >= 0.0 && inHover(ownerIdx) > 0.5;
       vec3 nc = nationColor.rgb;
       // Province patchwork: tiny brightness shift per province
       if (u_showProvinces) {
@@ -740,10 +753,10 @@ void main() {
     // ownership blended smoothly between texels (no cell squares)
     if (u_hoverNationIndex >= 0.0) {
       vec4 hv = vec4(
-        step(abs(decodeIdx(c00) - u_hoverNationIndex), 0.5) * c00.a,
-        step(abs(decodeIdx(c10) - u_hoverNationIndex), 0.5) * c10.a,
-        step(abs(decodeIdx(c01) - u_hoverNationIndex), 0.5) * c01.a,
-        step(abs(decodeIdx(c11) - u_hoverNationIndex), 0.5) * c11.a);
+        inHover(c00) * c00.a,
+        inHover(c10) * c10.a,
+        inHover(c01) * c01.a,
+        inHover(c11) * c11.a);
       vec2 hs = smoothstep(0.0, 1.0, noisy_fxy);
       float hw = mix(mix(hv.x, hv.y, hs.x), mix(hv.z, hv.w, hs.x), hs.y);
       float seaA = 0.18 * smoothstep(0.35, 0.65, hw) * (1.0 - max(landMask, isletMask)) * politicalFade;
@@ -766,8 +779,8 @@ void main() {
       // Maritime limits only for the hovered nation, thin and dashed
       float seaPart = 0.0;
       if (u_hoverNationIndex >= 0.0) {
-        float own = max(max(step(abs(decodeIdx(n00) - u_hoverNationIndex), 0.5) * n00.a, step(abs(decodeIdx(n10) - u_hoverNationIndex), 0.5) * n10.a),
-                        max(step(abs(decodeIdx(n01) - u_hoverNationIndex), 0.5) * n01.a, step(abs(decodeIdx(n11) - u_hoverNationIndex), 0.5) * n11.a));
+        float own = max(max(inHover(n00) * n00.a, inHover(n10) * n10.a),
+                        max(inHover(n01) * n01.a, inHover(n11) * n11.a));
         float dash = step(0.45, fract((sc.x + sc.y) / 9.0));
         seaPart = getBorderStrength(n00, n10, n01, n11, noisy_fxy, thickness * 0.45, aa) * 0.45 * dash * own * (1.0 - landMask);
       }

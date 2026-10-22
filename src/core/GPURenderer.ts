@@ -46,6 +46,7 @@ export class GPURenderer {
   private nearestLand: Int32Array | null = null;
   private nearestLandWorld: WorldData | null = null;
   private texSize = { w: 0, h: 0 };
+  public hoverBloc: number[] = []; // nations highlighted with the hovered one
 
   constructor(canvas: HTMLCanvasElement) {
     const gl = canvas.getContext("webgl2", {
@@ -192,19 +193,6 @@ export class GPURenderer {
     this.nearestLandWorld = null;
   }
 
-  private nationTexel(world: WorldData, x: number, y: number, out: Uint8Array, o: number) {
-    const nIdx = world.grid[x][y].nationIndex ?? -1;
-    if (nIdx >= 0 && nIdx < world.nations.length) {
-      const hex = world.nations[nIdx].color;
-      out[o] = parseInt(hex.slice(1, 3), 16);
-      out[o + 1] = parseInt(hex.slice(3, 5), 16);
-      out[o + 2] = parseInt(hex.slice(5, 7), 16);
-      out[o + 3] = 255;
-    } else {
-      out[o] = out[o + 1] = out[o + 2] = out[o + 3] = 0;
-    }
-  }
-
   private provinceTexel(world: WorldData, x: number, y: number, out: Uint8Array, o: number, near: Int32Array) {
     let cell = world.grid[x][y];
     if (cell.isWater) {
@@ -256,18 +244,72 @@ export class GPURenderer {
     }
   }
 
-  public updateNationsDataTexture(world: WorldData, dirtyRect?: Rect) {
+  // `owner` (flat, y * width + x) skips reading the grid when the caller has it
+  public updateNationsDataTexture(world: WorldData, dirtyRect?: Rect, owner?: Int16Array) {
     if (!world || !world.grid) return;
+    let fresh = false;
     if (!this.nationsTexture || !this.nationIdxTexture) {
       this.nationsTexture = this.makeTexture(this.gl.NEAREST);
       this.nationIdxTexture = this.makeTexture(this.gl.NEAREST);
       dirtyRect = undefined;
+      fresh = true;
     }
-    this.writeRegion(this.nationsTexture, world, dirtyRect, (x, y, out, o) =>
-      this.nationTexel(world, x, y, out, o),
-    );
+    // Colours parsed once per nation, not per texel
+    const lut = new Uint8Array(world.nations.length * 3);
+    world.nations.forEach((n, i) => {
+      const v = parseInt(n.color.slice(1, 7), 16);
+      lut[i * 3] = (v >> 16) & 255;
+      lut[i * 3 + 1] = (v >> 8) & 255;
+      lut[i * 3 + 2] = v & 255;
+    });
+    const count = world.nations.length;
+    const W = world.width;
+    // Fast path: whole rows straight from a flat owner array, both textures in one loop
+    if (owner && (!dirtyRect || (dirtyRect.x === 0 && dirtyRect.w >= W))) {
+      const y0 = dirtyRect ? Math.max(0, dirtyRect.y) : 0;
+      const y1 = dirtyRect ? Math.min(world.height, dirtyRect.y + dirtyRect.h) : world.height;
+      if (y1 <= y0) return;
+      const len = (y1 - y0) * W;
+      const col = new Uint8Array(len * 4);
+      const ids = new Uint8Array(len * 4);
+      const base = y0 * W;
+      for (let k = 0; k < len; k++) {
+        const n = owner[base + k];
+        if (n < 0 || n >= count) continue;
+        const o = k * 4;
+        col[o] = lut[n * 3];
+        col[o + 1] = lut[n * 3 + 1];
+        col[o + 2] = lut[n * 3 + 2];
+        col[o + 3] = 255;
+        ids[o] = n & 0xff;
+        ids[o + 1] = (n >> 8) & 0xff;
+        ids[o + 3] = 255;
+      }
+      if (fresh) {
+        this.upload(this.nationsTexture, W, world.height, col);
+        this.upload(this.nationIdxTexture, W, world.height, ids);
+        return;
+      }
+      const gl = this.gl;
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      gl.bindTexture(gl.TEXTURE_2D, this.nationsTexture);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, y0, W, y1 - y0, gl.RGBA, gl.UNSIGNED_BYTE, col);
+      gl.bindTexture(gl.TEXTURE_2D, this.nationIdxTexture);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, y0, W, y1 - y0, gl.RGBA, gl.UNSIGNED_BYTE, ids);
+      return;
+    }
+    const ownerAt = owner ? (x: number, y: number) => owner[y * W + x] : (x: number, y: number) => world.grid[x][y].nationIndex ?? -1;
+    this.writeRegion(this.nationsTexture, world, dirtyRect, (x, y, out, o) => {
+      const n = ownerAt(x, y);
+      if (n >= 0 && n < count) {
+        out[o] = lut[n * 3];
+        out[o + 1] = lut[n * 3 + 1];
+        out[o + 2] = lut[n * 3 + 2];
+        out[o + 3] = 255;
+      } else out[o] = out[o + 1] = out[o + 2] = out[o + 3] = 0;
+    });
     this.writeRegion(this.nationIdxTexture, world, dirtyRect, (x, y, out, o) => {
-      const n = world.grid[x][y].nationIndex ?? -1;
+      const n = ownerAt(x, y);
       if (n >= 0 && n < world.nations.length) {
         out[o] = n & 0xff;
         out[o + 1] = (n >> 8) & 0xff;
@@ -382,6 +424,11 @@ export class GPURenderer {
 
     gl.uniform3fv(this.u("u_biomeColors"), this.biomeColors);
     gl.uniform1f(this.u("u_hoverNationIndex"), hoverNationIndex);
+    const bloc = this.hoverBloc.length ? this.hoverBloc : [hoverNationIndex];
+    const blocArr = new Float32Array(16).fill(-1);
+    bloc.slice(0, 16).forEach((v, i) => (blocArr[i] = v));
+    gl.uniform1fv(this.u("u_hoverBloc"), blocArr);
+    gl.uniform1i(this.u("u_hoverBlocCount"), hoverNationIndex >= 0 ? Math.min(16, bloc.length) : 0);
     gl.uniform3f(this.u("u_hoverNationColor"), hoverNationColor[0], hoverNationColor[1], hoverNationColor[2]);
     gl.uniform1i(this.u("u_showIce"), layers.ice ? 1 : 0);
     gl.uniform1i(this.u("u_fast"), fast ? 1 : 0);

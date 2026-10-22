@@ -8,9 +8,10 @@ import {
   cityNameFor,
   colorForNewNation,
   refreshTerritorialWaters,
-  TERRITORIAL_WATERS_CELLS,
 } from "../game/generators";
-import type { City, Nation } from "../game/WorldData";
+import type { City, Nation, RelationType } from "../game/WorldData";
+import { appendNation, blocOf, makeVassal, relation, releaseVassal, removeNation, setRelation } from "../game/politics";
+import { RELATION_COLORS } from "../game/generators/generateDiplomacy";
 import { CELL_KM2 } from "../game/WorldData";
 import type { UIManager } from "./UIManager";
 import type { CityRenderer } from "./CityRenderer";
@@ -44,7 +45,6 @@ export class NationsManager {
   public isEditingNations: boolean = false;
   public isPainting: boolean = false;
   public brushSize: number = 2;
-  public nationCellsList: Set<number>[] = [];
   public nationCentroids: { x: number; y: number }[] = [];
   public nationSizes: number[] = [];
   public nationLandArea: number[] = []; // land cells only; water is never counted
@@ -59,7 +59,7 @@ export class NationsManager {
   private sortKey: SortKey = "area";
   private sortDesc = true;
   private stats: NationStats[] = [];
-  private nationSubTabs: Map<number, "cities" | "provinces"> = new Map();
+  private nationSubTabs: Map<number, "cities" | "provinces" | "diplomacy"> = new Map();
   private cityMap: Map<number, City> = new Map();
 
   private lastPaintedX: number | null = null;
@@ -124,7 +124,10 @@ export class NationsManager {
       this.renderList();
       this.canvasManager.scheduleRender();
     });
-    listContainer.appendChild(addNationBtn);
+    // The add button and sort bar live in the sticky header above the table
+    const head = document.getElementById("nations-head") ?? listContainer;
+    if (head !== listContainer) head.innerHTML = "";
+    head.appendChild(addNationBtn);
 
     // --- Sorting ---
     this.stats = world.nations.map(() => ({ population: 0, cities: 0, wealth: 0 }));
@@ -161,7 +164,7 @@ export class NationsManager {
       this.renderList();
     });
     sortBar.appendChild(dir);
-    listContainer.appendChild(sortBar);
+    head.appendChild(sortBar);
 
     const order = world.nations.map((_, i) => i);
     const value = (i: number): number | string => {
@@ -317,8 +320,18 @@ export class NationsManager {
           this.renderList();
         });
 
+        const diplomacyTab = document.createElement("button");
+        diplomacyTab.className = `nation-sub-tab-btn ${currentTab === "diplomacy" ? "active" : ""}`;
+        diplomacyTab.textContent = "DIPLOMACY";
+        diplomacyTab.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this.nationSubTabs.set(idx, "diplomacy");
+          this.renderList();
+        });
+
         subTabs.appendChild(citiesTab);
         subTabs.appendChild(provincesTab);
+        subTabs.appendChild(diplomacyTab);
         listContainer.appendChild(subTabs);
 
         const contentContainer = document.createElement("div");
@@ -327,6 +340,8 @@ export class NationsManager {
 
         if (currentTab === "cities") {
           this.renderCityList(idx, -1, contentContainer);
+        } else if (currentTab === "diplomacy") {
+          this.renderDiplomacy(idx, contentContainer);
         } else {
           this.renderProvinceList(idx, contentContainer);
         }
@@ -558,7 +573,150 @@ export class NationsManager {
         this.canvasManager.scheduleRender();
       });
       container.appendChild(addProvinceBtn);
+
+      const regenBtn = document.createElement("button");
+      regenBtn.className = "province-add-btn";
+      regenBtn.title = "Redraw this nation's provinces from scratch";
+      regenBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>
+        </svg>
+        <span>REGENERATE PROVINCES</span>
+      `;
+      regenBtn.addEventListener("click", () => this.regenerateProvinces(nationIdx));
+      container.appendChild(regenBtn);
     }
+  }
+
+  public regenerateProvinces(nationIdx: number) {
+    const world = this.generator.getWorld();
+    if (!world.nations[nationIdx]) return;
+    partitionNation(world, this.generator.getNoise(), nationIdx);
+    this.selectedProvinceIndex = -1;
+    this.expandedProvinces.clear();
+    this.gpuRenderer.updateProvincesDataTexture(world);
+    this.onTerritoryChanged?.();
+    this.renderList();
+    this.canvasManager.scheduleRender();
+  }
+
+  // Overlord, vassals and relations toward every other nation
+  private renderDiplomacy(nationIdx: number, container: HTMLElement) {
+    const world = this.generator.getWorld();
+    const nation = world.nations[nationIdx];
+    if (!nation) return;
+    const wrap = document.createElement("div");
+    wrap.className = "diplo-panel";
+    const changed = () => {
+      this.nationsStateDirty = true;
+      this.onTerritoryChanged?.();
+      this.renderList();
+      this.canvasManager.scheduleRender();
+    };
+    const byName = world.nations
+      .map((n, i) => ({ n, i }))
+      .filter((e) => e.i !== nationIdx)
+      .sort((a, b) => a.n.name.localeCompare(b.n.name));
+
+    // Overlord picker (only independent nations, never its own vassals)
+    const ovRow = document.createElement("label");
+    ovRow.className = "diplo-row diplo-overlord";
+    ovRow.innerHTML = `<span class="diplo-label">Overlord</span>`;
+    const ovSelect = document.createElement("select");
+    ovSelect.className = "diplo-select";
+    ovSelect.innerHTML =
+      `<option value="-1">Independent</option>` +
+      byName
+        .filter((e) => e.n.overlord === undefined)
+        .map((e) => `<option value="${e.i}" ${nation.overlord === e.i ? "selected" : ""}>${e.n.name}</option>`)
+        .join("");
+    ovSelect.addEventListener("change", () => {
+      const o = Number(ovSelect.value);
+      if (o < 0) releaseVassal(world, nationIdx);
+      else makeVassal(world, nationIdx, o);
+      changed();
+    });
+    ovRow.appendChild(ovSelect);
+    wrap.appendChild(ovRow);
+
+    const vassals = blocOf(world, nationIdx).filter((i) => world.nations[i].overlord === nationIdx);
+    if (vassals.length) {
+      const vRow = document.createElement("div");
+      vRow.className = "diplo-vassals";
+      vRow.innerHTML = `<span class="diplo-label">Vassals</span>`;
+      for (const v of vassals) {
+        const chip = document.createElement("button");
+        chip.className = "diplo-chip";
+        chip.title = "Release";
+        chip.innerHTML = `<span class="diplo-dot" style="background:${world.nations[v].color}"></span>${world.nations[v].name}<span class="diplo-x">×</span>`;
+        chip.addEventListener("click", () => {
+          releaseVassal(world, v);
+          changed();
+        });
+        vRow.appendChild(chip);
+      }
+      wrap.appendChild(vRow);
+    }
+
+    // Relations: neighbours first, then everyone else
+    const neighbours = this.neighboursOf(nationIdx);
+    const options: RelationType[] = ["Alliance", "Friendly", "Neutral", "Rival", "War"];
+    const list = document.createElement("div");
+    list.className = "diplo-list";
+    const ordered = [...byName.filter((e) => neighbours.has(e.i)), ...byName.filter((e) => !neighbours.has(e.i))];
+    for (const { n, i } of ordered) {
+      const rel = relation(world, nationIdx, i);
+      const row = document.createElement("div");
+      row.className = "diplo-row";
+      row.innerHTML = `<span class="diplo-dot" style="background:${n.color}"></span><span class="diplo-name" title="${n.name}">${n.name}${neighbours.has(i) ? "<small> · border</small>" : ""}</span>`;
+      const sel = document.createElement("select");
+      sel.className = "diplo-select";
+      sel.style.color = RELATION_COLORS[rel];
+      const all = rel === "Vassal" || rel === "Overlord" ? [rel, ...options] : options;
+      sel.innerHTML = all
+        .map((r) => `<option value="${r}" ${r === rel ? "selected" : ""}>${r === "Vassal" ? "Our overlord" : r === "Overlord" ? "Our vassal" : r}</option>`)
+        .join("");
+      sel.addEventListener("change", () => {
+        // Leaving a vassal bond restores an own colour
+        if (rel === "Vassal") releaseVassal(world, nationIdx);
+        if (rel === "Overlord") releaseVassal(world, i);
+        setRelation(world, nationIdx, i, sel.value as RelationType);
+        changed();
+      });
+      sel.addEventListener("click", (e) => e.stopPropagation());
+      row.appendChild(sel);
+      row.addEventListener("mouseenter", () => {
+        this.hoveredNationIndex = i;
+        this.canvasManager.scheduleRender();
+      });
+      row.addEventListener("mouseleave", () => {
+        this.hoveredNationIndex = -1;
+        this.canvasManager.scheduleRender();
+      });
+      list.appendChild(row);
+    }
+    wrap.appendChild(list);
+    container.appendChild(wrap);
+  }
+
+  private neighboursOf(nationIdx: number): Set<number> {
+    const world = this.generator.getWorld();
+    const out = new Set<number>();
+    const W = world.width;
+    for (let x = 0; x < W; x++) {
+      const col = world.grid[x];
+      const right = world.grid[(x + 1) % W];
+      for (let y = 0; y < world.height; y++) {
+        const a = col[y].nationIndex ?? -1;
+        const b = right[y].nationIndex ?? -1;
+        const c = y + 1 < world.height ? (col[y + 1].nationIndex ?? -1) : -1;
+        if (a === nationIdx) {
+          if (b >= 0 && b !== a) out.add(b);
+          if (c >= 0 && c !== a) out.add(c);
+        } else if (a >= 0 && (b === nationIdx || c === nationIdx)) out.add(a);
+      }
+    }
+    return out;
   }
 
   private getPopulation(city: City): string {
@@ -800,52 +958,12 @@ export class NationsManager {
       government: lang ? lang.government(0.1, false) : "Kingdom",
     };
 
-    // 1. Shift existing nations and re-index them
-    world.nations.forEach((n) => n.id++);
-    world.nations.unshift(newNation);
+    const newIdx = appendNation(world, newNation);
+    this.nationCentroids.push({ x: startX, y: startY });
+    this.nationSizes.push(0);
+    this.nationLandArea.push(0);
 
-    // 2. Re-index EVERY cell in the grid (including water, as it may have a nationIndex)
-    // This is safer than using nationCellsList which might miss certain areas.
-    for (let xPos = 0; xPos < world.width; xPos++) {
-      for (let yPos = 0; yPos < world.height; yPos++) {
-        const cell = world.grid[xPos][yPos];
-        if (cell.nationIndex !== undefined && cell.nationIndex !== -1) {
-          cell.nationIndex++;
-        }
-      }
-      // Yield periodically to keep UI responsive on massive maps
-      if (xPos % 200 === 0) await new Promise((r) => requestAnimationFrame(r));
-    }
-
-    // 3. Update all nationIndex references in cities
-    world.cities.forEach((city) => {
-      if (city.nationIndex !== -1) {
-        city.nationIndex++;
-      }
-    });
-
-    // 4. Update internal state lists
-    this.nationCellsList.unshift(new Set());
-    this.nationCentroids.unshift({ x: startX, y: startY });
-    this.nationSizes.unshift(0);
-    this.nationLandArea.unshift(0);
-
-    // 5. Shift expandedNations state
-    const newExpanded = new Set<number>();
-    this.expandedNations.forEach((idx) => {
-      if (idx === -1) newExpanded.add(-1);
-      else newExpanded.add(idx + 1);
-    });
-    this.expandedNations = newExpanded;
-
-    // 6. Adjust selected index
-    if (this.selectedNationIndex !== -1) {
-      this.selectedNationIndex++;
-    }
-
-    await new Promise((r) => requestAnimationFrame(r));
-
-    // 7. Paint circular starting territory
+    // Paint circular starting territory
     const radius = 12;
     for (let dx = -radius; dx <= radius; dx++) {
       for (let dy = -radius; dy <= radius; dy++) {
@@ -855,14 +973,7 @@ export class NationsManager {
           if (py >= 0 && py < world.height) {
             const cell = world.grid[px][py];
             if (!cell.isWater) {
-              const oldNationIdx = cell.nationIndex;
-              if (oldNationIdx !== undefined && oldNationIdx !== -1) {
-                this.nationCellsList[oldNationIdx]?.delete(
-                  py * world.width + px,
-                );
-              }
-              cell.nationIndex = 0;
-              this.nationCellsList[0].add(py * world.width + px);
+              cell.nationIndex = newIdx;
             }
           }
         }
@@ -870,27 +981,28 @@ export class NationsManager {
     }
 
     // The new realm's coast takes its territorial waters
-    const reach = radius + Math.ceil(TERRITORIAL_WATERS_CELLS) + 2;
-    refreshTerritorialWaters(world, startX - reach, startY - reach, startX + reach, startY + reach);
+    refreshTerritorialWaters(world);
 
     this.nationPlacementMode = false;
     this.nationsStateDirty = true;
     this.buildCache();
 
-    // 8. Add capital city (async)
-    await this.addCity(0, startX, startY, true);
+    // Capital city, then provinces around it
+    await this.addCity(newIdx, startX, startY, true);
+    partitionNation(world, this.generator.getNoise(), newIdx);
+    this.gpuRenderer.updateProvincesDataTexture(world);
 
     // Final UI refresh
     this.renderList();
     this.canvasManager.scheduleRender();
 
     // Select the new nation
-    this.selectedNationIndex = 0;
-    this.expandedNations.add(0);
+    this.selectedNationIndex = newIdx;
+    this.expandedNations.add(newIdx);
     this.renderList();
 
     setTimeout(() => {
-      const target = document.querySelector(`.nation-item[data-index="0"]`);
+      const target = document.querySelector(`.nation-item[data-index="${newIdx}"]`);
       target?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }, 100);
   }
@@ -973,41 +1085,12 @@ export class NationsManager {
     const world = this.generator.getWorld();
     if (nationIndex < 0 || nationIndex >= world.nations.length) return;
 
-    // 1. Release cities of this nation (make them independent villages/towns)
-    world.cities.forEach((c) => {
-      if (c.nationIndex === nationIndex) {
-        c.nationIndex = -1;
-        c.isCapital = false;
-      } else if (c.nationIndex > nationIndex) {
-        c.nationIndex--;
-      }
-    });
-
-    // 2. Clear territory and re-index grid
-    for (let x = 0; x < world.width; x++) {
-      for (let y = 0; y < world.height; y++) {
-        const cell = world.grid[x][y];
-        if (cell.nationIndex === nationIndex) {
-          cell.nationIndex = -1;
-          cell.isNationBorder = false;
-        } else if (
-          cell.nationIndex !== undefined &&
-          cell.nationIndex > nationIndex
-        ) {
-          cell.nationIndex--;
-        }
-      }
-      if (x % 200 === 0) await new Promise((r) => requestAnimationFrame(r));
-    }
-
-    // 3. Re-index city IDs to keep them sequential
-    world.cities.forEach((c, idx) => (c.id = idx));
-
-    // 4. Remove from world.nations
-    world.nations.splice(nationIndex, 1);
+    // Cities become independent; relations, provinces and vassal links are re-indexed
+    removeNation(world, nationIndex);
+    this.gpuRenderer.updateProvincesDataTexture(world);
 
     // 5. Update internal state
-    this.nationCellsList.splice(nationIndex, 1);
+    this.nationSubTabs.clear();
     this.nationCentroids.splice(nationIndex, 1);
     this.nationSizes.splice(nationIndex, 1);
     this.nationLandArea.splice(nationIndex, 1);
@@ -1182,15 +1265,9 @@ export class NationsManager {
       this.strokeBox = null;
       if (box) {
         const world = this.generator.getWorld();
-        const reach = Math.ceil(TERRITORIAL_WATERS_CELLS) + 2;
-        const rect = { x0: box.x0 - reach, y0: box.y0 - reach, x1: box.x1 + reach, y1: box.y1 + reach };
-        if (refreshTerritorialWaters(world, rect.x0, rect.y0, rect.x1, rect.y1)) {
-          this.gpuRenderer.updateNationsDataTexture(world, {
-            x: rect.x0 - 2,
-            y: rect.y0 - 2,
-            w: rect.x1 - rect.x0 + 5,
-            h: rect.y1 - rect.y0 + 5,
-          });
+        // Gulfs and enclosed seas can lie far from the stroke: refresh whole
+        if (refreshTerritorialWaters(world)) {
+          this.gpuRenderer.updateNationsDataTexture(world);
           this.buildCache();
         }
       }
@@ -1231,11 +1308,9 @@ export class NationsManager {
 
             const flatIdx = ty * world.width + wrappedX;
             if (oldIdx !== -1) {
-              this.nationCellsList[oldIdx].delete(flatIdx);
               if (!cell.isWater) this.nationLandArea[oldIdx]--;
               affectedNations.add(oldIdx);
             }
-            this.nationCellsList[this.selectedNationIndex].add(flatIdx);
             if (!cell.isWater) this.nationLandArea[this.selectedNationIndex]++;
 
             // Update city ownership if a city exists at this coordinate
@@ -1311,77 +1386,56 @@ export class NationsManager {
     });
   }
 
-  public buildCache() {
+  public buildCache(owner?: Int16Array) {
+    this.updateStatistics(owner);
+  }
+
+  // One pass over the grid: land area and label anchors per nation
+  public updateStatistics(owner?: Int16Array) {
     const world = this.generator.getWorld();
     const W = world.width;
     const H = world.height;
-    this.nationCellsList = world.nations.map(() => new Set());
-    this.nationCentroids = world.nations.map(() => ({ x: 0, y: 0 }));
-    this.nationSizes = world.nations.map(() => 0);
-    this.nationLandArea = world.nations.map(() => 0);
-
-    for (let x = 0; x < W; x++) {
-      for (let y = 0; y < H; y++) {
-        const cell = world.grid[x][y];
-        if (cell.nationIndex !== undefined && cell.nationIndex >= 0 && cell.nationIndex < world.nations.length) {
-          this.nationCellsList[cell.nationIndex].add(y * W + x);
-          if (!cell.isWater) this.nationLandArea[cell.nationIndex]++;
-          this.nationCentroids[cell.nationIndex].x += x;
-          this.nationCentroids[cell.nationIndex].y += y;
-        }
-      }
-    }
-
-    this.updateStatistics();
-  }
-
-  public updateStatistics() {
-    const world = this.generator.getWorld();
-    const W = world.width;
-
-    let maxArea = 0;
+    const n = world.nations.length;
     const TAU = Math.PI * 2;
-
-    for (let i = 0; i < world.nations.length; i++) {
-      const cells = this.nationCellsList[i];
-      const area = cells.size;
-      if (area > maxArea) maxArea = area;
-
-      if (area > 0) {
-        let sumSin = 0;
-        let sumCos = 0;
-        let sumYWeighted = 0;
-        let totalWeight = 0;
-
-        cells.forEach((flatIdx) => {
-          const x = flatIdx % W;
-          const y = Math.floor(flatIdx / W);
-          const cell = world.grid[x][y];
-
-          // Land-Priority Weighting: Land cells influence label position 10x more than sea
-          const weight = cell.isWater ? 1.0 : 10.0;
-
-          // Circular Mean for X (handles cylindrical wraparound)
-          const angle = (x / W) * TAU;
-          sumSin += Math.sin(angle) * weight;
-          sumCos += Math.cos(angle) * weight;
-
-          sumYWeighted += y * weight;
-          totalWeight += weight;
-        });
-
-        const avgAngle = Math.atan2(sumSin, sumCos);
-        let avgX = (avgAngle / TAU) * W;
-        if (avgX < 0) avgX += W;
-
-        this.nationCentroids[i] = { x: avgX, y: sumYWeighted / totalWeight };
-      } else {
-        this.nationCentroids[i] = {
-          x: world.nations[i]?.capitalX || 0,
-          y: world.nations[i]?.capitalY || 0,
-        };
+    const sinX = new Float64Array(W);
+    const cosX = new Float64Array(W);
+    for (let x = 0; x < W; x++) {
+      sinX[x] = Math.sin((x / W) * TAU);
+      cosX[x] = Math.cos((x / W) * TAU);
+    }
+    const sumSin = new Float64Array(n);
+    const sumCos = new Float64Array(n);
+    const sumY = new Float64Array(n);
+    const weight = new Float64Array(n);
+    const area = new Float64Array(n);
+    const land = new Float64Array(n);
+    for (let x = 0; x < W; x++) {
+      const col = world.grid[x];
+      for (let y = 0; y < H; y++) {
+        const i = y * W + x;
+        const k = owner ? owner[i] : (col[y].nationIndex ?? -1);
+        if (k < 0 || k >= n) continue;
+        const water = world.waterType[i] !== 0;
+        // Land cells influence label position 10x more than sea
+        const wgt = water ? 1 : 10;
+        if (!water) land[k]++;
+        area[k]++;
+        sumSin[k] += sinX[x] * wgt;
+        sumCos[k] += cosX[x] * wgt;
+        sumY[k] += y * wgt;
+        weight[k] += wgt;
       }
     }
+    this.nationLandArea = Array.from(land);
+    this.nationSizes = new Array<number>(n).fill(0);
+    let maxArea = 0;
+    this.nationCentroids = world.nations.map((nt, i) => {
+      if (area[i] > maxArea) maxArea = area[i];
+      if (!area[i]) return { x: nt.capitalX || 0, y: nt.capitalY || 0 };
+      let avgX = (Math.atan2(sumSin[i], sumCos[i]) / TAU) * W;
+      if (avgX < 0) avgX += W;
+      return { x: avgX, y: sumY[i] / weight[i] };
+    });
 
     // Label sizes follow land area, not claimed sea
     const maxLand = Math.max(1, ...this.nationLandArea);

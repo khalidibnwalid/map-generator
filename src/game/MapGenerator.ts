@@ -36,6 +36,7 @@ export class MapGenerator {
 
   public currentPreset: Preset = "Heavy Landmass";
   public currentSeed: number;
+  public isGenerating = false;
 
   constructor(width: number, height: number, seed: number) {
     this.width = width;
@@ -60,6 +61,15 @@ export class MapGenerator {
   }
 
   public async generate(onProgress?: (pct: number) => void) {
+    this.isGenerating = true;
+    try {
+      return await this.runStages(onProgress);
+    } finally {
+      this.isGenerating = false;
+    }
+  }
+
+  private async runStages(onProgress?: (pct: number) => void) {
     onProgress?.(0);
     // Let the loading state paint (rAF never fires in background tabs, hence the timeout)
     await new Promise((r) => {
