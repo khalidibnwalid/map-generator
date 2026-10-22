@@ -1,7 +1,9 @@
 import { NoiseEngine } from "../core/NoiseEngine";
 import { WorldData } from "./WorldData";
+import { yieldFrame } from "./util/grid";
 import {
   generateElevation,
+  generateCoast,
   generateMoisture,
   generateTemperature,
   determineBiomes,
@@ -9,9 +11,11 @@ import {
   generateNations,
   generateCities,
   generateRoads,
-  generateCityGeometry,
   generateProvinces,
   generatePopulationDensity,
+  generateCultures,
+  generateDiplomacy,
+  generatePOIs,
   type GeneratorContext,
 } from "./generators";
 
@@ -48,6 +52,9 @@ export class MapGenerator {
     this.width = width;
     this.height = height;
   }
+  public getNoise() {
+    return this.noise;
+  }
 
   public async generate(onProgress?: (pct: number) => void) {
     onProgress?.(0);
@@ -55,6 +62,7 @@ export class MapGenerator {
 
     this.noise = new NoiseEngine(this.currentSeed);
     this.world = new WorldData(this.width, this.height);
+    this.world.seed = this.currentSeed >>> 0;
 
     const ctx: GeneratorContext = {
       world: this.world,
@@ -72,61 +80,36 @@ export class MapGenerator {
       }
     };
 
-    // Stages with fixed starting points and granular sub-progress
-    ctx.onProgress = report(0, 30);
-    await generateElevation(ctx);
-    onProgress?.(30);
-    await new Promise((r) => requestAnimationFrame(r));
+    // Stages with the progress percentage reached when each one finishes
+    const stages: [(c: GeneratorContext) => Promise<void>, number][] = [
+      [generateElevation, 22],
+      [generateCoast, 32],
+      [generateMoisture, 36],
+      [generateTemperature, 39],
+      [determineBiomes, 42],
+      [generateRivers, 52],
+      [generatePopulationDensity, 56],
+      [generateCultures, 64],
+      [generateNations, 74],
+      [generateCities, 82],
+      [generateProvinces, 90],
+      [generateRoads, 96],
+      [generatePOIs, 98],
+      [generateDiplomacy, 100],
+    ];
+    let start = 0;
+    const timings: string[] = [];
+    for (const [stage, end] of stages) {
+      ctx.onProgress = report(start, end);
+      const t0 = performance.now();
+      await stage(ctx);
+      timings.push(`${stage.name.replace("generate", "")} ${Math.round(performance.now() - t0)}ms`);
+      onProgress?.(end);
+      await yieldFrame(true);
+      start = end;
+    }
 
-    ctx.onProgress = report(30, 40);
-    await generateMoisture(ctx);
-    onProgress?.(40);
-    await new Promise((r) => requestAnimationFrame(r));
-
-    ctx.onProgress = report(40, 45);
-    await generateTemperature(ctx);
-    onProgress?.(45);
-    await new Promise((r) => requestAnimationFrame(r));
-
-    ctx.onProgress = report(45, 50);
-    await determineBiomes(ctx);
-    onProgress?.(50);
-    await new Promise((r) => requestAnimationFrame(r));
-
-    ctx.onProgress = report(50, 90);
-    await generateRivers(ctx);
-    onProgress?.(90);
-    await new Promise((r) => requestAnimationFrame(r));
-
-    ctx.onProgress = report(90, 93);
-    await generatePopulationDensity(ctx);
-    onProgress?.(93);
-    await new Promise((r) => requestAnimationFrame(r));
-
-    ctx.onProgress = report(93, 95);
-    await generateNations(ctx);
-    onProgress?.(95);
-    await new Promise((r) => requestAnimationFrame(r));
-
-    ctx.onProgress = report(95, 97);
-    await generateCities(ctx);
-    onProgress?.(97);
-    await new Promise((r) => requestAnimationFrame(r));
-
-    ctx.onProgress = report(97, 98);
-    await generateProvinces(ctx);
-    onProgress?.(98);
-    await new Promise((r) => requestAnimationFrame(r));
-
-    ctx.onProgress = report(98, 99);
-    await generateRoads(ctx);
-    onProgress?.(99);
-    await new Promise((r) => requestAnimationFrame(r));
-
-    ctx.onProgress = report(99, 100);
-    await generateCityGeometry(ctx);
-    onProgress?.(100);
-
+    console.log(`[MapGenerator] ${timings.join(" · ")}`);
     return this.world;
   }
 

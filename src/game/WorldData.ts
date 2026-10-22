@@ -1,7 +1,12 @@
+import { TerrainSampler } from "../core/TerrainSampler";
+import type { Language } from "./names";
+import type { Poi } from "./generators/generatePOIs";
+
 export const BiomeType = {
   OCEAN: "Ocean",
   DEEP_OCEAN: "Deep Ocean",
   SHALLOW_WATER: "Shallow Water",
+  LAKE: "Lake",
   BEACH: "Beach",
   SCORCHED: "Scorched",
   BARE: "Bare",
@@ -23,12 +28,18 @@ export const BiomeType = {
 
 export type BiomeType = (typeof BiomeType)[keyof typeof BiomeType];
 
+export const CELL_KM = 5;
+export const CELL_KM2 = CELL_KM * CELL_KM;
+
 export interface Nation {
   id: number;
   name: string;
   color: string;
   capitalX: number;
   capitalY: number;
+  cultureId?: number;
+  religionId?: number;
+  government?: string;
 }
 
 export interface Province {
@@ -37,6 +48,12 @@ export interface Province {
   color: string;
   nationIndex: number;
   capitalCityId: number;
+  seatX?: number;
+  seatY?: number;
+  centroidX?: number;
+  centroidY?: number;
+  area?: number; // km² of land
+  population?: number;
 }
 
 export interface Point {
@@ -45,33 +62,20 @@ export interface Point {
 }
 export type Polygon = Point[];
 
-export const DistrictType = {
-  CASTLE: "Castle",
-  MARKET: "Market",
-  WEALTHY: "Wealthy",
-  RESIDENTIAL: "Residential",
-  SLUM: "Slum",
-  HARBOR: "Harbor",
-} as const;
-
-export type DistrictType = (typeof DistrictType)[keyof typeof DistrictType];
-
-export interface Building {
-  polygon: Polygon;
+export interface River {
+  id: number;
+  name: string;
+  points: Point[]; // world cells, x unwrapped (may exceed [0, W))
+  widths: number[]; // meters, one per point
+  flow: number; // peak discharge proxy, in threshold units
+  parent: number; // river this one flows into, -1 for sea / lake
 }
 
-export interface CityBlock {
-  polygon: Polygon;
-  buildings: Building[];
-  district: DistrictType;
-}
-
-export interface CityGeometry {
-  outline: Polygon;
-  innerRoads: Polygon[];
-  blocks: CityBlock[];
-  hasWall: boolean;
-  towers: Point[];
+export interface Road {
+  points: Point[]; // world cells, x unwrapped
+  tier: number; // 0 = track, 1 = road, 2 = highway
+  a: number; // city ids
+  b: number;
 }
 
 export interface City {
@@ -83,8 +87,36 @@ export interface City {
   provinceIndex?: number;
   isCapital: boolean;
   size: number; // 0=village, 1=town, 2=city
-  geometry?: CityGeometry;
+  population: number;
+  radiusM: number; // radius of the built-up core, meters
+  seed: number;
+  isPort?: boolean;
 }
+
+export interface Culture {
+  id: number;
+  name: string;
+  color: string;
+  centerX: number;
+  centerY: number;
+}
+
+export interface Religion {
+  id: number;
+  name: string;
+  color: string;
+  centerX: number;
+  centerY: number;
+}
+
+export type RelationType =
+  | "Alliance"
+  | "Friendly"
+  | "Neutral"
+  | "Rival"
+  | "War"
+  | "Vassal"
+  | "Overlord";
 
 export interface CellData {
   elevation: number;
@@ -99,21 +131,50 @@ export interface CellData {
   nationIndex?: number;
   provinceIndex?: number;
   isNationBorder?: boolean;
+  cultureIndex?: number;
+  religionIndex?: number;
 }
+
+export const WaterType = { LAND: 0, OCEAN: 1, LAKE: 2 } as const;
 
 export class WorldData {
   public width: number;
   public height: number;
+  public seed: number = 0;
   public grid: CellData[][];
-  public rivers: { x: number; y: number }[][] = [];
-  public worldRoads: Polygon[] = [];
+  public rivers: River[] = [];
+  public worldRoads: Road[] = [];
   public nations: Nation[] = [];
   public provinces: Province[] = [];
   public cities: City[] = [];
+  public cultures: Culture[] = [];
+  public religions: Religion[] = [];
+  public languages: Language[] = []; // one per culture, runtime only
+  public pois: Poi[] = [];
+  // relations[a][b], symmetric except Vassal/Overlord pairs
+  public relations: RelationType[][] = [];
+
+  // Flat per-cell arrays (index y * width + x)
+  public coastSdf: Uint16Array; // quantized signed distance to coast, see FieldNoise
+  public waterType: Uint8Array;
+  public landmass: Int32Array; // land component id, -1 for water
+  public receiver: Int32Array; // drainage target cell, -1 for outlets
+  public flowOrder: Int32Array; // cells from outlets upstream
+  public flowOrderLength = 0;
+  public flow: Float32Array;
+
+  private _sampler: TerrainSampler | null = null;
 
   constructor(width: number, height: number) {
     this.width = width;
     this.height = height;
+    const N = width * height;
+    this.coastSdf = new Uint16Array(N);
+    this.waterType = new Uint8Array(N);
+    this.landmass = new Int32Array(N).fill(-1);
+    this.receiver = new Int32Array(N).fill(-1);
+    this.flowOrder = new Int32Array(N);
+    this.flow = new Float32Array(N);
     this.grid = new Array(width);
     for (let x = 0; x < width; x++) {
       this.grid[x] = new Array(height);
@@ -133,11 +194,21 @@ export class WorldData {
     }
   }
 
+  public get sampler(): TerrainSampler {
+    if (!this._sampler) this._sampler = new TerrainSampler(this);
+    return this._sampler;
+  }
+
+  public invalidateSampler() {
+    this._sampler = null;
+  }
+
   public getCell(x: number, y: number): CellData | null {
-    if (x >= 0 && x < this.width && y >= 0 && y < this.height) {
-      return this.grid[x][y];
-    }
-    return null;
+    x = Math.floor(x);
+    y = Math.floor(y);
+    if (y < 0 || y >= this.height) return null;
+    x = ((x % this.width) + this.width) % this.width;
+    return this.grid[x][y];
   }
 
   public static getBiome(
@@ -186,12 +257,23 @@ export class WorldData {
     if (moisture > 0.33) return BiomeType.SHRUBLAND;
     return BiomeType.TUNDRA;
   }
+
+  // Real-world style readings for tooltips
+  public static elevationMeters(e: number): number {
+    if (e < 0.45) return -Math.round(((0.45 - e) / 0.45) * 6000);
+    return Math.round(Math.pow((e - 0.45) / 0.55, 1.6) * 6500);
+  }
+
+  public static temperatureC(t: number): number {
+    return Math.round(-30 + t * 60);
+  }
 }
 
 export const BIOME_COLORS: Record<BiomeType, string> = {
   [BiomeType.OCEAN]: "#1C3E5A",
   [BiomeType.DEEP_OCEAN]: "#0D2235",
   [BiomeType.SHALLOW_WATER]: "#35708F",
+  [BiomeType.LAKE]: "#3B7A99",
   [BiomeType.BEACH]: "#D3CBA1",
   [BiomeType.SCORCHED]: "#555555",
   [BiomeType.BARE]: "#888888",

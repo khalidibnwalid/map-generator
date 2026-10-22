@@ -1,3 +1,4 @@
+import { yieldFrame, distanceTransform } from "../util/grid";
 import type { GeneratorContext } from './types';
 
 export async function generateElevation(ctx: GeneratorContext): Promise<void> {
@@ -26,7 +27,7 @@ export async function generateElevation(ctx: GeneratorContext): Promise<void> {
     for (let x = 0; x < width; x++) {
         if (x % 50 === 0) {
             onProgress?.(Math.floor((x / width) * 10)); // 0-10% range
-            await new Promise(resolve => requestAnimationFrame(resolve));
+            await yieldFrame();
         }
         for (let y = 0; y < height; y++) {
             let e = noise.fbmCylinder(x, y, width, 6, 0.5, 2.0, baseScale);
@@ -76,7 +77,7 @@ export async function generateElevation(ctx: GeneratorContext): Promise<void> {
     for (let x = 0; x < width; x++) {
         if (x % 25 === 0) {
             onProgress?.(10 + Math.floor((x / width) * 10)); // 10-20% range
-            await new Promise(resolve => requestAnimationFrame(resolve));
+            await yieldFrame();
         }
         for (let y = 0; y < height; y++) {
             let closestPlate = 0;
@@ -106,33 +107,51 @@ export async function generateElevation(ctx: GeneratorContext): Promise<void> {
     }
 
     // 4. Calculate Stress
+    // Distance to the nearest plate boundary via an exact distance transform
+    // (replaces scanning a (2r+1)^2 window around every cell).
+    const N = width * height;
+    const plateOf = new Int32Array(N);
+    for (let x = 0; x < width; x++) for (let y = 0; y < height; y++) plateOf[y * width + x] = world.grid[x][y].plateId;
+    const isSite = new Uint8Array(N);
+    const otherPlate = new Int32Array(N).fill(-1);
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const i = y * width + x;
+            const p = plateOf[i];
+            const nbs = [y * width + ((x + 1) % width), y * width + ((x - 1 + width) % width), y > 0 ? i - width : -1, y < height - 1 ? i + width : -1];
+            for (const n of nbs) {
+                if (n >= 0 && plateOf[n] !== p) {
+                    isSite[i] = 1;
+                    otherPlate[i] = plateOf[n];
+                    break;
+                }
+            }
+        }
+    }
+    onProgress?.(22);
+    await yieldFrame();
+    const { dist, nearest } = distanceTransform(width, height, isSite);
+    const searchRadius = Math.min(8, Math.max(4, Math.round(4 * resScale)));
+
     for (let x = 0; x < width; x++) {
-        if (x % 15 === 0) {
-            onProgress?.(20 + Math.floor((x / width) * 10)); // 20-30% range
-            await new Promise(resolve => requestAnimationFrame(resolve));
+        if (x % 100 === 0) {
+            onProgress?.(24 + Math.floor((x / width) * 6));
+            await yieldFrame();
         }
         for (let y = 0; y < height; y++) {
+            const i = y * width + x;
             const cell = world.grid[x][y];
             const myPlate = plates[cell.plateId];
-
+            const s = nearest[i];
             let minBoundDist = 999;
             let neighborPlate: Plate | null = null;
-
-            const searchRadius = Math.min(8, Math.max(4, Math.round(4 * resScale)));
-            for (let dx = -searchRadius; dx <= searchRadius; dx++) {
-                for (let dy = -searchRadius; dy <= searchRadius; dy++) {
-                    const ny = y + dy;
-                    if (ny >= 0 && ny < height) {
-                        const nx = ((x + dx) % width + width) % width;
-                        const nCell = world.grid[nx][ny];
-                        if (nCell.plateId !== cell.plateId) {
-                            const d = Math.hypot(dx, dy);
-                            if (d < minBoundDist) {
-                                minBoundDist = d;
-                                neighborPlate = plates[nCell.plateId];
-                            }
-                        }
-                    }
+            if (s >= 0) {
+                if (plateOf[s] !== cell.plateId) {
+                    neighborPlate = plates[plateOf[s]];
+                    minBoundDist = Math.max(1, dist[i]);
+                } else if (otherPlate[s] >= 0) {
+                    neighborPlate = plates[otherPlate[s]];
+                    minBoundDist = dist[i] + 1;
                 }
             }
 
