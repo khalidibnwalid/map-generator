@@ -65,6 +65,48 @@ export function colorForNewNation(world: WorldData, neighbours: number[]): strin
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
+// Re-derives sea control inside a box (x may wrap) after land changed hands:
+// each water cell follows the owner of the nearest coast within the limit;
+// lakes always belong to their shores. Returns false if nothing changed.
+export function refreshTerritorialWaters(
+  world: WorldData,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+): boolean {
+  const W = world.width;
+  const H = world.height;
+  const N = W * H;
+  const landSite = new Uint8Array(N);
+  for (let x = 0; x < W; x++)
+    for (let y = 0; y < H; y++) {
+      const i = y * W + x;
+      if (world.waterType[i] === 0 && (world.grid[x][y].nationIndex ?? -1) >= 0) landSite[i] = 1;
+    }
+  const { dist, nearest } = distanceTransform(W, H, landSite);
+  let changed = false;
+  for (let y = Math.max(0, y0); y <= Math.min(H - 1, y1); y++) {
+    for (let xx = x0; xx <= x1; xx++) {
+      const x = ((xx % W) + W) % W;
+      const i = y * W + x;
+      if (world.waterType[i] === 0) continue;
+      const cell = world.grid[x][y];
+      const lake = world.waterType[i] === 2;
+      const n = nearest[i];
+      const owner =
+        n >= 0 && (lake || dist[i] <= TERRITORIAL_WATERS_CELLS)
+          ? (world.grid[n % W][(n - (n % W)) / W].nationIndex ?? -1)
+          : -1;
+      if (owner !== (cell.nationIndex ?? -1)) {
+        cell.nationIndex = owner;
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
+
 // Territorial waters reach ~22 km (12 nautical miles) offshore.
 export const TERRITORIAL_WATERS_CELLS = 4.4;
 

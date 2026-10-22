@@ -15,13 +15,60 @@ export async function generateElevation(ctx: GeneratorContext): Promise<void> {
     } else if (preset === 'Realistic Continents') {
         numPlates = 40;
         baseScale = 0.005 * invResScale;
-    } else if (preset === 'Mediterranean Archipelago') {
-        numPlates = 50;
-        baseScale = 0.0075 * invResScale;
+    } else if (preset === 'Earthlike') {
+        // Fewer, larger plates make continent-sized crust blocks
+        numPlates = 26;
+        baseScale = 0.006 * invResScale;
     } else { // Pangea
         numPlates = 25;
         baseScale = 0.0025 * invResScale;
     }
+
+    // Pangea: a random supercontinent archetype, built as a thick "spine"
+    // (polylines in height-normalised map units, x spans ±aspect/2)
+    const aspect = width / height;
+    const arc = (a0: number, a1: number, r: number, n: number) =>
+        Array.from({ length: n }, (_, i) => {
+            const a = a0 + ((a1 - a0) * i) / (n - 1);
+            return [Math.cos(a) * r * 1.25, Math.sin(a) * r] as [number, number];
+        });
+    const ARCHETYPES: { name: string; lines: [number, number][][]; r: number }[] = [
+        { name: "blob", lines: [[[0, 0], [0.05, 0.02]]], r: 0.34 },
+        { name: "belt", lines: [[[-0.55, 0], [0, 0.04], [0.55, -0.02]]], r: 0.2 },
+        { name: "meridian", lines: [[[0, -0.34], [0.05, 0], [-0.03, 0.34]]], r: 0.21 },
+        { name: "L", lines: [[[-0.35, -0.3], [-0.35, 0.26], [0.45, 0.26]]], r: 0.17 },
+        { name: "V", lines: [[[-0.5, -0.3], [0, 0.3], [0.5, -0.3]]], r: 0.16 },
+        { name: "C", lines: [arc(0.7, 5.6, 0.3, 9)], r: 0.15 },
+        { name: "S", lines: [[[-0.62, -0.18], [-0.22, 0.24], [0.2, -0.22], [0.6, 0.2]]], r: 0.15 },
+        { name: "T", lines: [[[-0.5, -0.24], [0.5, -0.24]], [[0, -0.24], [0, 0.32]]], r: 0.16 },
+    ];
+    const shape = ARCHETYPES[Math.floor(noise.random() * ARCHETYPES.length)];
+    const rot = (noise.random() - 0.5) * 0.6 + (noise.random() < 0.5 ? Math.PI : 0);
+    const flip = noise.random() < 0.5 ? -1 : 1;
+    const sc = 0.9 + noise.random() * 0.25;
+    const segs: [number, number, number, number][] = [];
+    for (const line of shape.lines) {
+        const pts = line.map(([px, py]) => {
+            const qx = px * flip * sc;
+            const qy = py * sc;
+            return [qx * Math.cos(rot) - qy * Math.sin(rot), qx * Math.sin(rot) + qy * Math.cos(rot)];
+        });
+        for (let i = 0; i < pts.length - 1; i++) segs.push([pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1]]);
+    }
+    const spineDist = (px: number, py: number) => {
+        let best = Infinity;
+        for (const [ax, ay, bx, by] of segs) {
+            const dx = bx - ax;
+            const dy = by - ay;
+            const l2 = dx * dx + dy * dy || 1e-9;
+            const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2));
+            best = Math.min(best, Math.hypot(px - (ax + dx * t), py - (ay + dy * t)));
+        }
+        return best;
+    };
+    const innerSea = shape.name === "blob" || shape.name === "belt"
+        ? { x: (noise.random() - 0.5) * 0.25, y: (noise.random() - 0.5) * 0.15, r: 0.05 + noise.random() * 0.04 }
+        : null;
 
     // 1. Generate Base Elevation
     for (let x = 0; x < width; x++) {
@@ -33,15 +80,22 @@ export async function generateElevation(ctx: GeneratorContext): Promise<void> {
             let e = noise.fbmCylinder(x, y, width, 6, 0.5, 2.0, baseScale);
 
             if (preset === 'Pangea') {
-                const dx = x / width - 0.5;
-                const dy = y / height - 0.5;
-                const dist = Math.sqrt(dx * dx + dy * dy) * 2.2;
-                e = e + 0.5 - (dist * dist);
-            } else if (preset === 'Mediterranean Archipelago') {
-                const dx = x / width - 0.5;
-                const dy = y / height - 0.5;
-                const dist = Math.sqrt(dx * dx + dy * dy) * 2.0;
-                e = e + (dist * dist * 1.2) - 0.4;
+                // Domain-warped supercontinent whose rim radius varies with
+                // angle (lobes, peninsulas, gulfs), with an inland sea
+                const warpS = 0.0022 * invResScale;
+                const wx = (x / width - 0.5) * aspect + (noise.fbmCylinder(x + 7100, y, width, 4, 0.5, 2.0, warpS) - 0.5) * 0.36;
+                const wy = y / height - 0.5 + (noise.fbmCylinder(x, y + 3900, width, 4, 0.5, 2.0, warpS) - 0.5) * 0.3;
+                // Spine thickness varies along the coast: peninsulas and gulfs
+                const rim = shape.r * (1 + (noise.fbmCylinder(x + 1300, y + 1300, width, 4, 0.5, 2.0, 0.005 * invResScale) - 0.5) * 0.9);
+                const d = spineDist(wx, wy) / Math.max(0.05, rim);
+                // Coastal belt rising into a varied interior, not one high dome
+                e = e + 0.15 - 0.8 * Math.max(0, d - 0.8);
+                if (innerSea) {
+                    const sea = Math.hypot(wx - innerSea.x, (wy - innerSea.y) * 1.4) / innerSea.r;
+                    if (sea < 1.6) e -= (1.6 - sea) * 0.22;
+                }
+            } else if (preset === 'Earthlike') {
+                // Detail only; continents come from plates below
             } else if (preset === 'Realistic Continents') {
                 e -= 0.08;
             }
@@ -103,6 +157,78 @@ export async function generateElevation(ctx: GeneratorContext): Promise<void> {
                 }
             }
             world.grid[x][y].plateId = closestPlate;
+        }
+    }
+
+    // 3b. Earthlike: continents are made of whole continental plates
+    if (preset === 'Earthlike') {
+        const N = width * height;
+        const plateArea = new Array<number>(numPlates).fill(0);
+        const touches: Set<number>[] = Array.from({ length: numPlates }, () => new Set());
+        for (let x = 0; x < width; x++) {
+            for (let y = 0; y < height; y++) {
+                const p = world.grid[x][y].plateId;
+                plateArea[p]++;
+                const r = world.grid[(x + 1) % width][y].plateId;
+                if (r !== p) { touches[p].add(r); touches[r].add(p); }
+                if (y + 1 < height) {
+                    const d = world.grid[x][y + 1].plateId;
+                    if (d !== p) { touches[p].add(d); touches[d].add(p); }
+                }
+            }
+        }
+        // Clustered picks: grow from a few seeds so continents form, not confetti
+        const continental = new Array<boolean>(numPlates).fill(false);
+        let landArea = 0;
+        const target = N * 0.38;
+        let guard = 0;
+        while (landArea < target && guard++ < numPlates * 4) {
+            let pick = -1;
+            if (landArea > 0 && noise.random() < 0.55) {
+                const frontier = [...Array(numPlates).keys()].filter((p) => !continental[p] && [...touches[p]].some((q) => continental[q]));
+                if (frontier.length) pick = frontier[Math.floor(noise.random() * frontier.length)];
+            }
+            if (pick < 0) {
+                const free = [...Array(numPlates).keys()].filter((p) => !continental[p]);
+                if (!free.length) break;
+                pick = free[Math.floor(noise.random() * free.length)];
+            }
+            continental[pick] = true;
+            landArea += plateArea[pick];
+        }
+
+        // Signed distance to the continent/ocean crust boundary
+        const isCont = new Uint8Array(N);
+        const isOcean = new Uint8Array(N);
+        for (let x = 0; x < width; x++)
+            for (let y = 0; y < height; y++) {
+                if (continental[world.grid[x][y].plateId]) isCont[y * width + x] = 1;
+                else isOcean[y * width + x] = 1;
+            }
+        const toOcean = distanceTransform(width, height, isOcean).dist;
+        const toCont = distanceTransform(width, height, isCont).dist;
+        onProgress?.(21);
+        await yieldFrame();
+
+        const shelf = 6 * resScale;
+        for (let x = 0; x < width; x++) {
+            for (let y = 0; y < height; y++) {
+                const i = y * width + x;
+                const cell = world.grid[x][y];
+                const detail = cell.elevation; // fbm stored in step 1
+                const sd = isCont[i] ? Math.min(toOcean[i], 200) : -Math.min(toCont[i], 200);
+                // Coastline wanders far from the straight plate edges
+                const warp =
+                    (noise.fbmCylinder(x + 900, y + 400, width, 4, 0.5, 2.0, 0.009 * invResScale) - 0.5) * 34 * resScale +
+                    (noise.fbmCylinder(x + 300, y + 800, width, 4, 0.5, 2.0, 0.04 * invResScale) - 0.5) * 9 * resScale;
+                const t = Math.max(0, Math.min(1, (sd + warp + shelf) / (shelf * 2)));
+                const tt = t * t * (3 - 2 * t);
+                const ocean = 0.16 + detail * 0.22;
+                // Interiors rise into plateaus and uplands
+                const interior = Math.max(0, Math.min(1, (sd + warp - 25 * resScale) / (60 * resScale)));
+                const land = 0.47 + detail * 0.2 + interior * 0.08 * detail;
+                cell.elevation = Math.max(0, Math.min(1, ocean + (land - ocean) * tt));
+            }
         }
     }
 

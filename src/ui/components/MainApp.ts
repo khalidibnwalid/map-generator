@@ -83,7 +83,7 @@ export default function renderMainApp() {
                 [
                   { value: "Heavy Landmass", label: "Heavy", sub: "Large continents" },
                   { value: "Realistic Continents", label: "Continents", sub: "Earth-like" },
-                  { value: "Mediterranean Archipelago", label: "Archipelago", sub: "Island seas" },
+                  { value: "Earthlike", label: "Earthlike", sub: "Tectonic continents" },
                   { value: "Pangea", label: "Pangea", sub: "One supercontinent" },
                 ],
                 "Heavy Landmass",

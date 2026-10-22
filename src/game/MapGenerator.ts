@@ -25,7 +25,7 @@ import {
 export type Preset =
   | "Heavy Landmass"
   | "Realistic Continents"
-  | "Mediterranean Archipelago"
+  | "Earthlike"
   | "Pangea";
 
 export class MapGenerator {

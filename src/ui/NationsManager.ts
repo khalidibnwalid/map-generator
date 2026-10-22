@@ -1,7 +1,15 @@
 import type { MapGenerator } from "../game/MapGenerator";
 import type { CanvasManager } from "../core/CanvasManager";
 import type { GPURenderer } from "../core/GPURenderer";
-import { connectCity, partitionNation, finalizeCity, cityNameFor, colorForNewNation } from "../game/generators";
+import {
+  connectCity,
+  partitionNation,
+  finalizeCity,
+  cityNameFor,
+  colorForNewNation,
+  refreshTerritorialWaters,
+  TERRITORIAL_WATERS_CELLS,
+} from "../game/generators";
 import type { City, Nation } from "../game/WorldData";
 import { CELL_KM2 } from "../game/WorldData";
 import type { UIManager } from "./UIManager";
@@ -56,6 +64,8 @@ export class NationsManager {
 
   private lastPaintedX: number | null = null;
   private lastPaintedY: number | null = null;
+  // Bounding box of the current paint stroke (world cells, x unwrapped)
+  private strokeBox: { x0: number; y0: number; x1: number; y1: number } | null = null;
 
   private generator: MapGenerator;
   private canvasManager: CanvasManager;
@@ -859,6 +869,10 @@ export class NationsManager {
       }
     }
 
+    // The new realm's coast takes its territorial waters
+    const reach = radius + Math.ceil(TERRITORIAL_WATERS_CELLS) + 2;
+    refreshTerritorialWaters(world, startX - reach, startY - reach, startX + reach, startY + reach);
+
     this.nationPlacementMode = false;
     this.nationsStateDirty = true;
     this.buildCache();
@@ -1115,6 +1129,10 @@ export class NationsManager {
     // Partial texture update with padding for bilinear neighbors
     const world = this.generator.getWorld();
     const padding = 2;
+    const b = this.strokeBox;
+    this.strokeBox = b
+      ? { x0: Math.min(b.x0, minX), y0: Math.min(b.y0, minY), x1: Math.max(b.x1, maxX), y1: Math.max(b.y1, maxY) }
+      : { x0: minX, y0: minY, x1: maxX, y1: maxY };
     const dirtyX = minX - padding;
     const dirtyY = minY - padding;
     const dirtyW = maxX - minX + 1 + padding * 2;
@@ -1159,6 +1177,23 @@ export class NationsManager {
       this.isPainting = false;
       this.lastPaintedX = null;
       this.lastPaintedY = null;
+      // Coastal land changed hands: its territorial waters follow
+      const box = this.strokeBox;
+      this.strokeBox = null;
+      if (box) {
+        const world = this.generator.getWorld();
+        const reach = Math.ceil(TERRITORIAL_WATERS_CELLS) + 2;
+        const rect = { x0: box.x0 - reach, y0: box.y0 - reach, x1: box.x1 + reach, y1: box.y1 + reach };
+        if (refreshTerritorialWaters(world, rect.x0, rect.y0, rect.x1, rect.y1)) {
+          this.gpuRenderer.updateNationsDataTexture(world, {
+            x: rect.x0 - 2,
+            y: rect.y0 - 2,
+            w: rect.x1 - rect.x0 + 5,
+            h: rect.y1 - rect.y0 + 5,
+          });
+          this.buildCache();
+        }
+      }
       this.updateStatistics();
       this.renderList();
       this.canvasManager.scheduleRender();
