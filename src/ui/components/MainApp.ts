@@ -64,6 +64,29 @@ export default function renderMainApp() {
           <!-- Layers Tab -->
           <div id="content-layers" class="tab-content">
             <div class="control-group">
+              <label for="theme">[VIEW] MAP STYLE</label>
+              <div class="select-wrapper">
+                <select id="theme">
+                  <option value="Realistic" selected>Realistic</option>
+                  <option value="Historical">Historical (Parchment)</option>
+                  <option value="Atlas">Political Atlas</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="control-group">
+              <label for="thematic">[VIEW] THEMATIC MAP</label>
+              <div class="select-wrapper">
+                <select id="thematic">
+                  <option value="none" selected>None (Political)</option>
+                  <option value="cultures">Cultures</option>
+                  <option value="religions">Religions</option>
+                  <option value="diplomacy">Diplomacy</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="control-group">
               <label>[VIEW] BASE LAYER</label>
               <div class="radio-group">
                 <label class="radio-btn">
@@ -116,6 +139,21 @@ export default function renderMainApp() {
                   <span class="label-text">MOISTURE</span>
                 </label>
                 <label class="overlay-item">
+                  <input type="checkbox" id="layer-ice" checked />
+                  <span class="checkbox-box"></span>
+                  <span class="label-text">POLAR ICE</span>
+                </label>
+                <label class="overlay-item">
+                  <input type="checkbox" id="layer-rivers" checked />
+                  <span class="checkbox-box"></span>
+                  <span class="label-text">RIVERS</span>
+                </label>
+                <label class="overlay-item">
+                  <input type="checkbox" id="layer-pois" checked />
+                  <span class="checkbox-box"></span>
+                  <span class="label-text">LANDMARKS</span>
+                </label>
+                <label class="overlay-item">
                   <input type="checkbox" id="layer-roads" checked />
                   <span class="checkbox-box"></span>
                   <span class="label-text">ROADS</span>
@@ -153,8 +191,6 @@ export default function renderMainApp() {
                   />
                 </svg>
               </button>
-                </svg>
-              </button>
               <div class="brush-size-control">
                 <span class="brush-label-overlay">BRUSH</span>
                 <input
@@ -185,6 +221,7 @@ export default function renderMainApp() {
         <div class="tooltip-name"></div>
         <div class="tooltip-detail"></div>
       </div>
+      <div id="map-legend" class="map-legend" style="display:none;"></div>
       <div id="map-ruler" class="map-ruler" style="display:none;">
         <div class="ruler-line"></div>
         <div class="ruler-labels">

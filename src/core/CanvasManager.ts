@@ -41,9 +41,12 @@ export class CanvasManager {
         this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
         this.canvas.addEventListener('wheel', (e) => {
-            const zoomSensitivity = 0.001;
-            const wheelDelta = e.deltaY;
-            const zoomFactor = Math.exp(-wheelDelta * zoomSensitivity);
+            // Fast enough to go from continent to street level in a few flicks
+            const zoomSensitivity = 0.0018;
+            const wheelDelta = Math.max(-300, Math.min(300, e.deltaY));
+            let zoomFactor = Math.exp(-wheelDelta * zoomSensitivity);
+            const MAX_SCALE = 250000; // ~2 cm per pixel (1 cell = 5 km)
+            if (this.scale * zoomFactor > MAX_SCALE) zoomFactor = MAX_SCALE / this.scale;
 
             // Zoom towards mouse position
             const mouseX = e.clientX - this.canvas.offsetLeft;

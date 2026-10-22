@@ -1,10 +1,11 @@
 import type { MapGenerator } from "../game/MapGenerator";
 import type { CanvasManager } from "../core/CanvasManager";
 import type { GPURenderer } from "../core/GPURenderer";
-import { generateRoads, generateCityGeometry } from "../game/generators";
-import { NoiseEngine } from "../core/NoiseEngine";
-import type { Preset } from "../game/MapGenerator";
+import { connectCity, partitionNation, finalizeCity, cityNameFor } from "../game/generators";
+import type { City } from "../game/WorldData";
+import { CELL_KM2 } from "../game/WorldData";
 import type { UIManager } from "./UIManager";
+import type { CityRenderer } from "./CityRenderer";
 
 export class NationsManager {
   public hoveredNationIndex: number = -1;
@@ -17,6 +18,8 @@ export class NationsManager {
   public nationCellsList: Set<number>[] = [];
   public nationCentroids: { x: number; y: number }[] = [];
   public nationSizes: number[] = [];
+  public nationLandArea: number[] = []; // land cells only; water is never counted
+  public onTerritoryChanged: (() => void) | null = null;
   public nationsStateDirty: boolean = true;
   public cityPlacementMode: number = -1; // Index of the nation being founded for
   public provincePlacementMode: number = -1; // Index of the nation for new province
@@ -25,7 +28,7 @@ export class NationsManager {
   private expandedNations: Set<number> = new Set();
   private expandedProvinces: Set<number> = new Set();
   private nationSubTabs: Map<number, "cities" | "provinces"> = new Map();
-  private cityMap: Map<number, any> = new Map();
+  private cityMap: Map<number, City> = new Map();
 
   private lastPaintedX: number | null = null;
   private lastPaintedY: number | null = null;
@@ -34,21 +37,38 @@ export class NationsManager {
   private canvasManager: CanvasManager;
   private gpuRenderer: GPURenderer;
   private uiManager: UIManager;
+  private cityRenderer: CityRenderer;
 
   constructor(
     generator: MapGenerator,
     canvasManager: CanvasManager,
     gpuRenderer: GPURenderer,
     uiManager: UIManager,
+    cityRenderer: CityRenderer,
   ) {
     this.generator = generator;
     this.canvasManager = canvasManager;
     this.gpuRenderer = gpuRenderer;
     this.uiManager = uiManager;
+    this.cityRenderer = cityRenderer;
+  }
+
+  // Frames a city so its whole plan fits on screen
+  private focusCity(city: City) {
+    const cm = this.canvasManager;
+    const radiusCells = (city.radiusM * 1.6) / 5000;
+    const fit = (Math.min(cm.getWidth(), cm.getHeight()) * 0.45) / Math.max(radiusCells, 1e-3);
+    cm.lookAt(city.x, city.y, Math.max(cm.scale, Math.min(fit, 20000)));
   }
 
   public renderList() {
-    if (document.activeElement?.classList.contains("nation-name-input")) return;
+    // Commit any half-typed name before the inputs are rebuilt; skipping the
+    // render instead left the list stale after renames, paints and new nations.
+    const active = document.activeElement as HTMLInputElement | null;
+    if (active && active.tagName === "INPUT" && active.closest("#nations-list")) {
+      active.dispatchEvent(new Event("change"));
+      active.blur();
+    }
 
     const listContainer = document.getElementById("nations-list");
     if (!listContainer) return;
@@ -127,8 +147,7 @@ export class NationsManager {
       const territoryCount = document.createElement("span");
       territoryCount.className = "nation-territory-count";
       territoryCount.id = `nation-territory-count-${idx}`;
-      const areaPx = this.nationCellsList[idx]?.size || 0;
-      const areaKm2 = areaPx * 25;
+      const areaKm2 = (this.nationLandArea[idx] || 0) * CELL_KM2;
       territoryCount.textContent = `${areaKm2.toLocaleString()} km²`;
 
       const deleteNationBtn = document.createElement("button");
@@ -353,15 +372,15 @@ export class NationsManager {
       locateBtn.style.opacity = "0.6";
       locateBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        const city = world.cities.find((c) => c.id === province.capitalCityId);
-        if (city) {
-          this.canvasManager.lookAt(
-            city.x,
-            city.y,
-            Math.max(this.canvasManager.scale, 5),
-          );
-        }
+        this.canvasManager.lookAt(
+          province.centroidX ?? province.seatX ?? 0,
+          province.centroidY ?? province.seatY ?? 0,
+          Math.max(this.canvasManager.scale, 5),
+        );
       });
+      locateBtn.title = province.area
+        ? `${province.area.toLocaleString()} km² · pop. ${(province.population ?? 0).toLocaleString()}`
+        : "Locate Province";
 
       const deleteProvinceBtn = document.createElement("button");
       deleteProvinceBtn.className = "city-delete-btn";
@@ -391,14 +410,11 @@ export class NationsManager {
         e.stopPropagation();
         this.selectedNationIndex = nationIdx;
         this.selectedProvinceIndex = pIdx;
-        const city = world.cities.find((c) => c.id === province.capitalCityId);
-        if (city) {
-          this.canvasManager.lookAt(
-            city.x,
-            city.y,
-            Math.max(this.canvasManager.scale, 5),
-          );
-        }
+        this.canvasManager.lookAt(
+          province.centroidX ?? province.seatX ?? 0,
+          province.centroidY ?? province.seatY ?? 0,
+          Math.max(this.canvasManager.scale, 5),
+        );
         this.renderList();
       });
 
@@ -452,36 +468,8 @@ export class NationsManager {
     }
   }
 
-  private getPopulation(city: any): string {
-    const world = this.generator.getWorld();
-    const cell = world.getCell(city.x, city.y);
-    const biome = cell?.biome || "Grassland";
-
-    let base = 1000;
-    if (city.size === 1) base = 15000;
-    if (city.size === 2) base = 120000;
-    if (city.isCapital) base *= 2.5;
-
-    const multipliers: Record<string, number> = {
-      Snow: 0.05,
-      Tundra: 0.1,
-      Scorched: 0.02,
-      Bare: 0.1,
-      "Subtropical Desert": 0.2,
-      "Temperate Desert": 0.3,
-      "Tropical Rain Forest": 0.4,
-      Marsh: 0.3,
-      Taiga: 0.5,
-      Shrubland: 0.7,
-      Savanna: 0.8,
-      Grassland: 1.2,
-      "Temperate Deciduous Forest": 1.5,
-      "Temperate Rain Forest": 1.0,
-    };
-
-    const mult = multipliers[biome] || 1.0;
-    const pop = base * mult * (0.8 + (city.id % 40) / 100);
-
+  private getPopulation(city: City): string {
+    const pop = city.population;
     if (pop >= 1000000) return (pop / 1000000).toFixed(1) + "M";
     if (pop >= 1000) return (pop / 1000).toFixed(0) + "k";
     return Math.floor(pop).toString();
@@ -584,11 +572,7 @@ export class NationsManager {
       locateBtn.title = "Locate City";
       locateBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        this.canvasManager.lookAt(
-          city.x,
-          city.y,
-          Math.max(this.canvasManager.scale, 8),
-        );
+        this.focusCity(city);
       });
 
       const deleteBtn = document.createElement("button");
@@ -656,40 +640,21 @@ export class NationsManager {
     const world = this.generator.getWorld();
     const nation = world.nations[nationIndex];
     if (!nation) return;
-
-    const provinceId = world.provinces.length;
-    const newProvince = {
-      id: provinceId,
-      name: `New Province`,
-      color: nation.color,
-      nationIndex,
-      capitalCityId: -1, // Will be set after city creation
-    };
-
-    world.provinces.push(newProvince);
+    const cell = world.getCell(x, y);
     this.provincePlacementMode = -1;
-
-    // Refresh UI
-    this.renderList();
-
-    // Assign cells in radius
-    const radius = 3;
-    for (let dx = -radius; dx <= radius; dx++) {
-      for (let dy = -radius; dy <= radius; dy++) {
-        if (dx * dx + dy * dy <= radius * radius) {
-          const px = (x + dx + world.width) % world.width;
-          const py = y + dy;
-          if (py >= 0 && py < world.height) {
-            const cell = world.grid[px][py];
-            if (cell.nationIndex === nationIndex) {
-              cell.provinceIndex = provinceId;
-            }
-          }
-        }
-      }
+    if (!cell || cell.isWater || cell.nationIndex !== nationIndex) {
+      this.renderList();
+      return;
     }
+    const before = new Set(world.provinces);
+    // Regrow this nation's provinces with the new seat added, so the new
+    // province takes its natural, terrain-following share of territory.
+    partitionNation(world, this.generator.getNoise(), nationIndex, [{ x, y, cityId: -1 }], true);
+    const created = world.provinces.find(
+      (p) => !before.has(p) && p.nationIndex === nationIndex && p.seatX === x && p.seatY === y,
+    );
+    if (created && created.capitalCityId < 0) created.name = "New Province";
 
-    this.nationsStateDirty = true;
     this.gpuRenderer.updateProvincesDataTexture(world);
     this.renderList();
     this.canvasManager.scheduleRender();
@@ -700,40 +665,20 @@ export class NationsManager {
     const provinceIdx = world.provinces.findIndex((p) => p.id === provinceId);
     if (provinceIdx === -1) return;
 
-    // Clear cell references
-    for (let x = 0; x < world.width; x++) {
-      for (let y = 0; y < world.height; y++) {
-        if (world.grid[x][y].provinceIndex === provinceId) {
-          world.grid[x][y].provinceIndex = -1;
-        }
-      }
-    }
-
-    // Clear city references
-    world.cities.forEach((c) => {
-      if (c.provinceIndex === provinceId) {
-        c.provinceIndex = -1;
-      }
-    });
-
     world.provinces.splice(provinceIdx, 1);
-
-    // Re-index remaining provinces
+    // Single-pass re-index: removed -> direct rule (-1), others shift down
+    const remap = new Map<number, number>();
     world.provinces.forEach((p, idx) => {
-      const oldId = p.id;
+      remap.set(p.id, idx);
       p.id = idx;
-      // Update cell and city references to the new ID
-      for (let x = 0; x < world.width; x++) {
-        for (let y = 0; y < world.height; y++) {
-          if (world.grid[x][y].provinceIndex === oldId) {
-            world.grid[x][y].provinceIndex = idx;
-          }
-        }
-      }
-      world.cities.forEach((c) => {
-        if (c.provinceIndex === oldId) c.provinceIndex = idx;
-      });
     });
+    const fix = (v: number | undefined) =>
+      v === undefined || v < 0 ? v : v === provinceId ? -1 : (remap.get(v) ?? -1);
+    for (let x = 0; x < world.width; x++) {
+      const col = world.grid[x];
+      for (let y = 0; y < world.height; y++) col[y].provinceIndex = fix(col[y].provinceIndex);
+    }
+    world.cities.forEach((c) => (c.provinceIndex = fix(c.provinceIndex)));
 
     if (this.selectedProvinceIndex === provinceId) {
       this.selectedProvinceIndex = -1;
@@ -785,6 +730,7 @@ export class NationsManager {
     this.nationCellsList.unshift(new Set());
     this.nationCentroids.unshift({ x: startX, y: startY });
     this.nationSizes.unshift(0);
+    this.nationLandArea.unshift(0);
 
     // 5. Shift expandedNations state
     const newExpanded = new Set<number>();
@@ -856,48 +802,30 @@ export class NationsManager {
     const world = this.generator.getWorld();
     const nation = world.nations[nationIndex];
     if (!nation) return;
+    if (world.sampler.isWater(x, y)) return;
 
-    const cityId = world.cities.length;
-    const newCity = {
-      id: cityId,
-      name: isCapital ? nation.name : "New Settlement",
+    const cell = world.getCell(x, y);
+    const newCity: City = {
+      id: world.cities.length,
+      name: isCapital ? nation.name : cityNameFor(world, x, y, Math.random),
       x,
       y,
       nationIndex,
-      provinceIndex: this.pendingProvinceIdx,
+      provinceIndex: this.pendingProvinceIdx >= 0 ? this.pendingProvinceIdx : (cell?.provinceIndex ?? -1),
       isCapital,
-      size: isCapital ? 1 : 0,
+      size: isCapital ? 2 : 0,
+      population: 0,
+      radiusM: 0,
+      seed: 0,
     };
-    this.pendingProvinceIdx = -1; // Reset after assignment
+    finalizeCity(world, newCity, cell?.populationDensity ?? 0.3);
+    this.pendingProvinceIdx = -1;
+    this.cityPlacementMode = -1;
 
     world.cities.push(newCity);
-    this.pendingCityIds.add(cityId);
-    this.cityPlacementMode = -1; // Reset mode after placement
-
-    // Refresh UI to show loading state
+    connectCity(world, newCity);
     this.renderList();
     this.canvasManager.scheduleRender();
-
-    // Trigger on-demand generation
-    const ctx = {
-      world,
-      noise: new NoiseEngine(0), // Dummy noise for geometry
-      width: world.width,
-      height: world.height,
-      preset: "Realistic Continents" as Preset,
-      onProgress: (_p: number) => {
-        // Progress feedback could be added here if needed
-      },
-    };
-
-    try {
-      await generateRoads(ctx);
-      await generateCityGeometry(ctx);
-    } finally {
-      this.pendingCityIds.delete(cityId);
-      this.renderList();
-      this.canvasManager.scheduleRender();
-    }
   }
 
   public deleteCity(cityId: number) {
@@ -909,6 +837,8 @@ export class NationsManager {
     const nationIndex = city.nationIndex;
 
     world.cities.splice(cityIndex, 1);
+    this.cityRenderer.invalidateCity(city);
+    world.worldRoads = world.worldRoads.filter((r) => r.a !== city.id && r.b !== city.id);
 
     // If it was capital, find another city in the same nation to be capital
     if (city.isCapital) {
@@ -976,6 +906,7 @@ export class NationsManager {
     this.nationCellsList.splice(nationIndex, 1);
     this.nationCentroids.splice(nationIndex, 1);
     this.nationSizes.splice(nationIndex, 1);
+    this.nationLandArea.splice(nationIndex, 1);
 
     // 6. Shift expandedNations and selectedNationIndex
     const newExpanded = new Set<number>();
@@ -1003,8 +934,7 @@ export class NationsManager {
       `nation-territory-count-${idx}`,
     );
     if (territoryCount) {
-      const areaPx = this.nationCellsList[idx]?.size || 0;
-      const areaKm2 = areaPx * 25;
+      const areaKm2 = (this.nationLandArea[idx] || 0) * CELL_KM2;
       territoryCount.textContent = `${areaKm2.toLocaleString()} km²`;
     }
 
@@ -1020,7 +950,7 @@ export class NationsManager {
     this.cityMap.clear();
     const world = this.generator.getWorld();
     world.cities.forEach((city) => {
-      const flatIdx = city.y * world.width + city.x;
+      const flatIdx = Math.floor(city.y) * world.width + Math.floor(city.x);
       this.cityMap.set(flatIdx, city);
     });
   }
@@ -1114,6 +1044,7 @@ export class NationsManager {
       this.lastPaintedX = null;
       this.lastPaintedY = null;
       this.updateStatistics();
+      this.renderList();
       this.canvasManager.scheduleRender();
     }
   }
@@ -1150,9 +1081,11 @@ export class NationsManager {
             const flatIdx = ty * world.width + wrappedX;
             if (oldIdx !== -1) {
               this.nationCellsList[oldIdx].delete(flatIdx);
+              if (!cell.isWater) this.nationLandArea[oldIdx]--;
               affectedNations.add(oldIdx);
             }
             this.nationCellsList[this.selectedNationIndex].add(flatIdx);
+            if (!cell.isWater) this.nationLandArea[this.selectedNationIndex]++;
 
             // Update city ownership if a city exists at this coordinate
             const city = this.cityMap.get(flatIdx);
@@ -1226,12 +1159,14 @@ export class NationsManager {
     this.nationCellsList = world.nations.map(() => new Set());
     this.nationCentroids = world.nations.map(() => ({ x: 0, y: 0 }));
     this.nationSizes = world.nations.map(() => 0);
+    this.nationLandArea = world.nations.map(() => 0);
 
     for (let x = 0; x < W; x++) {
       for (let y = 0; y < H; y++) {
         const cell = world.grid[x][y];
-        if (cell.nationIndex !== undefined && cell.nationIndex >= 0) {
+        if (cell.nationIndex !== undefined && cell.nationIndex >= 0 && cell.nationIndex < world.nations.length) {
           this.nationCellsList[cell.nationIndex].add(y * W + x);
+          if (!cell.isWater) this.nationLandArea[cell.nationIndex]++;
           this.nationCentroids[cell.nationIndex].x += x;
           this.nationCentroids[cell.nationIndex].y += y;
         }
@@ -1289,10 +1224,12 @@ export class NationsManager {
       }
     }
 
+    // Label sizes follow land area, not claimed sea
+    const maxLand = Math.max(1, ...this.nationLandArea);
     for (let i = 0; i < world.nations.length; i++) {
-      const area = this.nationCellsList[i].size;
-      this.nationSizes[i] = maxArea > 0 ? Math.sqrt(area / maxArea) : 0.5;
+      this.nationSizes[i] = maxArea > 0 ? Math.sqrt((this.nationLandArea[i] || 0) / maxLand) : 0.5;
     }
+    this.onTerritoryChanged?.();
   }
 
   private hslToHex(h: number, s: number, l: number): string {
