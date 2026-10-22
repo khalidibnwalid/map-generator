@@ -1,7 +1,69 @@
 import type { GeneratorContext } from "./types";
+import type { WorldData } from "../WorldData";
 import { hslHex } from "../names";
 import { growRegions, fillUnreached, warpOwnerArray } from "../util/regionGrow";
 import { distanceTransform, labelComponents, yieldFrame } from "../util/grid";
+
+// Nation palette: lively but balanced (between neon and muted atlas tones).
+// Hues are spread around the wheel except the blue/cyan band, so land never
+// reads as water; alternating lightness keeps adjacent hues distinct.
+const PALETTE_HUES = [0, 16, 30, 42, 54, 68, 88, 112, 140, 162, 268, 284, 300, 316, 332, 348];
+export const NATION_PALETTE = PALETTE_HUES.map((h, i) => hslHex(h, 0.62, i % 2 ? 0.6 : 0.54));
+
+function shade(hex: string, amt: number): string {
+  const v = parseInt(hex.slice(1), 16);
+  const ch = (s: number) =>
+    Math.max(0, Math.min(255, Math.round(((v >> s) & 255) * (1 + amt))))
+      .toString(16)
+      .padStart(2, "0");
+  return `#${ch(16)}${ch(8)}${ch(0)}`;
+}
+
+// Greedy map colouring: neighbours never share a palette colour; when a
+// colour is reused elsewhere it gets a slightly different shade.
+export function assignNationColors(world: WorldData) {
+  const n = world.nations.length;
+  const W = world.width;
+  const adj: Set<number>[] = Array.from({ length: n }, () => new Set());
+  for (let x = 0; x < W; x++) {
+    for (let y = 0; y < world.height; y++) {
+      const a = world.grid[x][y].nationIndex ?? -1;
+      if (a < 0) continue;
+      for (const [dx, dy] of [[1, 0], [0, 1]]) {
+        const nb = world.getCell(x + dx, y + dy);
+        const b = nb?.nationIndex ?? -1;
+        if (b >= 0 && b !== a && a < n && b < n) {
+          adj[a].add(b);
+          adj[b].add(a);
+        }
+      }
+    }
+  }
+  const order = [...Array(n).keys()].sort((p, q) => adj[q].size - adj[p].size);
+  const slot = new Array<number>(n).fill(-1);
+  const uses = new Array<number>(NATION_PALETTE.length).fill(0);
+  for (const i of order) {
+    const taken = new Set([...adj[i]].map((j) => slot[j]).filter((s) => s >= 0));
+    let best = -1;
+    for (let k = 0; k < NATION_PALETTE.length; k++) {
+      if (taken.has(k)) continue;
+      if (best < 0 || uses[k] < uses[best]) best = k;
+    }
+    if (best < 0) best = i % NATION_PALETTE.length;
+    slot[i] = best;
+    const reuse = uses[best]++;
+    const amt = reuse === 0 ? 0 : (reuse % 2 === 1 ? 1 : -1) * 0.07 * Math.ceil(reuse / 2);
+    world.nations[i].color = shade(NATION_PALETTE[best], Math.max(-0.25, Math.min(0.2, amt)));
+  }
+}
+
+// A palette colour for a nation founded in the editor, avoiding its neighbours
+export function colorForNewNation(world: WorldData, neighbours: number[]): string {
+  const used = new Set(neighbours.map((j) => world.nations[j]?.color));
+  const free = NATION_PALETTE.filter((c) => !used.has(c));
+  const pool = free.length ? free : NATION_PALETTE;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
 
 // Territorial waters reach ~22 km (12 nautical miles) offshore.
 export const TERRITORIAL_WATERS_CELLS = 4.4;
@@ -51,11 +113,10 @@ export async function generateNations(ctx: GeneratorContext): Promise<void> {
     const id = world.nations.length;
     const cultureId = cell.cultureIndex ?? 0;
     const lang = world.languages[cultureId];
-    const hue = Math.floor(noise.random() * 360);
     world.nations.push({
       id,
       name: lang ? lang.nationName() : `Nation ${id + 1}`,
-      color: hslHex(hue, 0.8, 0.6),
+      color: NATION_PALETTE[id % NATION_PALETTE.length],
       capitalX: x,
       capitalY: y,
       cultureId,
@@ -142,6 +203,7 @@ export async function generateNations(ctx: GeneratorContext): Promise<void> {
       world.grid[x][y].nationIndex = owner[y * W + x];
     }
   }
+  assignNationColors(world);
 
   // 4. Pre-compute land border flags
   for (let x = 0; x < width; x++) {

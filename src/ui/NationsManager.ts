@@ -1,7 +1,7 @@
 import type { MapGenerator } from "../game/MapGenerator";
 import type { CanvasManager } from "../core/CanvasManager";
 import type { GPURenderer } from "../core/GPURenderer";
-import { connectCity, partitionNation, finalizeCity, cityNameFor } from "../game/generators";
+import { connectCity, partitionNation, finalizeCity, cityNameFor, colorForNewNation } from "../game/generators";
 import type { City, Nation } from "../game/WorldData";
 import { CELL_KM2 } from "../game/WorldData";
 import type { UIManager } from "./UIManager";
@@ -779,7 +779,10 @@ export class NationsManager {
     const newNation: Nation = {
       id: 0,
       name: lang ? lang.nationName() : "New Nation",
-      color: this.hslToHex(Math.floor(Math.random() * 360), 70, 60),
+      color: colorForNewNation(
+        world,
+        [...new Set([-1, 0, 1].flatMap((d) => [world.getCell(startX + d * 4, startY)?.nationIndex ?? -1, world.getCell(startX, startY + d * 4)?.nationIndex ?? -1]))].filter((i) => i >= 0),
+      ),
       capitalX: startX,
       capitalY: startY,
       cultureId: here?.cultureIndex ?? 0,
@@ -1137,6 +1140,20 @@ export class NationsManager {
     affectedNations.forEach((idx) => this.updateNationUI(idx));
   }
 
+  private relocateCapital(nationIdx: number) {
+    const world = this.generator.getWorld();
+    const nation = world.nations[nationIdx];
+    if (!nation) return;
+    const successor = world.cities
+      .filter((c) => c.nationIndex === nationIdx)
+      .sort((a, b) => b.population - a.population)[0];
+    if (!successor) return;
+    successor.isCapital = true;
+    nation.capitalX = successor.x;
+    nation.capitalY = successor.y;
+    this.cityRenderer.invalidateCity(successor);
+  }
+
   public stopPainting() {
     if (this.isPainting) {
       this.isPainting = false;
@@ -1189,8 +1206,16 @@ export class NationsManager {
             // Update city ownership if a city exists at this coordinate
             const city = this.cityMap.get(flatIdx);
             if (city) {
+              const previous = city.nationIndex;
               city.nationIndex = this.selectedNationIndex;
               city.provinceIndex = -1; // Reset province when nation changes
+              // An occupied capital becomes an ordinary city of the occupier,
+              // and the defeated nation moves its seat to its largest city
+              if (city.isCapital && previous !== this.selectedNationIndex) {
+                city.isCapital = false;
+                this.cityRenderer.invalidateCity(city);
+                this.relocateCapital(previous);
+              }
             }
           }
 
@@ -1329,18 +1354,5 @@ export class NationsManager {
       this.nationSizes[i] = maxArea > 0 ? Math.sqrt((this.nationLandArea[i] || 0) / maxLand) : 0.5;
     }
     this.onTerritoryChanged?.();
-  }
-
-  private hslToHex(h: number, s: number, l: number): string {
-    l /= 100;
-    const a = (s * Math.min(l, 1 - l)) / 100;
-    const f = (n: number) => {
-      const k = (n + h / 30) % 12;
-      const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
-      return Math.round(255 * color)
-        .toString(16)
-        .padStart(2, "0");
-    };
-    return `#${f(0)}${f(8)}${f(4)}`;
   }
 }

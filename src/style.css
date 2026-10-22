@@ -655,7 +655,7 @@ code {
 .nations-list {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 1px;
   padding-right: 4px;
   scrollbar-width: thin;
   scrollbar-color: rgba(239, 228, 204, 0.24) transparent;
@@ -730,8 +730,8 @@ code {
 .nation-item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
+  gap: 6px;
+  padding: 1px 6px;
   border: 1px solid transparent;
   border-radius: 9px;
   cursor: pointer;
@@ -750,8 +750,8 @@ code {
 
 .nation-toggle-btn {
   flex: none;
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
   display: grid;
   place-items: center;
   border: none;
@@ -795,7 +795,7 @@ code {
 .nation-name-label {
   flex: 1;
   min-width: 0;
-  height: 28px;
+  height: 24px;
   padding: 0 8px;
   border-color: transparent;
   background: transparent;
@@ -823,8 +823,8 @@ code {
 .city-locate-btn,
 .city-capital-btn {
   flex: none;
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   display: grid;
   place-items: center;
   border: none;
@@ -835,8 +835,8 @@ code {
 }
 
 .nation-delete-btn svg {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
 }
 
 .nation-delete-btn:hover,
@@ -892,7 +892,7 @@ code {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 6px;
+  padding: 0 6px;
   border-radius: 8px;
   cursor: pointer;
 }
@@ -916,7 +916,7 @@ code {
 .province-name-input,
 .city-name-input {
   flex: 1;
-  height: 26px;
+  height: 22px;
   padding: 0 6px;
   border-color: transparent;
   background: transparent;
