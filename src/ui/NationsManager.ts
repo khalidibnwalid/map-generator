@@ -1217,8 +1217,9 @@ export class NationsManager {
   private buildCityMap() {
     this.cityMap.clear();
     const world = this.generator.getWorld();
+    const W = world.width;
     world.cities.forEach((city) => {
-      const flatIdx = Math.floor(city.y) * world.width + Math.floor(city.x);
+      const flatIdx = Math.floor(city.y) * W + (((Math.floor(city.x) % W) + W) % W);
       this.cityMap.set(flatIdx, city);
     });
   }
@@ -1226,10 +1227,9 @@ export class NationsManager {
   public handlePainting(clientX: number, clientY: number) {
     if (!this.isPainting || this.selectedNationIndex === -1) return;
 
-    // Ensure city map is built before painting starts
-    if (this.cityMap.size === 0) {
-      this.buildCityMap();
-    }
+    // Fresh city lookup for every stroke: cities are added, removed and
+    // replaced (new worlds, history) between strokes
+    if (!this.strokeBox) this.buildCityMap();
 
     const cm = this.canvasManager;
     const rect = cm.canvas.getBoundingClientRect();
@@ -1334,6 +1334,7 @@ export class NationsManager {
       this.strokeBox = null;
       if (box) {
         const world = this.generator.getWorld();
+        this.adoptPaintedProvinces(box);
         // Gulfs and enclosed seas can lie far from the stroke: refresh whole
         if (refreshTerritorialWaters(world)) {
           this.gpuRenderer.updateNationsDataTexture(world);
@@ -1344,6 +1345,77 @@ export class NationsManager {
       this.renderList();
       this.canvasManager.scheduleRender();
     }
+  }
+
+  // Conquered cells join the conqueror's nearest province (breadth-first from
+  // its own provinces around the stroke); cities on them follow
+  private adoptPaintedProvinces(box: { x0: number; y0: number; x1: number; y1: number }) {
+    const world = this.generator.getWorld();
+    const nation = this.selectedNationIndex;
+    if (nation < 0) return;
+    const W = world.width;
+    const H = world.height;
+    const own = (p: number | undefined) => p !== undefined && p >= 0 && world.provinces[p]?.nationIndex === nation;
+    const pad = 40;
+    const y0 = Math.max(0, box.y0 - pad);
+    const y1 = Math.min(H - 1, box.y1 + pad);
+    const xs: number[] = [];
+    for (let x = box.x0 - pad; x <= box.x1 + pad && xs.length < W; x++) xs.push(((x % W) + W) % W);
+    const inBox = new Set(xs);
+    const needs: number[] = [];
+    const queue: number[] = [];
+    for (const x of xs)
+      for (let y = y0; y <= y1; y++) {
+        const c = world.grid[x][y];
+        if (c.isWater || c.nationIndex !== nation) continue;
+        if (own(c.provinceIndex)) queue.push(y * W + x);
+        else needs.push(y * W + x);
+      }
+    if (!needs.length) return;
+    if (!world.provinces.some((p) => p.nationIndex === nation)) {
+      partitionNation(world, this.generator.getNoise(), nation);
+    } else {
+      // Multi-source BFS through this nation's land inside the padded box
+      for (let q = 0; q < queue.length; q++) {
+        const c = queue[q];
+        const x = c % W;
+        const y = (c - x) / W;
+        const p = world.grid[x][y].provinceIndex!;
+        for (const [nx, ny] of [[(x + 1) % W, y], [(x - 1 + W) % W, y], [x, y - 1], [x, y + 1]]) {
+          if (ny < y0 || ny > y1 || !inBox.has(nx)) continue;
+          const n = world.grid[nx][ny];
+          if (n.isWater || n.nationIndex !== nation || own(n.provinceIndex)) continue;
+          n.provinceIndex = p;
+          queue.push(ny * W + nx);
+        }
+      }
+      // Unreached pockets (enclaves) take the province with the nearest seat
+      for (const c of needs) {
+        const x = c % W;
+        const y = (c - x) / W;
+        const cell = world.grid[x][y];
+        if (own(cell.provinceIndex)) continue;
+        let best = -1;
+        let bestD = Infinity;
+        for (const p of world.provinces) {
+          if (p.nationIndex !== nation) continue;
+          let dx = Math.abs((p.centroidX ?? p.seatX ?? 0) - x);
+          if (dx > W / 2) dx = W - dx;
+          const d = Math.hypot(dx, (p.centroidY ?? p.seatY ?? 0) - y);
+          if (d < bestD) {
+            bestD = d;
+            best = p.id;
+          }
+        }
+        cell.provinceIndex = best;
+      }
+    }
+    for (const city of world.cities) {
+      if (city.nationIndex !== nation) continue;
+      const cell = world.getCell(city.x, city.y);
+      if (cell) city.provinceIndex = cell.provinceIndex;
+    }
+    this.gpuRenderer.updateProvincesDataTexture(world);
   }
 
   private paintAt(
@@ -1387,7 +1459,6 @@ export class NationsManager {
             if (city) {
               const previous = city.nationIndex;
               city.nationIndex = this.selectedNationIndex;
-              city.provinceIndex = -1; // Reset province when nation changes
               // An occupied capital becomes an ordinary city of the occupier,
               // and the defeated nation moves its seat to its largest city
               if (city.isCapital && previous !== this.selectedNationIndex) {
@@ -1398,8 +1469,8 @@ export class NationsManager {
             }
           }
 
-          // If painting inside the currently selected nation
-          if (cell.nationIndex === this.selectedNationIndex) {
+          // Painting with a province selected moves cells into that province
+          if (cell.nationIndex === this.selectedNationIndex && this.selectedProvinceIndex >= 0) {
             cell.provinceIndex = this.selectedProvinceIndex;
             const flatIdx = ty * world.width + wrappedX;
             const city = this.cityMap.get(flatIdx);
