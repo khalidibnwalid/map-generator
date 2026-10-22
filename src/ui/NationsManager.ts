@@ -824,6 +824,7 @@ export class NationsManager {
 
     world.cities.push(newCity);
     connectCity(world, newCity);
+    world.roadsEdited = true;
     this.renderList();
     this.canvasManager.scheduleRender();
   }
@@ -839,6 +840,7 @@ export class NationsManager {
     world.cities.splice(cityIndex, 1);
     this.cityRenderer.invalidateCity(city);
     world.worldRoads = world.worldRoads.filter((r) => r.a !== city.id && r.b !== city.id);
+    world.roadsEdited = true;
 
     // If it was capital, find another city in the same nation to be capital
     if (city.isCapital) {

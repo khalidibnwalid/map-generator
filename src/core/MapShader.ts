@@ -44,7 +44,7 @@ uniform bool u_showProvinces;
 uniform int u_theme;            // 0 realistic, 1 historical, 2 atlas
 uniform int u_thematic;         // 0 none, 1 cultures, 2 religions, 3 diplomacy
 
-uniform vec3 u_biomeColors[24];
+uniform vec3 u_biomeColors[40];
 uniform float u_hoverNationIndex;
 uniform vec3 u_hoverNationColor;
 uniform bool u_showIce;
@@ -88,8 +88,76 @@ int getBiome(float elevation, float temperature, float moisture) {
   return 6;
 }
 
-bool isForest(int b) { return b == 11 || b == 12 || b == 14 || b == 15 || b == 19; }
-bool isArable(int b) { return b == 9 || b == 10 || b == 11 || b == 14 || b == 22 || b == 23; }
+bool isForest(int b) { return b == 11 || b == 12 || b == 14 || b == 15 || b == 19 || b == 27 || b == 29 || b == 36; }
+bool isArable(int b) { return b == 9 || b == 10 || b == 11 || b == 14 || b == 22 || b == 23 || b == 30 || b == 35; }
+
+// Land biome from climate, relief and water (keep in sync with
+// classifyLandBiome in WorldData.ts). slope: elevation change per cell;
+// wd: distance to river/lake in cells; cd: distance to the sea in cells.
+int classify(float e, float t, float m, float slope, float wd, float cd) {
+  if (e > 0.86) return t < 0.25 ? 26 : (m > 0.45 ? 7 : 25);
+  if (slope > 0.06 && e > 0.62) return 25;
+  if (e > 0.78) {
+    if (t < 0.2) return 26;
+    return m > 0.3 ? 24 : 25;
+  }
+  if (e > 0.68) {
+    if (t > 0.6 && m > 0.6) return 36;
+    if (m > 0.4) return t < 0.35 ? 19 : 27;
+    if (m > 0.2) return 9;
+    return t > 0.55 ? 33 : 5;
+  }
+  if (wd < 0.35) {
+    if (t < 0.3) return 31;
+    if (m < 0.25) return 30;
+    if (e < 0.53 && m > 0.55) return 21;
+    return 30;
+  }
+  if (cd < 0.12 && t > 0.68 && m > 0.45 && e < 0.52) return 29;
+  if (cd < 0.06 && m < 0.35 && e < 0.5) return 37;
+  if (t > 0.66) {
+    if (m < 0.08) return 37;
+    if (m < 0.16) return (e < 0.5 && cd > 3.0) ? 32 : 13;
+    if (m < 0.3) return e > 0.58 ? 33 : 22;
+    if (m < 0.45) return 22;
+    if (m < 0.62) return 14;
+    return 15;
+  }
+  if (t > 0.33) {
+    if (m < 0.12) return 34;
+    if (m < 0.25) return (t > 0.5 && cd < 10.0) ? 28 : 23;
+    if (m < 0.4) return t > 0.45 ? 35 : 10;
+    if (e < 0.53 && m > 0.75) return 21;
+    if (m < 0.8) return 11;
+    return 12;
+  }
+  if (m < 0.2) return 6;
+  if (m < 0.35) return 9;
+  if (e < 0.52 && m > 0.7) return 31;
+  return 19;
+}
+
+// Tree cover per biome: density (0..1) and leaf colour
+float treeDensity(int b) {
+  if (b == 15 || b == 36) return 0.9;
+  if (b == 12 || b == 29) return 0.85;
+  if (b == 11 || b == 14 || b == 19 || b == 27) return 0.72;
+  if (b == 30) return 0.28;
+  if (b == 21 || b == 31) return 0.14;
+  if (b == 28) return 0.16;
+  if (b == 22) return 0.06;
+  if (b == 9) return 0.08;
+  if (b == 10 || b == 35 || b == 24) return 0.025;
+  return 0.0;
+}
+vec3 leafColor(int b) {
+  if (b == 19 || b == 27) return vec3(0.12, 0.24, 0.15);   // conifers
+  if (b == 15 || b == 36) return vec3(0.10, 0.30, 0.11);   // jungle
+  if (b == 29) return vec3(0.16, 0.30, 0.16);              // mangrove
+  if (b == 22 || b == 28) return vec3(0.33, 0.38, 0.18);   // acacia / scrub
+  if (b == 14) return vec3(0.22, 0.36, 0.14);
+  return vec3(0.19, 0.34, 0.15);                           // broadleaf
+}
 
 float decodeIdx(vec4 color) {
   return floor(color.r * 255.0 + 0.5) + floor(color.g * 255.0 + 0.5) * 256.0 + floor(color.b * 255.0 + 0.5) * 65536.0;
@@ -175,8 +243,28 @@ float getBorderStrength(vec4 c00, vec4 c10, vec4 c01, vec4 c11, vec2 fxy, float 
   return smoothstep(thickness + aa * 0.5, thickness - aa * 0.5, dist);
 }
 
-// Procedural tree canopies on a 12.5 m lattice. Returns (coverage, light).
-vec2 trees(ivec2 ci, vec2 l, float density) {
+// Which of the 4 texels owns this point, using the same merged-weight rule as
+// getBorderStrength, so region fills meet exactly at the drawn border line.
+ivec2 dominantCorner(vec4 c00, vec4 c10, vec4 c01, vec4 c11, vec2 fxy) {
+  float w00 = (1.0 - fxy.x) * (1.0 - fxy.y);
+  float w10 = fxy.x * (1.0 - fxy.y);
+  float w01 = (1.0 - fxy.x) * fxy.y;
+  float w11 = fxy.x * fxy.y;
+  float s00 = w00 + (distance(c10, c00) < 0.001 ? w10 : 0.0) + (distance(c01, c00) < 0.001 ? w01 : 0.0) + (distance(c11, c00) < 0.001 ? w11 : 0.0);
+  float s10 = w10 + (distance(c01, c10) < 0.001 ? w01 : 0.0) + (distance(c11, c10) < 0.001 ? w11 : 0.0) + (distance(c00, c10) < 0.001 ? w00 : 0.0);
+  float s01 = w01 + (distance(c11, c01) < 0.001 ? w11 : 0.0) + (distance(c00, c01) < 0.001 ? w00 : 0.0) + (distance(c10, c01) < 0.001 ? w10 : 0.0);
+  float s11 = w11 + (distance(c00, c11) < 0.001 ? w00 : 0.0) + (distance(c10, c11) < 0.001 ? w10 : 0.0) + (distance(c01, c11) < 0.001 ? w01 : 0.0);
+  ivec2 best = ivec2(0, 0);
+  float m = s00;
+  if (s10 > m) { m = s10; best = ivec2(1, 0); }
+  if (s01 > m) { m = s01; best = ivec2(0, 1); }
+  if (s11 > m) { best = ivec2(1, 1); }
+  return best;
+}
+
+// Procedural tree canopies on a 12.5 m lattice.
+// Returns (coverage, light, shadow, crown texture).
+vec4 trees(ivec2 ci, vec2 l, float density) {
   const int F = 400;
   vec2 q = l * float(F);
   vec2 fl = floor(q);
@@ -187,6 +275,8 @@ vec2 trees(ivec2 ci, vec2 l, float density) {
   float pxPerLattice = u_scale / float(F);
   float best = 0.0;
   float light = 0.0;
+  float shadow = 0.0;
+  float tex = 0.0;
   for (int j = -1; j <= 1; j++) {
     for (int i = -1; i <= 1; i++) {
       int cx = (bx + i + per * 4) % per;
@@ -194,18 +284,28 @@ vec2 trees(ivec2 ci, vec2 l, float density) {
       if (hashU(cx, cy, u_seed ^ 0x5bd1e995u) > density) continue;
       vec2 jit = vec2(hashU(cx, cy, u_seed + 11u), hashU(cx, cy, u_seed + 23u));
       vec2 c = vec2(float(i), float(j)) + 0.2 + 0.6 * jit;
-      float r = 0.34 + 0.24 * hashU(cx, cy, u_seed + 37u);
+      float h = hashU(cx, cy, u_seed + 37u);
+      float r = 0.3 + 0.26 * h;
       vec2 d = (qf - c) / r;
-      float dd = length(d);
+      // Irregular, lobed crown outline
+      float ang = atan(d.y, d.x);
+      float lobes = 1.0 + 0.13 * sin(ang * 5.0 + h * 40.0) + 0.07 * sin(ang * 9.0 + h * 17.0);
+      float dd = length(d) / lobes;
       float aa = 1.0 / max(0.5, r * pxPerLattice);
       float cov = 1.0 - smoothstep(1.0 - aa, 1.0 + aa, dd);
+      // Shadow cast to the south-east
+      vec2 ds = (qf - c - vec2(0.22, 0.22) * r) / r;
+      float sh = 1.0 - smoothstep(0.9, 1.1, length(ds) / lobes);
+      shadow = max(shadow, sh);
       if (cov > best) {
         best = cov;
-        light = clamp(0.55 - 0.45 * (d.x + d.y) * 0.7, 0.0, 1.0) * (1.0 - 0.35 * dd);
+        light = clamp(0.55 - 0.5 * (d.x + d.y) * 0.6, 0.0, 1.0) * (1.0 - 0.3 * dd);
+        // Clumped foliage texture inside the crown
+        tex = sin(d.x * 9.0 + h * 20.0) * sin(d.y * 9.0 - h * 13.0);
       }
     }
   }
-  return vec2(best, light);
+  return vec4(best, light, shadow, tex);
 }
 
 // Patchwork of fields ~250 m across on a rotated lattice.
@@ -247,9 +347,11 @@ vec3 waterRealistic(float elevation, float coast, float lakeF, ivec2 ci, vec2 l)
   vec3 shallowOcean = vec3(0.10, 0.40, 0.60);
   vec3 c = mix(deepOcean, shallowOcean, depth);
   c += (fbm((vec2(ci) + l) * 0.05) - 0.5) * 0.05;
-  // Coastal shelf: lighter turquoise within ~3 km of the shore
+  // Continental shelf: progressively lighter toward the shore
+  float shelfWide = smoothstep(-3.0, 0.0, coast);
+  c = mix(c, vec3(0.14, 0.46, 0.62), shelfWide * 0.3);
   float shelf = smoothstep(-0.6, 0.0, coast);
-  c = mix(c, vec3(0.16, 0.50, 0.62), shelf * 0.55);
+  c = mix(c, vec3(0.20, 0.56, 0.66), shelf * 0.55);
   c = mix(c, vec3(0.20, 0.47, 0.58), 0.7 * lakeF);
   // Fine ripples once a cell spans many pixels
   if (u_scale > 200.0) {
@@ -284,6 +386,7 @@ void main() {
   bool isLand = coast > 0.0;
   // Lake vs. sea, blended across texels so lake shores never show cell squares
   float lakeF;
+  float waterD; // distance to river or lake, cells (0..8)
   {
     vec2 lp = l - 0.5;
     vec2 lfl = floor(lp);
@@ -299,6 +402,7 @@ void main() {
     vec4 wts = vec4((1.0 - lw.x) * (1.0 - lw.y), lw.x * (1.0 - lw.y), (1.0 - lw.x) * lw.y, lw.x * lw.y);
     float wsum = dot(isW, wts);
     lakeF = wsum > 0.0 ? dot(isL, wts) / wsum : (isL.x + isL.y + isL.z + isL.w > 0.0 ? 1.0 : 0.0);
+    waterD = dot(vec4(t00.a, t10.a, t01.a, t11.a), wts) * 8.0;
   }
   bool lake = lakeF > 0.5;
   float coastLine = 1.0 - smoothstep(0.5, 1.5, abs(coast) / coastW);
@@ -318,8 +422,19 @@ void main() {
   float e_noise = (fbm(wxwy * 1.5) - 0.5) * 0.05 * blendFactor;
   float t_noise = (fbm(wxwy * 1.5 + 10.0) - 0.5) * 0.15 * blendFactor;
   float m_noise = (fbm(wxwy * 1.5 + 20.0) - 0.5) * 0.15 * blendFactor;
-  float qe = max(clamp(elevation + e_noise, 0.0, 1.0), 0.481);
-  int bIdx = getBiome(qe, clamp(temperature + t_noise, 0.0, 1.0), clamp(moisture + m_noise, 0.0, 1.0));
+  // Fine fractal detail so biome edges stay natural when zoomed in
+  float fine = 0.0;
+  if (u_scale > 16.0) fine += detailNoise(ci, l, 16, 0xb1u) * 0.5 * smoothstep(16.0, 40.0, u_scale);
+  if (u_scale > 64.0) fine += detailNoise(ci, l, 64, 0xb2u) * 0.3 * smoothstep(64.0, 160.0, u_scale);
+  if (u_scale > 256.0) fine += detailNoise(ci, l, 256, 0xb3u) * 0.2 * smoothstep(256.0, 640.0, u_scale);
+  float qe = max(clamp(elevation + e_noise + fine * 0.012, 0.0, 1.0), 0.481);
+  float qt = clamp(temperature + t_noise + fine * 0.04, 0.0, 1.0);
+  float qm = clamp(moisture + m_noise + fine * 0.05, 0.0, 1.0);
+  float slope = length(vec2(hR - hL, hU - hD)) * 0.5;
+  float qw = waterD + fine * 0.35 + (fbm(wxwy * 4.0) - 0.5) * 0.3;
+  int bIdx = classify(qe, qt, qm, slope, qw, coast);
+  // A second, offset sample: where they disagree the two biomes interleave
+  int bIdx2 = classify(qe - fine * 0.01, qt - fine * 0.03, qm - fine * 0.04, slope, qw + 0.15, coast);
   float detail = fbm(wxwy * 0.05);
   float ppm = u_scale / CELL_M; // pixels per meter
 
@@ -394,18 +509,38 @@ void main() {
   } else if (u_theme == 2) {
     // ---- Atlas: clean political ----
     if (isLand) {
-      color = vec3(0.94, 0.93, 0.89);
-      color *= mix(1.0, shade, 0.25);
+      color = vec3(0.95, 0.94, 0.90);
+      color *= mix(1.0, shade, 0.4);
     } else {
-      color = mix(vec3(0.66, 0.80, 0.91), vec3(0.78, 0.88, 0.95), smoothstep(-1.5, 0.0, coast));
-      if (lake) color = vec3(0.72, 0.85, 0.94);
+      color = mix(vec3(0.62, 0.77, 0.89), vec3(0.80, 0.89, 0.95), smoothstep(-6.0, 0.0, coast));
+      color = mix(color, vec3(0.74, 0.86, 0.94), lakeF);
     }
-    color = mix(color, vec3(0.35, 0.55, 0.72), coastLine * 0.8);
+    color = mix(color, vec3(0.30, 0.48, 0.66), coastLine * 0.85);
   } else {
     // ---- Realistic ----
     if (isLand) {
-      color = u_biomeColors[bIdx];
+      color = mix(u_biomeColors[bIdx], u_biomeColors[bIdx2], 0.5);
       color *= (0.85 + 0.3 * fbm(wxwy * 2.0));
+
+      // Surface patterns for open landscapes
+      if (bIdx == 37) {
+        // Dune ridges (seif/barchan look), warped
+        vec2 dir = normalize(vec2(1.0, 0.35));
+        float ridge = sin(dot(wxwy, dir) * 9.0 + fbm(wxwy * 1.2) * 6.0);
+        color *= 0.9 + 0.12 * smoothstep(-0.2, 1.0, ridge) * smoothstep(3.0, 10.0, u_scale);
+      } else if (bIdx == 33) {
+        // Layered strata in badlands
+        float band = fract(elevation * 140.0 + fbm(wxwy * 0.8) * 0.6);
+        color = mix(color, color * vec3(1.12, 0.9, 0.8), smoothstep(0.4, 0.6, band) * 0.5);
+      } else if (bIdx == 32) {
+        color = mix(color, vec3(0.95, 0.94, 0.9), 0.3 * fbm(wxwy * 6.0));
+      } else if (bIdx == 26) {
+        color = mix(color, vec3(0.85, 0.9, 0.96), 0.4 * smoothstep(0.45, 0.55, fbm(wxwy * 3.0)));
+      } else if (bIdx == 15 || bIdx == 36 || bIdx == 29) {
+        // Dense canopy mottling visible before individual trees appear
+        float mot = fbm(wxwy * 8.0);
+        color *= 0.8 + 0.35 * mot;
+      }
 
       // Settled land reads slightly warmer/cleared (cities draw real fields)
       if (isArable(bIdx)) color = mix(color, color * vec3(1.06, 1.04, 0.9), smoothstep(0.35, 0.8, populationDensity) * 0.5);
@@ -439,13 +574,14 @@ void main() {
 
       // Individual trees at high zoom
       if (ppm > 0.06) {
-        float density = isForest(bIdx) ? 0.75 : (bIdx == 10 || bIdx == 22 || bIdx == 9) ? 0.05 : (bIdx == 21 ? 0.25 : 0.0);
+        float density = treeDensity(bIdx);
         if (density > 0.0) {
-          vec2 t = trees(ci, l, density);
+          vec4 t = trees(ci, l, density);
           float fade = smoothstep(0.06, 0.2, ppm);
-          vec3 leaf = u_biomeColors[bIdx] * 0.75;
-          if (bIdx == 19) leaf = vec3(0.16, 0.26, 0.18);
-          vec3 canopy = mix(leaf * 0.65, leaf * 1.35 + 0.04, t.y);
+          vec3 leaf = leafColor(bIdx);
+          vec3 canopy = mix(leaf * 0.7, leaf * 1.45 + 0.03, t.y);
+          canopy *= 1.0 + 0.08 * t.w * smoothstep(0.4, 1.5, ppm);
+          color = mix(color, color * 0.62, t.z * (1.0 - t.x) * fade * 0.8);
           color = mix(color, canopy, t.x * fade);
         }
       }
@@ -545,7 +681,7 @@ void main() {
     vec4 t10 = fetchW(u_thematicTex, ixy + ivec2(1, 0));
     vec4 t01 = fetchW(u_thematicTex, ixy + ivec2(0, 1));
     vec4 t11 = fetchW(u_thematicTex, ixy + ivec2(1, 1));
-    vec4 tc = fetchW(u_thematicTex, ivec2(floor(vec2(ixy) + noisy_fxy + 0.5)));
+    vec4 tc = fetchW(u_thematicTex, ixy + dominantCorner(t00, t10, t01, t11, noisy_fxy));
     float a = tc.a * landMask * politicalFade;
     if (u_thematic == 3 && tc.a > 0.9) {
       // Focus nation in diplomacy view: diagonal hatching
@@ -564,7 +700,7 @@ void main() {
     vec4 c10 = fetchW(u_nationIdxTex, ixy + ivec2(1, 0));
     vec4 c01 = fetchW(u_nationIdxTex, ixy + ivec2(0, 1));
     vec4 c11 = fetchW(u_nationIdxTex, ixy + ivec2(1, 1));
-    ivec2 ownerTexel = ivec2(floor(vec2(ixy) + noisy_fxy + 0.5));
+    ivec2 ownerTexel = ixy + dominantCorner(c00, c10, c01, c11, noisy_fxy);
     vec4 nationColor = fetchW(u_nationsTexture, ownerTexel);
     vec4 ownerIdx = fetchW(u_nationIdxTex, ownerTexel);
     if (nationColor.a > 0.1) {
@@ -580,7 +716,13 @@ void main() {
         vec2 sw = smoothstep(0.25, 0.75, noisy_fxy);
         nc *= mix(mix(b00, b10, sw.x), mix(b01, b11, sw.x), sw.y);
       }
-      float landA = u_theme == 2 ? 0.62 : (u_theme == 1 ? 0.22 : 0.4);
+      float landA = u_theme == 2 ? 0.88 : (u_theme == 1 ? 0.22 : 0.4);
+      if (u_theme == 2) {
+        // Pastel fill that keeps the relief, plus a saturated ribbon inside borders
+        vec3 pastel = mix(nc, vec3(1.0), 0.5) * mix(1.0, shade, 0.35);
+        float rib = getBorderStrength(c00, c10, c01, c11, noisy_fxy, 3.0 * field_per_pixel, aa * 2.0);
+        nc = mix(pastel, nc * 0.95, rib * 0.7);
+      }
       float lm = max(landMask, isletMask);
       float alpha = landA * lm * politicalFade * (1.0 - 0.75 * iceMask);
       if (u_theme == 1) {

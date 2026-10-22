@@ -59,6 +59,15 @@ export default function renderMainApp() {
                 <button id="generate" class="btn-primary">GENERATE</button>
               </div>
             </div>
+
+            <div class="control-group">
+              <label>[FILE] WORLD</label>
+              <div class="input-row">
+                <button id="save-world" class="btn-primary">SAVE</button>
+                <button id="open-world" class="btn-primary">OPEN</button>
+                <input type="file" id="open-world-input" accept=".world" style="display:none" />
+              </div>
+            </div>
           </div>
 
           <!-- Layers Tab -->
@@ -82,6 +91,7 @@ export default function renderMainApp() {
                   <option value="cultures">Cultures</option>
                   <option value="religions">Religions</option>
                   <option value="diplomacy">Diplomacy</option>
+                  <option value="wealth">Wealth</option>
                 </select>
               </div>
             </div>
@@ -147,6 +157,21 @@ export default function renderMainApp() {
                   <input type="checkbox" id="layer-rivers" checked />
                   <span class="checkbox-box"></span>
                   <span class="label-text">RIVERS</span>
+                </label>
+                <label class="overlay-item">
+                  <input type="checkbox" id="layer-searoutes" checked />
+                  <span class="checkbox-box"></span>
+                  <span class="label-text">SEA ROUTES</span>
+                </label>
+                <label class="overlay-item">
+                  <input type="checkbox" id="layer-currents" />
+                  <span class="checkbox-box"></span>
+                  <span class="label-text">OCEAN CURRENTS</span>
+                </label>
+                <label class="overlay-item">
+                  <input type="checkbox" id="layer-resources" checked />
+                  <span class="checkbox-box"></span>
+                  <span class="label-text">RESOURCES</span>
                 </label>
                 <label class="overlay-item">
                   <input type="checkbox" id="layer-pois" checked />

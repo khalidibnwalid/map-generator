@@ -80,15 +80,21 @@ export class UIManager {
     if (fill) fill.style.width = `${pct}%`;
     if (text) text.textContent = `${pct}%`;
     if (subtext) {
-      if (pct < 20) subtext.textContent = "Adding mountains and valleys...";
-      else if (pct < 40)
-        subtext.textContent = "Determining rainfall patterns...";
-      else if (pct < 60)
-        subtext.textContent = "Spreading forests and deserts...";
-      else if (pct < 80) subtext.textContent = "Generating river systems...";
-      else if (pct < 95)
-        subtext.textContent = "Establishing national borders...";
-      else subtext.textContent = "Founding cities and capitals...";
+      // Thresholds follow the stage table in MapGenerator.generate
+      const stages: [number, string][] = [
+        [22, "Raising mountains and plates..."],
+        [32, "Shaping coastlines and lakes..."],
+        [42, "Setting climate and rainfall..."],
+        [50, "Carving rivers..."],
+        [56, "Spreading forests and deserts..."],
+        [64, "Settling peoples and faiths..."],
+        [74, "Establishing national borders..."],
+        [82, "Founding cities and villages..."],
+        [90, "Drawing provinces..."],
+        [96, "Building roads and sea lanes..."],
+        [101, "Raising castles and landmarks..."],
+      ];
+      subtext.textContent = (stages.find(([end]) => pct < end) ?? stages[stages.length - 1])[1];
     }
   }
 

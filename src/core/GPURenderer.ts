@@ -1,9 +1,9 @@
-import { WorldData, BIOME_COLORS, BiomeType } from "../game/WorldData";
+import { WorldData, BIOME_COLORS, BIOME_INDEX } from "../game/WorldData";
 import { distanceTransform } from "../game/util/grid";
 import { VERTEX_SHADER_SOURCE, FRAGMENT_SHADER_SOURCE } from "./MapShader";
 
 export type MapTheme = "Realistic" | "Historical" | "Atlas";
-export type ThematicMode = "none" | "cultures" | "religions" | "diplomacy";
+export type ThematicMode = "none" | "cultures" | "religions" | "diplomacy" | "wealth";
 
 const THEME_INDEX: Record<MapTheme, number> = { Realistic: 0, Historical: 1, Atlas: 2 };
 const THEMATIC_INDEX: Record<ThematicMode, number> = {
@@ -11,6 +11,7 @@ const THEMATIC_INDEX: Record<ThematicMode, number> = {
   cultures: 1,
   religions: 2,
   diplomacy: 3,
+  wealth: 4,
 };
 
 export interface RenderLayers {
@@ -110,31 +111,9 @@ export class GPURenderer {
   }
 
   private prepareBiomeColors(): Float32Array {
-    const colors = new Float32Array(24 * 3);
-    const typeToIndex: Record<string, number> = {
-      [BiomeType.OCEAN]: 0,
-      [BiomeType.SHALLOW_WATER]: 1,
-      [BiomeType.BEACH]: 2,
-      [BiomeType.SCORCHED]: 4,
-      [BiomeType.BARE]: 5,
-      [BiomeType.TUNDRA]: 6,
-      [BiomeType.SNOW]: 7,
-      [BiomeType.TEMPERATE_DESERT]: 8,
-      [BiomeType.SHRUBLAND]: 9,
-      [BiomeType.GRASSLAND]: 10,
-      [BiomeType.TEMPERATE_DECIDUOUS_FOREST]: 11,
-      [BiomeType.TEMPERATE_RAIN_FOREST]: 12,
-      [BiomeType.SUBTROPICAL_DESERT]: 13,
-      [BiomeType.TROPICAL_SEASONAL_FOREST]: 14,
-      [BiomeType.TROPICAL_RAIN_FOREST]: 15,
-      [BiomeType.TAIGA]: 19,
-      [BiomeType.DEEP_OCEAN]: 20,
-      [BiomeType.MARSH]: 21,
-      [BiomeType.SAVANNA]: 22,
-      [BiomeType.STEPPE]: 23,
-    };
+    const colors = new Float32Array(40 * 3);
     for (const [type, colorHex] of Object.entries(BIOME_COLORS)) {
-      const idx = typeToIndex[type];
+      const idx = BIOME_INDEX[type];
       if (idx === undefined) continue;
       colors[idx * 3] = parseInt(colorHex.slice(1, 3), 16) / 255;
       colors[idx * 3 + 1] = parseInt(colorHex.slice(3, 5), 16) / 255;
@@ -186,6 +165,12 @@ export class GPURenderer {
 
     const data = new Uint8Array(W * H * 4);
     const coast = new Uint8Array(W * H * 4);
+    // Distance to the nearest river or lake, used for riparian biomes
+    const wetSite = new Uint8Array(W * H);
+    for (let x = 0; x < W; x++)
+      for (let y = 0; y < H; y++)
+        if (world.grid[x][y].hasRiver || world.waterType[y * W + x] === 2) wetSite[y * W + x] = 1;
+    const wet = distanceTransform(W, H, wetSite).dist;
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const cell = world.grid[x][y];
@@ -199,7 +184,7 @@ export class GPURenderer {
         coast[idx] = q >> 8;
         coast[idx + 1] = q & 255;
         coast[idx + 2] = world.waterType[i] === 2 ? 255 : world.waterType[i] === 1 ? 128 : 0;
-        coast[idx + 3] = 255;
+        coast[idx + 3] = Math.min(255, Math.round(wet[i] * 32));
       }
     }
     this.upload(this.texture, W, H, data);

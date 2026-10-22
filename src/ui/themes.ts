@@ -14,6 +14,7 @@ export interface CanvasTheme {
   ink: string;
   cityDot: string;
   districtLabel: string;
+  seaRoute: string;
 }
 
 export const THEMES: Record<MapTheme, CanvasTheme> = {
@@ -31,6 +32,7 @@ export const THEMES: Record<MapTheme, CanvasTheme> = {
     ink: "#2b2520",
     cityDot: "#ffffff",
     districtLabel: "rgba(40, 30, 20, 0.85)",
+    seaRoute: "rgba(225, 238, 248, 0.55)",
   },
   Historical: {
     river: "#4e6f7c",
@@ -46,6 +48,7 @@ export const THEMES: Record<MapTheme, CanvasTheme> = {
     ink: "#3b2a1c",
     cityDot: "#3b2a1c",
     districtLabel: "rgba(70, 45, 25, 0.9)",
+    seaRoute: "rgba(70, 50, 35, 0.55)",
   },
   Atlas: {
     river: "#5b9ccc",
@@ -61,6 +64,7 @@ export const THEMES: Record<MapTheme, CanvasTheme> = {
     ink: "#333333",
     cityDot: "#222222",
     districtLabel: "rgba(50, 50, 60, 0.85)",
+    seaRoute: "rgba(60, 110, 160, 0.55)",
   },
 };
 

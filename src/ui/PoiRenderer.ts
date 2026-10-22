@@ -38,14 +38,16 @@ export class PoiRenderer {
         if (x < v.x0 - 0.2 || x > v.x1 + 0.2) continue;
         const sx = x * scale + offsetX;
         const sy = p.y * scale + offsetY;
-        if (realA > 0 && p.kind !== "port") {
-          ctx.globalAlpha = realA;
+        // Volcanoes are kilometres wide, so their relief shows from afar
+        const rA = p.kind === "volcano" ? Math.max(0, Math.min(1, (ppm - 0.0012) / 0.0012)) : realA;
+        if (rA > 0 && p.kind !== "port") {
+          ctx.globalAlpha = rA;
           ctx.setTransform(ppm, 0, 0, ppm, sx, sy);
           ctx.rotate(p.angle);
           this.footprint(ctx, p, 1 / ppm, theme);
         }
-        const isMajor = p.kind === "castle" || p.kind === "fort" || p.kind === "port";
-        const iconA = iconBase * (isMajor ? major : minor);
+        const isMajor = p.kind === "castle" || p.kind === "fort" || p.kind === "port" || p.kind === "volcano";
+        const iconA = (p.kind === "volcano" ? 1 - Math.max(0, Math.min(1, (ppm - 0.002) / 0.002)) : iconBase) * (isMajor ? major : minor);
         if (iconA > 0.02) {
           ctx.globalAlpha = iconA * 0.9;
           ctx.setTransform(1, 0, 0, 1, sx, sy);
@@ -146,6 +148,16 @@ export class PoiRenderer {
         shape.moveTo(2.6, 0);
         shape.arc(-1, 0, 3.6, 0, Math.PI, true);
         shape.rect(4.2, -5.5, 1.5, 10);
+        break;
+      case "volcano":
+        // Cone with a crater notch
+        shape.moveTo(-7, 5);
+        shape.lineTo(-2, -4);
+        shape.lineTo(-0.8, -2.8);
+        shape.lineTo(0.8, -2.8);
+        shape.lineTo(2, -4);
+        shape.lineTo(7, 5);
+        shape.closePath();
         break;
       case "port": {
         const ox = Math.cos(p.angle) * 11;
@@ -288,6 +300,52 @@ export class PoiRenderer {
         ctx.fill();
         rect(-18, 8, 12, 9, roof);
         break;
+      case "volcano": {
+        // ~9 km cone with a ~700 m crater; lava runs on the sun-lit side
+        const R = 4500;
+        const g = ctx.createRadialGradient(-R * 0.25, -R * 0.25, R * 0.05, 0, 0, R);
+        g.addColorStop(0, "rgba(120,105,95,0.95)");
+        g.addColorStop(0.55, "rgba(95,80,70,0.75)");
+        g.addColorStop(1, "rgba(80,70,60,0)");
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(0, 0, R, 0, Math.PI * 2);
+        ctx.fill();
+        // Radial ridges
+        ctx.strokeStyle = "rgba(50,40,35,0.35)";
+        ctx.lineWidth = lw(60, 0.8);
+        ctx.beginPath();
+        for (let i = 0; i < 18; i++) {
+          const a = (i / 18) * Math.PI * 2 + Math.sin(i * 7.3) * 0.12;
+          ctx.moveTo(Math.cos(a) * 500, Math.sin(a) * 500);
+          ctx.lineTo(Math.cos(a) * R * (0.7 + 0.25 * Math.abs(Math.sin(i * 3.1))), Math.sin(a) * R * (0.7 + 0.25 * Math.abs(Math.sin(i * 3.1))));
+        }
+        ctx.stroke();
+        ctx.strokeStyle = "rgba(230,90,30,0.85)";
+        ctx.lineWidth = lw(90, 1.2);
+        ctx.beginPath();
+        ctx.moveTo(250, 200);
+        ctx.quadraticCurveTo(1200, 900, 2100, 2300);
+        ctx.moveTo(-200, 300);
+        ctx.quadraticCurveTo(-600, 1500, -300, 2600);
+        ctx.stroke();
+        ctx.fillStyle = "#2a201b";
+        ctx.beginPath();
+        ctx.arc(0, 0, 380, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "rgba(255,120,40,0.9)";
+        ctx.beginPath();
+        ctx.arc(30, 20, 160, 0, Math.PI * 2);
+        ctx.fill();
+        // Ash plume drifting east
+        ctx.fillStyle = "rgba(235,235,235,0.35)";
+        for (let i = 1; i <= 5; i++) {
+          ctx.beginPath();
+          ctx.arc(i * 700, -i * 250, 300 + i * 160, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        break;
+      }
       case "monastery":
         ctx.fillStyle = "rgba(220,210,180,0.85)";
         ctx.fillRect(-26, -22, 52, 44);

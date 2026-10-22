@@ -10,6 +10,8 @@ import { CityRenderer } from "./CityRenderer";
 import { NetworkRenderer } from "./NetworkRenderer";
 import { PoiRenderer } from "./PoiRenderer";
 import { nearestPoi, POI_LABELS } from "../game/generators/generatePOIs";
+import { saveWorld, loadWorld } from "../game/WorldFile";
+import { RESOURCE_INFO, WEALTH_TIERS } from "../game/generators/generateEconomy";
 import { THEMES } from "./themes";
 import { WorldData } from "../game/WorldData";
 import { RELATION_COLORS } from "../game/generators/generateDiplomacy";
@@ -49,6 +51,9 @@ export class Interface {
     rivers: true,
     roads: true,
     pois: true,
+    searoutes: true,
+    currents: false,
+    resources: true,
     labels: true,
     cities: true,
   };
@@ -346,6 +351,9 @@ export class Interface {
       "rivers",
       "ice",
       "pois",
+      "searoutes",
+      "currents",
+      "resources",
       "roads",
       "cities",
       "provinces",
@@ -415,6 +423,47 @@ export class Interface {
 
     seedInput.value = this.generator.currentSeed.toString();
 
+    // --- Save / open ---
+    const saveBtn = document.getElementById("save-world") as HTMLButtonElement | null;
+    const openBtn = document.getElementById("open-world") as HTMLButtonElement | null;
+    const openInput = document.getElementById("open-world-input") as HTMLInputElement | null;
+    saveBtn?.addEventListener("click", async () => {
+      const blob = await saveWorld(this.generator);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `world-${this.generator.currentSeed}.world`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+    openBtn?.addEventListener("click", () => openInput?.click());
+    openInput?.addEventListener("change", async () => {
+      const file = openInput.files?.[0];
+      openInput.value = "";
+      if (!file) return;
+      this.uiManager.showLoadingModal();
+      try {
+        await loadWorld(file, this.generator, (pct) => this.uiManager.updateLoadingModal(pct));
+        const W = this.generator.getWidth();
+        const H = this.generator.getHeight();
+        const fitScale = window.innerHeight / H;
+        this.canvasManager.scale = fitScale;
+        this.canvasManager.offsetX = (window.innerWidth - W * fitScale) / 2;
+        this.canvasManager.offsetY = 0;
+        seedInput.value = this.generator.currentSeed.toString();
+        presetSelect.value = this.generator.currentPreset;
+        const sizeSelect = document.getElementById("size") as HTMLSelectElement | null;
+        if (sizeSelect) sizeSelect.value = `${W}x${H}`;
+        this.onWorldGenerated();
+        this.nationsManager.renderList();
+      } catch (err) {
+        console.error(err);
+        await this.uiManager.confirm("OPEN WORLD", `Could not open this file: ${(err as Error).message}`);
+      } finally {
+        this.uiManager.hideLoadingModal();
+      }
+    });
+
     generateBtn.addEventListener("click", async () => {
       if (generateBtn.classList.contains("loading")) return;
 
@@ -477,7 +526,30 @@ export class Interface {
     this.thematicFocus = key;
     this.thematicMode = this.thematic;
 
-    if (this.thematic === "cultures" || this.thematic === "religions") {
+    if (this.thematic === "wealth") {
+      // Province wealth: its settlements' wealth per unit of land
+      const pw = new Float32Array(world.provinces.length);
+      for (const c of world.cities) if ((c.provinceIndex ?? -1) >= 0) pw[c.provinceIndex!] += (c.wealth ?? 0) * (1 + c.size);
+      const dens = world.provinces.map((p, i) => pw[i] / Math.max(1, (p.area ?? 25) / 25));
+      const sorted = [...dens].sort((a, b) => a - b);
+      const rank = (v: number) => {
+        let lo = 0;
+        while (lo < sorted.length && sorted[lo] < v) lo++;
+        return lo / Math.max(1, sorted.length - 1);
+      };
+      const ramp = dens.map((d) => {
+        const t = rank(d);
+        // earth -> green -> gold
+        const r = t < 0.5 ? 120 + t * 80 : 160 + (t - 0.5) * 160;
+        const g = t < 0.5 ? 110 + t * 140 : 180 + (t - 0.5) * 40;
+        const b = t < 0.5 ? 100 - t * 60 : 70 - (t - 0.5) * 80;
+        return [Math.round(r), Math.round(g), Math.round(b), 210] as [number, number, number, number];
+      });
+      this.gpuRenderer.updateThematicTexture(world, (x, y) => {
+        const p = world.grid[x][y].provinceIndex ?? -1;
+        return p >= 0 && ramp[p] ? ramp[p] : null;
+      });
+    } else if (this.thematic === "cultures" || this.thematic === "religions") {
       const list = this.thematic === "cultures" ? world.cultures : world.religions;
       const colors = list.map((c) => hexRgb(c.color));
       const cult = this.thematic === "cultures";
@@ -525,6 +597,13 @@ export class Interface {
           .join("");
     } else if (this.thematic === "religions") {
       html = `<div class="legend-title">Religions</div>` + world.religions.map((r) => row(r.color, r.name)).join("");
+    } else if (this.thematic === "wealth") {
+      html =
+        '<div class="legend-title">Provincial wealth</div>' +
+        row("rgb(120,110,100)", "Poorest") +
+        row("rgb(160,180,70)", "Average") +
+        row("rgb(240,200,30)", "Richest") +
+        '<div class="legend-hint">From resources, harbours, rivers and trade</div>';
     } else {
       const focus =
         this.nationsManager.selectedNationIndex >= 0
@@ -609,8 +688,17 @@ export class Interface {
     if (this.activeLayers.rivers) {
       this.networkRenderer.renderRivers(ctx, world, width, height, scale, offsetX, offsetY, theme);
     }
+    if (this.activeLayers.currents) {
+      this.networkRenderer.renderCurrents(ctx, world, width, height, scale, offsetX, offsetY);
+    }
+    if (this.activeLayers.searoutes) {
+      this.networkRenderer.renderSeaRoutes(ctx, world, width, height, scale, offsetX, offsetY, theme);
+    }
     if (this.activeLayers.roads) {
       this.networkRenderer.renderRoads(ctx, world, width, height, scale, offsetX, offsetY, theme);
+    }
+    if (this.activeLayers.resources) {
+      this.networkRenderer.renderResources(ctx, world, width, height, scale, offsetX, offsetY, theme);
     }
     if (this.activeLayers.pois) {
       this.poiRenderer.render(ctx, world, width, height, scale, offsetX, offsetY, this.theme);
@@ -775,6 +863,25 @@ export class Interface {
     }
     const nation = newHovered >= 0 ? world.nations[newHovered] : null;
     const lines: string[] = [];
+    if (this.activeLayers.resources && cm.scale > 2.8) {
+      let best = null;
+      let bd = 8 / cm.scale;
+      for (const r of world.resources) {
+        let dx = Math.abs(r.x - fx);
+        if (dx > world.width / 2) dx = world.width - dx;
+        const d = Math.hypot(dx, r.y - fy);
+        if (d < bd) {
+          bd = d;
+          best = r;
+        }
+      }
+      if (best) {
+        const info = RESOURCE_INFO[best.kind];
+        const grade = best.richness > 1.2 ? "Rich" : best.richness > 0.85 ? "Good" : "Modest";
+        this.tooltipManager.show(clientX, clientY, info.label, grade + " deposit · trade value " + info.value + "/12");
+        return;
+      }
+    }
     if (this.activeLayers.pois && cm.scale > 2.6) {
       const poi = nearestPoi(world, fx, fy, 9 / cm.scale);
       if (poi) {
@@ -789,6 +896,12 @@ export class Interface {
       lines.push(`${kind}${owner ? ` of ${owner.name}` : ""}`);
       lines.push(`Population ${nearestCity.population.toLocaleString()}`);
       lines.push(`Area ~${(Math.PI * (nearestCity.radiusM / 1000) ** 2).toFixed(1)} km²${nearestCity.isPort ? " · Port" : ""}`);
+      lines.push("Wealth: " + WEALTH_TIERS[nearestCity.wealthTier ?? 2]);
+      if (nearestCity.resources?.length)
+        lines.push(
+          "Trades in " +
+            nearestCity.resources.map((k) => RESOURCE_INFO[k as keyof typeof RESOURCE_INFO]?.label.toLowerCase()).join(", "),
+        );
       const prov = world.provinces[nearestCity.provinceIndex ?? -1];
       if (prov) lines.push(`Province: ${prov.name}`);
       this.tooltipManager.show(clientX, clientY, nearestCity.name, lines.join("\n"));
