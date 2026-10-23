@@ -2,18 +2,190 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Procedural World Generator</title>
+    <title>Fantasy World Map Generator: Procedural Maps with Nations &amp; History</title>
+    <meta
+      name="description"
+      content="Free procedural fantasy map generator. Create realistic worlds with nations, cities, rivers, trade routes and simulated history, then export print-ready posters. Runs in your browser."
+    />
+    <meta
+      name="keywords"
+      content="fantasy map generator, world map generator, procedural map generator, worldbuilding tool, rpg map maker, dnd map generator, political map generator, map poster, history simulation"
+    />
+    <meta name="author" content="khalidibnwalid" />
+    <meta name="application-name" content="Fantasy World Map Generator" />
+    <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1" />
+    <meta name="theme-color" content="#0d1420" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="canonical" href="https://khalidibnwalid.github.io/map-generator/" />
+
+    <link rel="icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="alternate" type="text/plain" href="/llms.txt" title="LLM-readable summary" />
+    <link rel="manifest" href="/site.webmanifest" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Fantasy World Map Generator" />
+    <meta property="og:title" content="Fantasy World Map Generator: Procedural Maps with Nations &amp; History" />
+    <meta
+      property="og:description"
+      content="Generate fantasy worlds with nations, cities, rivers and trade routes. Simulate centuries of history and export print-ready map posters."
+    />
+    <meta property="og:url" content="https://khalidibnwalid.github.io/map-generator/" />
+    <meta property="og:image" content="https://khalidibnwalid.github.io/map-generator/og-image.jpg" />
+    <meta property="og:image:type" content="image/jpeg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="The Known World, a procedurally generated fantasy map with 54 realms, rivers, cities and a compass rose" />
+    <meta property="og:locale" content="en_US" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Fantasy World Map Generator" />
+    <meta
+      name="twitter:description"
+      content="Procedural fantasy maps with nations, cities, trade and simulated history. Export print-ready posters."
+    />
+    <meta name="twitter:image" content="https://khalidibnwalid.github.io/map-generator/og-image.jpg" />
+    <meta name="twitter:image:alt" content="The Known World, a procedurally generated fantasy map" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "@id": "https://khalidibnwalid.github.io/map-generator/#website",
+            "url": "https://khalidibnwalid.github.io/map-generator/",
+            "name": "Fantasy World Map Generator",
+            "inLanguage": "en"
+          },
+          {
+            "@type": "WebApplication",
+            "@id": "https://khalidibnwalid.github.io/map-generator/#app",
+            "name": "Fantasy World Map Generator",
+            "alternateName": "Procedural Worldbuilding Map Generator",
+            "url": "https://khalidibnwalid.github.io/map-generator/",
+            "description": "Browser-based procedural fantasy map generator with terrain, biomes, nations, cities, roads, trade routes, seasons and a history simulation. Exports print-ready posters and animated timelines.",
+            "applicationCategory": "DesignApplication",
+            "applicationSubCategory": "Worldbuilding",
+            "operatingSystem": "Any (modern web browser with WebGL2)",
+            "browserRequirements": "Requires WebGL2 and JavaScript",
+            "isAccessibleForFree": true,
+            "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+            "image": "https://khalidibnwalid.github.io/map-generator/og-image.jpg",
+            "screenshot": "https://khalidibnwalid.github.io/map-generator/og-image.jpg",
+            "codeRepository": "https://github.com/khalidibnwalid/map-generator",
+            "author": { "@type": "Person", "name": "khalidibnwalid", "url": "https://github.com/khalidibnwalid" },
+            "featureList": [
+              "Procedural continents, rivers, biomes and climate",
+              "Nations, provinces, cultures, flags and diplomacy",
+              "Cities with procedural street plans",
+              "Roads, sea lanes and trade flows",
+              "Seasons, night mode and drifting weather",
+              "History simulation with wars, battles, dynasties and rulers",
+              "Poster export and animated GIF timelapse",
+              "Save and load .world files"
+            ],
+            "keywords": "fantasy map generator, worldbuilding, procedural generation, rpg maps"
+          },
+          {
+            "@type": "SoftwareSourceCode",
+            "name": "map-generator",
+            "codeRepository": "https://github.com/khalidibnwalid/map-generator",
+            "programmingLanguage": "TypeScript",
+            "runtimePlatform": "Web browser"
+          },
+          {
+            "@type": "BreadcrumbList",
+            "itemListElement": [{ "@type": "ListItem", "position": 1, "name": "Map Generator", "item": "https://khalidibnwalid.github.io/map-generator/" }]
+          },
+          {
+            "@type": "FAQPage",
+            "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "Is the Fantasy World Map Generator free?",
+            "acceptedAnswer": { "@type": "Answer", "text": "Yes. It is free, open source and runs entirely in your browser with no account or upload." }
+          },
+          {
+            "@type": "Question",
+            "name": "Can I export my fantasy map as a poster?",
+            "acceptedAnswer": { "@type": "Answer", "text": "Yes. The File tab exports a high-resolution poster with a title, legend, compass rose and frame, and nation fact sheets." }
+          },
+          {
+            "@type": "Question",
+            "name": "Will the same seed always make the same map?",
+            "acceptedAnswer": { "@type": "Answer", "text": "Yes. Generation is deterministic, and a .world save file stores the seed plus every edit you made." }
+          },
+          {
+            "@type": "Question",
+            "name": "Can it simulate the history of my world?",
+            "acceptedAnswer": { "@type": "Answer", "text": "Yes. The History tab runs year-by-year expansion, wars, battles, collapses, dynasties and rulers. You can replay any past year and export the timeline as an animated GIF." }
+          },
+          {
+            "@type": "Question",
+            "name": "What do I need to run it?",
+            "acceptedAnswer": { "@type": "Answer", "text": "A modern browser with JavaScript and WebGL2. Nothing is sent to a server." }
+          }
+            ]
+          }
+        ]
+      }
+    </script>
+    <style>
+      .seo-content {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        padding: 0;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
+        border: 0;
+      }
+    </style>
   </head>
 
   <body>
     <div id="app"></div>
 
+    <!-- Crawlable description of the canvas app -->
+    <main class="seo-content">
+      <h1>Fantasy World Map Generator</h1>
+      <p>
+        A free, in-browser procedural map generator for worldbuilders, game masters and writers. Generate a continent, watch
+        nations rise and fall, and export a poster.
+      </p>
+      <h2>Features</h2>
+      <ul>
+        <li>Earthlike tectonic continents, Pangea and island worlds with rivers, lakes, biomes and ocean currents</li>
+        <li>Nations, provinces, cultures, flags, great powers and diplomacy</li>
+        <li>Cities with procedural street plans, roads, sea lanes and trade flows</li>
+        <li>Seasons, night mode with city lights and drifting weather</li>
+        <li>History simulation with wars, battles, dynasties and a chronicle</li>
+        <li>High-resolution poster export, animated GIF timelapse and .world save files</li>
+      </ul>
+      <h2>Frequently asked questions</h2>
+      <h3>Is the Fantasy World Map Generator free?</h3>
+      <p>Yes. It is free, open source and runs entirely in your browser with no account or upload.</p>
+      <h3>Can I export my fantasy map as a poster?</h3>
+      <p>Yes. The File tab exports a high-resolution poster with a title, legend, compass rose and frame, and nation fact sheets.</p>
+      <h3>Will the same seed always make the same map?</h3>
+      <p>Yes. Generation is deterministic, and a .world save file stores the seed plus every edit you made.</p>
+      <h3>Can it simulate the history of my world?</h3>
+      <p>Yes. The History tab runs year-by-year expansion, wars, battles, collapses, dynasties and rulers. You can replay any past year and export the timeline as an animated GIF.</p>
+      <h3>What do I need to run it?</h3>
+      <p>A modern browser with JavaScript and WebGL2. Nothing is sent to a server.</p>
+    </main>
+    <noscript>This map generator needs JavaScript and WebGL2 to run. Enable JavaScript to generate fantasy worlds.</noscript>
+
     <!-- Loading Modal -->
     <div id="loading-modal" class="modal-overlay" style="display: none">
       <div class="modal-content">
-        <div class="loader-icon">⌬</div>
         <div class="loader-text">GENERATING MAP</div>
         <div class="loader-subtext">Generating mountains and valleys...</div>
         <div class="loader-progress-bar">

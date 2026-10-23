@@ -1,0 +1,15 @@
+{
+  "name": "Procedural Fantasy World Map Generator",
+  "short_name": "Map Generator",
+  "description": "Generate fantasy world maps with nations, cities, rivers and simulated history, then export print-ready posters.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0d1420",
+  "theme_color": "#0d1420",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

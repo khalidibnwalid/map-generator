@@ -1,0 +1,58 @@
+# Fantasy World Map Generator: full reference
+
+URL: https://khalidibnwalid.github.io/map-generator/
+Repository: https://github.com/khalidibnwalid/map-generator
+
+## What it is
+A browser-based procedural worldbuilding tool. You choose a seed and a landmass preset and it generates a complete fictional world: terrain, climate, rivers, biomes, nations, provinces, cultures, cities, roads, sea lanes and trade. A history simulation then lets the world evolve over years.
+
+## Who it is for
+Game masters running tabletop RPG campaigns (D&D and similar), fantasy authors, game developers and worldbuilders who need a believable map with a political layer and a history.
+
+## World generation
+- Landmass presets: Heavy Landmass, Realistic Continents, Earthlike (tectonic continents), Pangea.
+- Sizes: 400x225, 800x450, 1600x900, 3200x1800 cells (a cell is about 5 km in the example poster).
+- Rivers, lakes, coastlines, ocean currents, polar ice.
+- Biomes include deep ocean, taiga, steppe, marsh and savanna, with smooth transitions when zooming.
+- Overlays: temperature, population, moisture.
+
+## Politics and society
+- Terrain-aware nations, provinces and cultures; generated flags with a flag editor.
+- Great powers (0 to 3), vassal blocs and editable diplomacy.
+- Thematic maps: political, cultures, diplomacy, wealth.
+
+## Settlements and economy
+- Procedural city street plans with level-of-detail rendering.
+- Roads, sea routes and trade flows; landmarks and resources.
+- Settlements can grow, fall to ruin or be founded during history.
+
+## History simulation
+- Nations settle land, fight, conquer and fragment; mountains, rivers and fortresses slow invaders.
+- Dynasties and rulers, filterable chronicle (all, wars, realms, rulers).
+- Command a battle (skirmish, battle, rout) by picking an army and clicking enemy land.
+- Replay any past year on a timeline and export the run as an animated GIF.
+
+## Atmosphere
+- Map styles: Realistic, Historical, Atlas.
+- Seasons by month (snow, foliage, sea ice), night mode with city lights, drifting weather.
+
+## Editing and export
+- Paint nation borders with an adjustable brush; add or delete nations, provinces and cities.
+- Export a high-resolution poster with title, legend, compass and frame; nation fact sheets.
+- Save and open .world files (seed plus edits).
+
+## Requirements and cost
+Free and open source. Needs a modern browser with WebGL2 and JavaScript. Nothing is sent to a server.
+
+## FAQ
+Q: Is the Fantasy World Map Generator free?
+A: Yes. It is free, open source and runs in the browser with no account.
+
+Q: Can I export my map as a poster?
+A: Yes. The File tab exports a high-resolution poster with title, legend, compass and frame.
+
+Q: Will the same seed give the same map?
+A: Yes. Generation is deterministic, and .world files store the seed plus your edits.
+
+Q: Can it simulate history?
+A: Yes. The History tab runs year-by-year wars, conquests, collapses, dynasties and rulers, and can export the timeline as a GIF.

@@ -59,12 +59,7 @@ export default function renderMainApp() {
   document.querySelector<HTMLDivElement>("#app")!.innerHTML = /* html */ `
       <nav class="rail">
         <div class="rail-logo" title="Procedural World Generator">
-          <svg viewBox="0 0 40 40" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1">
-            <circle cx="20" cy="20" r="17"/><circle cx="20" cy="20" r="14.5" stroke-dasharray="1.5 2"/>
-            <path d="M20 3 23 17 37 20 23 23 20 37 17 23 3 20 17 17Z" fill="currentColor" fill-opacity="0.12"/>
-            <path d="M20 3 22 18 20 20Z M37 20 22 22 20 20Z M20 37 18 22 20 20Z M3 20 18 18 20 20Z" fill="currentColor"/>
-            <path d="M8 8 19 19M32 8 21 19M32 32 21 21M8 32 19 21" stroke-width="0.8"/>
-          </svg>
+          <img src="${import.meta.env.BASE_URL}favicon.svg" width="34" height="34" alt="Map Generator logo" />
         </div>
         <button id="tab-generate" class="rail-btn active" title="World">${ICONS.world}<span>World</span></button>
         <button id="tab-layers" class="rail-btn" title="Layers">${ICONS.layers}<span>Layers</span></button>
@@ -342,6 +337,19 @@ export default function renderMainApp() {
         <button id="zoom-out" class="icon-btn" title="Zoom out">${ICONS.minus}</button>
         <button id="zoom-reset" class="icon-btn" title="Show whole world">${ICONS.home}</button>
       </div>
+
+      <a
+        class="gh-link"
+        href="https://github.com/khalidibnwalid/map-generator"
+        target="_blank"
+        rel="noopener noreferrer"
+        title="View on GitHub"
+        aria-label="View on GitHub"
+      >
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">
+          <path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.87-1.37-3.87-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.76 2.69 1.25 3.35.96.1-.74.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.78 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5z" />
+        </svg>
+      </a>
 
       <div id="sim-bar" class="sim-bar" style="display:none;">
         <button id="sim-bar-play" class="icon-btn" title="Play / pause">${ICONS.play}</button>

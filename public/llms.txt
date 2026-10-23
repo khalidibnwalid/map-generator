@@ -1,0 +1,23 @@
+# Fantasy World Map Generator
+
+> A free, open-source procedural fantasy map generator that runs entirely in the browser. It generates continents, rivers, biomes, nations, cities, roads and trade routes from a seed, simulates centuries of history, and exports print-ready posters and animated timelapses.
+
+Live app: https://khalidibnwalid.github.io/map-generator/
+Source code: https://github.com/khalidibnwalid/map-generator
+Author: khalidibnwalid (https://github.com/khalidibnwalid)
+
+Key facts:
+- Runs client-side with WebGL2; no account, no server, no upload of your data.
+- Deterministic: the same seed always produces the same world. A .world file stores the seed plus user edits.
+- Map sizes: 400x225, 800x450, 1600x900 and 3200x1800 cells.
+- Landmass presets: Heavy Landmass, Realistic Continents, Earthlike (tectonic), Pangea.
+- Map styles: Realistic, Historical, Atlas.
+- Outputs: high-resolution poster, nation fact sheets, animated GIF of the history timeline, .world save files.
+- Built with TypeScript, Vite, WebGL2, simplex-noise and seedrandom.
+
+## Docs
+- [README](https://github.com/khalidibnwalid/map-generator#readme): overview, features and local setup
+- [Full description](https://khalidibnwalid.github.io/map-generator/llms-full.txt): detailed feature reference for LLMs
+
+## Optional
+- [Sitemap](https://khalidibnwalid.github.io/map-generator/sitemap.xml)
