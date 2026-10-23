@@ -14,6 +14,9 @@ export async function generateMoisture(ctx: GeneratorContext): Promise<void> {
         for (let y = 0; y < height; y++) {
             let m = noise.fbmCylinder(x + 100000, y + 100000, width, 4, 0.5, 2.0, scale);
             const cell = world.grid[x][y];
+            // Colors of an imported map (green, tan) steer rainfall
+            const hint = ctx.guide?.moisture?.[y * width + x];
+            if (hint !== undefined && !cell.isWater) m = m * 0.35 + hint * 0.65;
             if (cell.isWater) {
                 m += 0.5;
             }

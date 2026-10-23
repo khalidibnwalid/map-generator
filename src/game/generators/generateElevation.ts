@@ -1,15 +1,19 @@
 import { yieldFrame, distanceTransform } from "../util/grid";
 import type { GeneratorContext } from './types';
+import { shapeCoast, type GuideField } from '../ImageGuide';
 
 export async function generateElevation(ctx: GeneratorContext): Promise<void> {
-    const { world, noise, width, height, preset, onProgress } = ctx;
+    const { world, noise, width, height, preset, guide, onProgress } = ctx;
     let numPlates = 40;
     let baseScale = 0.005;
 
     const invResScale = 800 / width;
     const resScale = width / 800;
 
-    if (preset === 'Heavy Landmass') {
+    if (guide) {
+        numPlates = 36;
+        baseScale = 0.005 * invResScale;
+    } else if (preset === 'Heavy Landmass') {
         numPlates = 30;
         baseScale = 0.0035 * invResScale;
     } else if (preset === 'Realistic Continents') {
@@ -71,7 +75,8 @@ export async function generateElevation(ctx: GeneratorContext): Promise<void> {
         : null;
 
     // 1. Generate Base Elevation
-    for (let x = 0; x < width; x++) {
+    const guidedLand = guide ? await shapeFromGuide(ctx, guide, baseScale) : null;
+    if (!guidedLand) for (let x = 0; x < width; x++) {
         if (x % 50 === 0) {
             onProgress?.(Math.floor((x / width) * 10)); // 0-10% range
             await yieldFrame();
@@ -161,7 +166,7 @@ export async function generateElevation(ctx: GeneratorContext): Promise<void> {
     }
 
     // 3b. Earthlike: continents are made of whole continental plates
-    if (preset === 'Earthlike') {
+    if (preset === 'Earthlike' && !guide) {
         const N = width * height;
         const plateArea = new Array<number>(numPlates).fill(0);
         const touches: Set<number>[] = Array.from({ length: numPlates }, () => new Set());
@@ -258,6 +263,8 @@ export async function generateElevation(ctx: GeneratorContext): Promise<void> {
     await yieldFrame();
     const { dist, nearest } = distanceTransform(width, height, isSite);
     const searchRadius = Math.min(8, Math.max(4, Math.round(4 * resScale)));
+    // A heightmap or terrain colors already carry the mountains
+    const stress = guide?.relief ? 0.3 : 1;
 
     for (let x = 0; x < width; x++) {
         if (x % 100 === 0) {
@@ -297,14 +304,59 @@ export async function generateElevation(ctx: GeneratorContext): Promise<void> {
                 const influence = Math.pow(1 - (minBoundDist / searchRadius), 2);
 
                 if (collisionIntensity > 0) {
-                    cell.elevation += (collisionIntensity * 0.45 * influence);
+                    cell.elevation += (collisionIntensity * 0.45 * influence * stress);
                 } else {
-                    cell.elevation += (collisionIntensity * 0.25 * influence);
+                    cell.elevation += (collisionIntensity * 0.25 * influence * stress);
                 }
             }
 
             cell.elevation = Math.max(0, Math.min(1, cell.elevation));
+            // Plates raise ranges and sink basins, but never move the coast
+            if (guidedLand) cell.elevation = guidedLand[i] ? Math.max(0.458, cell.elevation) : Math.min(0.442, cell.elevation);
             cell.isWater = cell.elevation < 0.45;
         }
     }
+}
+
+// Land and sea follow the imported picture. Noise only roughens the coast
+// (bays, capes, islands offshore) and adds hills, so the drawn shapes hold
+// at any map size. Returns the land mask the plates must respect.
+async function shapeFromGuide(ctx: GeneratorContext, guide: GuideField, baseScale: number): Promise<Uint8Array> {
+    const { world, noise, width, height, onProgress } = ctx;
+    const N = width * height;
+    const resScale = width / 800;
+    const coast = await shapeCoast(guide, width, height, noise, (p) => onProgress?.((p / 100) * 6));
+
+    const land = new Uint8Array(N);
+    for (let x = 0; x < width; x++) {
+        if (x % 50 === 0) {
+            onProgress?.(6 + Math.floor((x / width) * 4));
+            await yieldFrame();
+        }
+        for (let y = 0; y < height; y++) {
+            const i = y * width + x;
+            const s = coast[i];
+            const detail = noise.fbmCylinder(x, y, width, 6, 0.5, 2.0, baseScale);
+            let e: number;
+            if (s >= 0) {
+                land[i] = 1;
+                const rise = Math.min(1, s / (3 * resScale)); // low shores
+                const inland = Math.min(1, s / (40 * resScale));
+                // Islands off the drawn coast take no relief from the picture
+                const relief = guide.land[i] >= 0.5 ? guide.relief?.[i] : undefined;
+                e = relief !== undefined
+                    ? 0.462 + rise * (0.015 + relief * 0.4 + (detail - 0.5) * 0.1)
+                    : 0.462 + rise * (0.015 + detail * 0.16 + inland * 0.07);
+            } else {
+                const depth = guide.depth?.[i];
+                const shelf = Math.min(1, -s / (16 * resScale));
+                e = 0.43 - shelf * 0.2;
+                // Sea shading from the picture, faded out at its edges
+                if (depth !== undefined) e += (0.2 + depth * 0.22 - e) * guide.inside[i];
+                e = Math.min(0.44, e + (detail - 0.5) * 0.06);
+            }
+            world.grid[x][y].elevation = Math.max(0, Math.min(1, e));
+        }
+    }
+    return land;
 }

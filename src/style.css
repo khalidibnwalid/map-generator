@@ -677,6 +677,94 @@ code {
   color: var(--muted);
 }
 
+/* === Shape from image === */
+.guide-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--accent-soft);
+}
+
+.guide-thumb {
+  flex: none;
+  width: 72px;
+  height: 40px;
+  border-radius: 6px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+}
+
+.guide-info {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.guide-info strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.guide-info small {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.guide-card .icon-btn {
+  flex: none;
+  width: 30px;
+  height: 30px;
+}
+
+/* The picture decides the land while one is imported */
+.picker.overridden {
+  opacity: 0.45;
+}
+
+.import-dialog .field input[type="range"] {
+  width: 100%;
+}
+
+.im-choose {
+  width: 100%;
+}
+
+.im-choose strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.im-drop {
+  border: 1px dashed transparent;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.im-drop.over {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.im-drop.loading canvas {
+  opacity: 0.55;
+}
+
+.im-drop .pd-preview-msg {
+  max-width: 340px;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.im-drop .pd-preview-msg small {
+  color: var(--faint);
+}
+
 /* === Nations tab === */
 /* Controls and table header stay pinned while the nations scroll */
 .nations-sticky {

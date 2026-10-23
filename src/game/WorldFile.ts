@@ -2,13 +2,30 @@ import type { MapGenerator, Preset } from "./MapGenerator";
 import type { City, Nation, Province, RelationType, Road, WorldData } from "./WorldData";
 import type { Poi } from "./generators/generatePOIs";
 import { computeTrade } from "./generators/generateTrade";
+import type { TerrainGuide } from "./ImageGuide";
 
-// A .world file = gzip(JSON). Terrain is regenerated from seed/preset/size;
-// everything the user can edit is stored on top of it. Per-cell ownership is
-// run-length encoded, then base64'd inside the JSON before compression.
+// A .world file = gzip(JSON). Terrain is regenerated from seed/preset/size
+// (and the imported picture's guide, when there is one); everything the user
+// can edit is stored on top of it. Per-cell ownership is run-length encoded,
+// then base64'd inside the JSON before compression.
 
 const FORMAT = "mapgen-world";
-const VERSION = 1;
+// Version 2 adds the image guide; worlds without one are still written as 1
+// so older builds keep opening them
+const VERSION = 2;
+
+interface SavedGuide {
+  w: number;
+  h: number;
+  fit: TerrainGuide["fit"];
+  roughness: number;
+  islands?: number; // absent before the setting (none)
+  zoom?: number;
+  land: string; // deflate + base64
+  relief?: string;
+  depth?: string;
+  moisture?: string;
+}
 
 interface WorldFileData {
   format: typeof FORMAT;
@@ -27,6 +44,7 @@ interface WorldFileData {
   roads?: string; // only when edits changed the road network
   pois?: Poi[]; // only when landmarks were edited
   year?: number; // simulated year, so ruler ages carry on after loading
+  guide?: SavedGuide; // imported picture the terrain was shaped from
 }
 
 const RELATION_CODES: RelationType[] = ["Neutral", "Alliance", "Friendly", "Rival", "War", "Vassal", "Overlord"];
@@ -123,6 +141,47 @@ async function gunzip(blob: Blob): Promise<string> {
   return new Response(stream).text();
 }
 
+// Guide layers are deflated before base64, which gzip alone cannot shrink
+async function packBytes(bytes: Uint8Array): Promise<string> {
+  const stream = new Blob([bytes as Uint8Array<ArrayBuffer>]).stream().pipeThrough(new CompressionStream("deflate"));
+  return toBase64(new Uint8Array(await new Response(stream).arrayBuffer()));
+}
+
+async function unpackBytes(b64: string): Promise<Uint8Array> {
+  const stream = new Blob([fromBase64(b64) as Uint8Array<ArrayBuffer>]).stream().pipeThrough(new DecompressionStream("deflate"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function encodeGuide(g: TerrainGuide): Promise<SavedGuide> {
+  return {
+    w: g.w,
+    h: g.h,
+    fit: g.fit,
+    roughness: g.roughness,
+    islands: g.islands,
+    zoom: g.zoom,
+    land: await packBytes(g.land),
+    relief: g.relief ? await packBytes(g.relief) : undefined,
+    depth: g.depth ? await packBytes(g.depth) : undefined,
+    moisture: g.moisture ? await packBytes(g.moisture) : undefined,
+  };
+}
+
+async function decodeGuide(s: SavedGuide): Promise<TerrainGuide> {
+  return {
+    w: s.w,
+    h: s.h,
+    fit: s.fit,
+    roughness: s.roughness,
+    islands: s.islands ?? 0,
+    zoom: s.zoom ?? 1,
+    land: await unpackBytes(s.land),
+    relief: s.relief ? await unpackBytes(s.relief) : null,
+    depth: s.depth ? await unpackBytes(s.depth) : null,
+    moisture: s.moisture ? await unpackBytes(s.moisture) : null,
+  };
+}
+
 export async function saveWorld(generator: MapGenerator): Promise<Blob> {
   const world = generator.getWorld();
   const W = world.width;
@@ -143,7 +202,7 @@ export async function saveWorld(generator: MapGenerator): Promise<Blob> {
 
   const data: WorldFileData = {
     format: FORMAT,
-    version: VERSION,
+    version: generator.guide ? VERSION : 1,
     seed: generator.currentSeed,
     preset: generator.currentPreset,
     greatPowers: generator.greatPowers,
@@ -158,6 +217,7 @@ export async function saveWorld(generator: MapGenerator): Promise<Blob> {
     roads: world.roadsEdited ? encodeRoads(world.worldRoads) : undefined,
     pois: world.poisEdited ? world.pois : undefined,
     year: world.year || undefined,
+    guide: generator.guide ? await encodeGuide(generator.guide) : undefined,
   };
   // Trim float noise from city coordinates to keep the file small
   const json = JSON.stringify(data, (_k, v) => (typeof v === "number" && !Number.isInteger(v) ? Math.round(v * 1000) / 1000 : v));
@@ -176,6 +236,7 @@ export async function loadWorld(
   generator.currentSeed = data.seed;
   generator.currentPreset = data.preset;
   generator.greatPowers = data.greatPowers ?? 0;
+  generator.guide = data.guide ? await decodeGuide(data.guide) : null;
   generator.setSize(data.width, data.height);
   await generator.generate(onProgress);
   const world = generator.getWorld();

@@ -1,6 +1,7 @@
 import { NoiseEngine } from "../core/NoiseEngine";
 import { WorldData } from "./WorldData";
 import { yieldFrame } from "./util/grid";
+import { sampleGuide, type TerrainGuide } from "./ImageGuide";
 import {
   generateElevation,
   generateCoast,
@@ -39,6 +40,8 @@ export class MapGenerator {
   public currentSeed: number;
   public isGenerating = false;
   public greatPowers = 1;
+  // Imported picture shaping the land; null for the preset generators
+  public guide: TerrainGuide | null = null;
 
   constructor(width: number, height: number, seed: number) {
     this.width = width;
@@ -90,6 +93,7 @@ export class MapGenerator {
       height: this.height,
       preset: this.currentPreset,
       greatPowers: this.greatPowers,
+      guide: this.guide ? sampleGuide(this.guide, this.width, this.height, this.currentSeed) : undefined,
     };
 
     // Helper to report sub-ranges smoothly

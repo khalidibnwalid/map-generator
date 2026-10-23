@@ -29,6 +29,7 @@ import { BuildTool } from "./BuildTool";
 import { createDropdown } from "./components/Dropdown";
 import { dimOutside, layoutContext, yieldToUI, type AtlasHost, type MapView } from "./AtlasRender";
 import { PosterDialog } from "./PosterDialog";
+import { ImportDialog, paintGuide } from "./ImportDialog";
 import { FactSheet } from "./FactSheet";
 import { drawBattles, drawFronts } from "./WarRenderer";
 import { exportHistoryGif } from "./GifExport";
@@ -137,6 +138,8 @@ export class Interface {
   private exporting = false; // a poster or fact-sheet map is being rendered
   private renderChain: Promise<void> = Promise.resolve();
   private posterDialog: PosterDialog | null = null;
+  private importDialog: ImportDialog | null = null;
+  private guideName = "";
   private factSheet: FactSheet | null = null;
 
   // Sub-managers
@@ -769,6 +772,8 @@ export class Interface {
         const powersSelect = document.getElementById("great-powers") as HTMLSelectElement | null;
         if (powersSelect) powersSelect.value = String(this.generator.greatPowers);
         refreshPickers();
+        this.guideName = file.name.replace(/\.world$/i, "");
+        this.syncGuideCard();
         this.onWorldGenerated();
         this.nationsManager.renderList();
       } catch (err) {
@@ -777,6 +782,42 @@ export class Interface {
       } finally {
         this.uiManager.hideLoadingModal();
       }
+    });
+
+    // --- Shape from an image ---
+    const openImport = (file?: File) => {
+      if (this.generator.isGenerating) return;
+      const sizeSelect = document.getElementById("size") as HTMLSelectElement | null;
+      const [w, h] = (sizeSelect?.value ?? "800x450").split("x").map(Number);
+      if (!this.importDialog) {
+        this.importDialog = new ImportDialog();
+        this.importDialog.onApply = (guide, name) => {
+          this.generator.guide = guide;
+          this.guideName = name;
+          this.syncGuideCard();
+          generateBtn.click();
+        };
+      }
+      // Preview with the seed the next world will be generated from
+      this.importDialog.open(w, h, parseInt(seedInput.value) || this.generator.currentSeed, file);
+    };
+    document.getElementById("guide-import")?.addEventListener("click", () => openImport());
+    document.getElementById("guide-edit")?.addEventListener("click", () => openImport());
+    const clearGuide = () => {
+      this.generator.guide = null;
+      this.syncGuideCard();
+    };
+    document.getElementById("guide-clear")?.addEventListener("click", clearGuide);
+    presetSelect.addEventListener("change", clearGuide);
+    // Dropping a picture anywhere on the app opens the import
+    window.addEventListener("dragover", (e) => {
+      if (e.dataTransfer?.types.includes("Files")) e.preventDefault();
+    });
+    window.addEventListener("drop", (e) => {
+      const file = [...(e.dataTransfer?.files ?? [])].find((f) => f.type.startsWith("image/"));
+      if (!file) return;
+      e.preventDefault();
+      openImport(file);
     });
 
     generateBtn.addEventListener("click", async () => {
@@ -827,6 +868,20 @@ export class Interface {
         this.uiManager.setBtnLoading(false, originalText);
       }
     });
+  }
+
+  // World tab: the imported picture in use, which overrides the presets
+  private syncGuideCard() {
+    const guide = this.generator.guide;
+    const card = document.getElementById("guide-card");
+    const importBtn = document.getElementById("guide-import");
+    if (!card || !importBtn) return;
+    card.style.display = guide ? "" : "none";
+    importBtn.style.display = guide ? "none" : "";
+    document.querySelector('.picker[data-for="preset"]')?.classList.toggle("overridden", !!guide);
+    if (!guide) return;
+    document.getElementById("guide-name")!.textContent = this.guideName || "Imported image";
+    void paintGuide(document.getElementById("guide-thumb") as HTMLCanvasElement, guide);
   }
 
   private toggleSim() {

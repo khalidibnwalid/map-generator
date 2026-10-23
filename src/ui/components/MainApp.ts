@@ -22,6 +22,7 @@ const ICONS = {
   step: icon(`<path d="M5 4.5v15l10-7.5z" fill="currentColor"/><path d="M18 5v14"/>`),
   edit: icon(`<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13 7 4 4"/>`),
   poster: icon(`<rect x="3" y="4" width="18" height="16" rx="1.5"/><rect x="6" y="7" width="12" height="10" rx="0.5"/><path d="m6 15 3.5-3.5 2.5 2.5 2-2 4 4"/>`),
+  image: icon(`<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/>`),
 };
 
 const toggle = (id: string, label: string, checked: boolean, hint = "") => /* html */ `
@@ -91,6 +92,20 @@ export default function renderMainApp() {
                 ],
                 "Heavy Landmass",
               )}
+            </div>
+
+            <div class="field">
+              <div class="field-label">Or shape it from an image</div>
+              <button id="guide-import" class="file-card">
+                ${ICONS.image}
+                <span><strong>Import image</strong><small>Sketch, silhouette, colored map or heightmap</small></span>
+              </button>
+              <div id="guide-card" class="guide-card" style="display:none">
+                <canvas id="guide-thumb" class="guide-thumb" width="112" height="63"></canvas>
+                <span class="guide-info"><strong id="guide-name">Image</strong><small>Generate keeps this land and reseeds the rest</small></span>
+                <button id="guide-edit" class="icon-btn" title="Adjust the import">${ICONS.edit}</button>
+                <button id="guide-clear" class="icon-btn" title="Back to the landmass presets">${ICONS.close}</button>
+              </div>
             </div>
 
             <div class="field">
