@@ -3079,3 +3079,57 @@ input[type="color"]::-moz-color-swatch {
   background: var(--accent-soft);
   color: var(--accent);
 }
+
+.sim-jump {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.sim-bar-scrub {
+  flex: 0 0 150px;
+  min-width: 0;
+  accent-color: var(--accent);
+}
+
+.sim-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sim-row .picker {
+  flex: 1;
+}
+
+.sim-timeline-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sim-timeline-row .sim-present,
+.sim-timeline-row .sim-gif {
+  flex: 1;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+
+.war-room > summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.war-room > summary::-webkit-details-marker {
+  display: none;
+}
+
+.war-room > summary::after {
+  content: "▸";
+  float: right;
+}
+
+.war-room[open] > summary::after {
+  content: "▾";
+}

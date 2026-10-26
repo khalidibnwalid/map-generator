@@ -255,13 +255,13 @@ export default function renderMainApp() {
 
           <!-- History -->
           <section id="content-history" class="tab-content">
-            <p class="muted">Let time run. Nations settle empty land, fight over their frontiers and break apart. Mountains, rivers and fortresses slow invaders. Cohesion comes from culture, and strength from population, wealth and government. Rulers age and die, and houses rise and fall.</p>
+            <div class="sim-summary" id="sim-summary" title="Let time run: realms settle land, fight, split and fall. Terrain, culture, population and wealth shape the outcome."></div>
             <div class="sim-controls">
               <button id="sim-play" class="btn-primary">${ICONS.play}<span>Play</span></button>
               <button id="sim-step" class="btn-ghost" title="Advance one year">${ICONS.step}<span>Step</span></button>
             </div>
-            <div class="field">
-              <div class="field-label">Speed (years per second)</div>
+            <div class="sim-row">
+              <span class="field-label">Speed</span>
               ${picker(
                 "sim-speed",
                 "segmented",
@@ -273,21 +273,30 @@ export default function renderMainApp() {
                 ],
                 "2",
               )}
+              <span class="muted">yrs/s</span>
             </div>
-            <div class="sim-summary" id="sim-summary"></div>
-            <div class="field sim-timeline" id="sim-timeline">
+            <div class="sim-jump">
+              <input type="number" id="sim-jump-years" value="10" min="1" max="1000" step="1" data-stepper title="Years" />
+              <button id="sim-jump" class="btn-ghost" title="Simulate this many years at once"><span>Advance</span></button>
+              <button id="sim-skip" class="btn-ghost" title="Move the calendar forward without simulating: borders stay as they are"><span>Skip</span></button>
+            </div>
+            <label class="switch-row" title="Play is off; every click on the map simulates one year">
+              <span class="switch-text">Interactive mode<small>Click the map to advance a year</small></span>
+              <input type="checkbox" id="sim-interactive" />
+              <span class="switch"></span>
+            </label>
+            <div class="field sim-timeline" id="sim-timeline" title="Drag to replay past borders (view-only; playing continues from the present)">
               <div class="field-label sim-timeline-head"><span>Timeline</span><span id="sim-scrub-year" class="sim-scrub-year"></span></div>
               <input type="range" id="sim-scrub" min="0" max="0" value="0" step="1" disabled />
               <div class="sim-timeline-row">
                 <span id="sim-scrub-from" class="muted">–</span>
-                <button id="sim-present" class="btn-ghost sim-present" disabled>Back to present</button>
+                <button id="sim-present" class="btn-ghost sim-present" disabled>Present</button>
+                <button id="sim-gif" class="btn-ghost sim-gif" disabled><span class="sim-gif-label">Export GIF</span></button>
                 <span id="sim-scrub-to" class="muted">–</span>
               </div>
-              <p class="muted sim-note">Drag to replay past borders. Replays are view-only: playing or stepping always continues from the present.</p>
-              <button id="sim-gif" class="btn-ghost sim-gif" disabled><span class="sim-gif-label">Export GIF</span></button>
             </div>
-            <div class="field war-room" id="war-room">
-              <div class="field-label">Command a battle</div>
+            <details class="field war-room" id="war-room">
+              <summary class="field-label">Command a battle</summary>
               <div class="war-room-row">
                 <span class="war-room-label">Army of</span><div id="war-attacker" class="war-room-pick"></div>
                 <button id="war-pick" class="icon-btn boxed war-pick" title="Pick the army's realm on the map">
@@ -305,8 +314,8 @@ export default function renderMainApp() {
                 "2",
               )}
               <button id="war-clear" class="btn-ghost war-clear" title="Remove battle marks, arrows and conquest borders; conquered land stays">Clear battle marks</button>
-              <p class="muted sim-note" id="war-hint">Choose an army, then click any other realm's land on the map to attack it there. Your army always wins: it advances over the easiest ground, slowed by mountains, rivers and castles, and lands by sea when needed. Each battle is a step on the timeline.</p>
-            </div>
+              <p class="muted sim-note" id="war-hint">Pick an army, then click enemy land to attack. It always wins.</p>
+            </details>
             <div class="field">
             <div class="group-title">Chronicle</div>
             ${picker(
@@ -369,6 +378,7 @@ export default function renderMainApp() {
       <div id="sim-bar" class="sim-bar" style="display:none;">
         <button id="sim-bar-play" class="icon-btn" title="Play / pause">${ICONS.play}</button>
         <span class="sim-bar-year">Year <strong id="sim-bar-year">0</strong></span>
+        <input type="range" id="sim-bar-scrub" class="sim-bar-scrub" min="0" max="0" value="0" step="1" disabled title="Timeline" />
         <span id="sim-bar-event" class="sim-bar-event"></span>
       </div>
 

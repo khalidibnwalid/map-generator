@@ -28,6 +28,14 @@ interface Frame {
   bytes: number;
 }
 
+export type SavedFrame = Omit<Frame, "bytes">;
+
+export interface SavedHistory {
+  nextUid: number;
+  uids: number[]; // uid of each live nation, by index
+  frames: SavedFrame[];
+}
+
 // A recorded year as the renderer needs it: owner is an index into nations
 export interface HistoryView {
   year: number;
@@ -37,8 +45,8 @@ export interface HistoryView {
 }
 
 const KEY_EVERY = 40;
-const MAX_FRAMES = 600;
-const MAX_BYTES = 48 * 1024 * 1024;
+const MAX_FRAMES = 5000;
+const MAX_BYTES = 192 * 1024 * 1024;
 
 export class HistoryRecorder {
   public frames: Frame[] = [];
@@ -198,6 +206,41 @@ export class HistoryRecorder {
       out[i] = u >= 0 && u <= maxUid ? lut[u] : -1;
     }
     return { year: frame.year, index: f, owner: out, nations: frame.nations };
+  }
+
+  // Everything needed to rebuild the recorder later; `uids` lines up with `nations`
+  public serialize(nations: Nation[]): SavedHistory {
+    return {
+      nextUid: this.nextUid,
+      uids: nations.map((n) => this.uidOf(n)),
+      frames: this.frames.map((f) => ({ year: f.year, nations: f.nations, key: f.key, diffIdx: f.diffIdx, diffVal: f.diffVal })),
+    };
+  }
+
+  // Replaces the recording with a saved one, binding its uids to `nations`
+  public restore(saved: SavedHistory, nations: Nation[]) {
+    this.uids = new WeakMap();
+    nations.forEach((n, i) => {
+      if (saved.uids[i] !== undefined) this.uids.set(n, saved.uids[i]);
+    });
+    this.nextUid = saved.nextUid;
+    this.lastMeta.clear();
+    this.bytes = 0;
+    this.frames = saved.frames.map((f) => {
+      const frame: Frame = { ...f, bytes: 0 };
+      frame.bytes = (f.key?.byteLength ?? 0) + (f.diffIdx?.byteLength ?? 0) + (f.diffVal?.byteLength ?? 0) + f.nations.length * 8;
+      this.bytes += frame.bytes;
+      return frame;
+    });
+    this.cursor = -1;
+    const last = this.frames.length - 1;
+    if (last < 0) {
+      this.prev.fill(-1);
+      return;
+    }
+    this.seekUids(last);
+    this.prev.set(this.cur);
+    for (const n of this.frames[last].nations) this.lastMeta.set(n.uid, n);
   }
 
   public indexOfYear(year: number): number {

@@ -11,8 +11,14 @@ import {
 } from "../politics";
 import { colorForNewNation, partitionNation, refreshTerritorialWaters } from "../generators";
 import { EconomySim, type EconEventKind } from "./economySim";
-import { HistoryRecorder } from "./History";
+import { HistoryRecorder, type SavedHistory } from "./History";
 import { crownRulers, foundHouse, installCadet, reignYear, rulerStyle, succeed, usurp } from "./Rulers";
+
+export interface SavedSim {
+  history: SavedHistory;
+  battles: Battle[];
+  events: SimEvent[];
+}
 
 export interface SimEvent {
   year: number;
@@ -173,6 +179,18 @@ export class Simulation {
     this.needsSync = true;
   }
 
+  public save(): SavedSim {
+    return { history: this.history.serialize(this.world.nations), battles: this.battles, events: this.events };
+  }
+
+  // Picks up a saved chronicle; the world must be the one it was saved with
+  public restore(saved: SavedSim) {
+    this.history.restore(saved.history, this.world.nations);
+    this.battles = saved.battles;
+    this.events = saved.events;
+    this.needsSync = true;
+  }
+
   constructor(world: WorldData, noise: NoiseEngine) {
     this.world = world;
     this.noise = noise;
@@ -225,7 +243,7 @@ export class Simulation {
 
   private log(kind: SimEvent["kind"], text: string, x: number, y: number) {
     this.events.unshift({ year: this.year, text, kind, x, y });
-    if (this.events.length > 500) this.events.length = 500;
+    if (this.events.length > 5000) this.events.length = 5000;
   }
 
   private nameOf(i: number) {
@@ -354,6 +372,21 @@ export class Simulation {
     });
   }
 
+  // Lets a year pass on the calendar without simulating it: borders stay
+  // as they are, but the year is recorded so the timeline stays continuous
+  public skipYear() {
+    if (this.needsSync) {
+      this.sync();
+      this.needsSync = false;
+    }
+    const w = this.world;
+    if (!this.history.length) this.history.record(this.year, this.owner, w.nations);
+    this.year++;
+    w.year = this.year;
+    this.offensives = [];
+    this.history.record(this.year, this.owner, w.nations);
+  }
+
   public step(): boolean {
     const w = this.world;
     const W = this.W;
@@ -476,8 +509,8 @@ export class Simulation {
     }
     // Battles are kept as long as the recorded history (timeline and GIF show them)
     const oldest = this.history.frames[0]?.year ?? this.year;
-    if (this.battles.length > 6000 || (this.battles.length && this.battles[0].year < oldest))
-      this.battles = this.battles.filter((b) => b.year >= oldest).slice(-6000);
+    if (this.battles.length > 30000 || (this.battles.length && this.battles[0].year < oldest))
+      this.battles = this.battles.filter((b) => b.year >= oldest).slice(-30000);
 
     // --- Peace treaties ---
     let dropped = false; // a nation vanished: indices shifted, skip the rest of this year's diplomacy

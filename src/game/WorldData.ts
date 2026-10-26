@@ -1,5 +1,6 @@
 import { TerrainSampler } from "../core/TerrainSampler";
 import type { FlagSpec } from "./flags";
+import type { SavedSim } from "./sim/Simulation";
 import type { Language } from "./names";
 import type { Poi } from "./generators/generatePOIs";
 import type { SeaRoute } from "./generators/generateSeaRoutes";
@@ -269,6 +270,7 @@ export class WorldData {
   public height: number;
   public seed: number = 0;
   public year = 0; // simulated calendar year (History tab)
+  public savedSim?: SavedSim; // recorded history read from a file, taken over by the simulation
   public grid: CellData[][];
   public rivers: River[] = [];
   public worldRoads: Road[] = [];

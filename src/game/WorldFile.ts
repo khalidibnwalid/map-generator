@@ -3,6 +3,7 @@ import type { City, Nation, Province, RelationType, Road, WorldData } from "./Wo
 import type { Poi } from "./generators/generatePOIs";
 import { computeTrade } from "./generators/generateTrade";
 import type { TerrainGuide } from "./ImageGuide";
+import type { SavedSim } from "./sim/Simulation";
 
 // A .world file = gzip(JSON). Terrain is regenerated from seed/preset/size
 // (and the imported picture's guide, when there is one); everything the user
@@ -27,6 +28,21 @@ interface SavedGuide {
   moisture?: string;
 }
 
+// Typed arrays of the recorded years become base64 strings
+type Packed = string | null;
+interface SavedFrameData {
+  year: number;
+  nations: SavedSim["history"]["frames"][number]["nations"];
+  key: Packed;
+  diffIdx: Packed;
+  diffVal: Packed;
+}
+interface SavedSimData {
+  history: { nextUid: number; uids: number[]; frames: SavedFrameData[] };
+  battles: SavedSim["battles"];
+  events: SavedSim["events"];
+}
+
 interface WorldFileData {
   format: typeof FORMAT;
   version: number;
@@ -45,6 +61,7 @@ interface WorldFileData {
   pois?: Poi[]; // only when landmarks were edited
   year?: number; // simulated year, so ruler ages carry on after loading
   guide?: SavedGuide; // imported picture the terrain was shaped from
+  sim?: SavedSimData; // year-by-year history, battles and chronicle
 }
 
 const RELATION_CODES: RelationType[] = ["Neutral", "Alliance", "Friendly", "Rival", "War", "Vassal", "Overlord"];
@@ -182,7 +199,44 @@ async function decodeGuide(s: SavedGuide): Promise<TerrainGuide> {
   };
 }
 
-export async function saveWorld(generator: MapGenerator): Promise<Blob> {
+const pack = (a: { buffer: ArrayBufferLike; byteOffset: number; byteLength: number } | null): Packed =>
+  a ? toBase64(new Uint8Array(a.buffer, a.byteOffset, a.byteLength)) : null;
+
+function unpack<T extends Int32Array | Int16Array>(b64: Packed, Type: new (b: ArrayBuffer) => T): T | null {
+  if (!b64) return null;
+  const bytes = fromBase64(b64);
+  return new Type(bytes.buffer as ArrayBuffer);
+}
+
+function encodeSim(s: SavedSim): SavedSimData {
+  return {
+    history: {
+      ...s.history,
+      frames: s.history.frames.map((f) => ({ ...f, key: pack(f.key), diffIdx: pack(f.diffIdx), diffVal: pack(f.diffVal) })),
+    },
+    battles: s.battles,
+    events: s.events,
+  };
+}
+
+function decodeSim(d: SavedSimData): SavedSim {
+  return {
+    history: {
+      ...d.history,
+      frames: d.history.frames.map((f) => ({
+        ...f,
+        key: unpack(f.key, Int32Array),
+        diffIdx: unpack(f.diffIdx, Int32Array),
+        diffVal: unpack(f.diffVal, Int16Array),
+      })),
+    },
+    battles: d.battles,
+    events: d.events,
+  };
+}
+
+// `sim` is the running simulation's chronicle, when there is one
+export async function saveWorld(generator: MapGenerator, sim?: SavedSim | null): Promise<Blob> {
   const world = generator.getWorld();
   const W = world.width;
   const N = W * world.height;
@@ -218,6 +272,7 @@ export async function saveWorld(generator: MapGenerator): Promise<Blob> {
     pois: world.poisEdited ? world.pois : undefined,
     year: world.year || undefined,
     guide: generator.guide ? await encodeGuide(generator.guide) : undefined,
+    sim: sim && sim.history.frames.length ? encodeSim(sim) : undefined,
   };
   // Trim float noise from city coordinates to keep the file small
   const json = JSON.stringify(data, (_k, v) => (typeof v === "number" && !Number.isInteger(v) ? Math.round(v * 1000) / 1000 : v));
@@ -245,6 +300,7 @@ export async function loadWorld(
   world.provinces = data.provinces;
   world.cities = data.cities;
   world.year = data.year ?? 0;
+  world.savedSim = data.sim ? decodeSim(data.sim) : undefined;
   const n = world.nations.length;
   world.relations = Array.from({ length: n }, (_, a) =>
     Array.from({ length: n }, (_, b) => RELATION_CODES[Number(data.relations[a * n + b] ?? 0)] ?? "Neutral"),

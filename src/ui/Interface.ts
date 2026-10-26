@@ -11,6 +11,7 @@ import { CityRenderer } from "./CityRenderer";
 import { NetworkRenderer } from "./NetworkRenderer";
 import { PoiRenderer } from "./PoiRenderer";
 import { nearestPoi, POI_LABELS } from "../game/generators/generatePOIs";
+import { installSteppers } from "./components/NumberInput";
 import { saveWorld, loadWorld } from "../game/WorldFile";
 import { RESOURCE_INFO, WEALTH_TIERS } from "../game/generators/generateEconomy";
 import { cityExports, cityTrade, tradeRole } from "../game/generators/generateTrade";
@@ -128,6 +129,8 @@ export class Interface {
   private simSpeed = 2;
   private simListAt = 0; // last nations-list refresh while history runs
   private inSimStep = false;
+  private interactive = false; // map clicks advance the simulation
+  private jumping = false; // a multi-year skip is running
   // Command a battle: chosen realms (kept as objects, indices shift) and aim mode
   private warAttacker: Nation | null = null;
   private pointerDown = { x: 0, y: 0 }; // a click after a drag is a pan, not an attack
@@ -240,6 +243,12 @@ export class Interface {
     const world = this.generator.getWorld();
     // Houses and rulers from a seeded stream of their own, so generation is unaffected
     crownRulers(world, seededRand(world.seed * 7919 + world.nations.length));
+    if (world.savedSim) {
+      // A loaded file brings its recorded history along
+      this.sim = new Simulation(world, this.generator.getNoise());
+      this.sim.restore(world.savedSim);
+      world.savedSim = undefined;
+    }
     this.renderSimPanel();
     this.gpuRenderer.updateWorldTexture(world);
     this.gpuRenderer.updateProvincesDataTexture(world);
@@ -319,7 +328,7 @@ export class Interface {
         if (owner >= 0) {
           this.warPicking = false;
           this.warAttacker = world.nations[owner];
-          this.setWarHint(`Commanding the army of ${this.warAttacker.name}. Click any other realm's land to attack it there.`);
+          this.setWarHint(`Commanding ${this.warAttacker.name}. Click enemy land to attack.`);
           this.renderWarRoom();
         }
       } else if (this.activeTab === "history" && this.warAttacker && !dragged && wy >= 0 && wy < world.height) {
@@ -328,6 +337,9 @@ export class Interface {
         const owner = cell.isWater ? -1 : (cell.nationIndex ?? -1);
         const att = world.nations.indexOf(this.warAttacker);
         if (owner >= 0 && owner !== att) this.launchBattle(owner, { x, y: fy });
+      } else if (this.interactive && this.activeTab === "history" && !dragged) {
+        this.pauseSim();
+        this.stepSim();
       } else if (this.activeTab === "build" && wy >= 0 && wy < world.height) {
         if (this.buildTool.tool) this.buildTool.place(x, fy);
         else {
@@ -511,7 +523,10 @@ export class Interface {
           if (title) title.textContent = titles[tab];
           if (tab === "nations") this.nationsManager.renderList();
           if (tab === "build") this.buildTool.render();
-          if (tab === "history") this.renderWarRoom();
+          if (tab === "history") {
+            this.renderWarRoom();
+            this.renderSimPanel();
+          }
           else if (this.buildTool.tool || this.buildTool.selected) {
             this.buildTool.tool = null;
             this.buildTool.selected = null;
@@ -539,6 +554,19 @@ export class Interface {
       this.pauseSim();
       this.stepSim();
     });
+    installSteppers(document.getElementById("content-history") ?? document);
+    for (const [id, simulate] of [["sim-jump", true], ["sim-skip", false]] as const) {
+      document.getElementById(id)?.addEventListener("click", () => {
+        const input = document.getElementById("sim-jump-years") as HTMLInputElement | null;
+        this.pauseSim();
+        void this.jumpYears(Math.max(1, Math.min(1000, Math.floor(Number(input?.value)) || 1)), simulate);
+      });
+    }
+    document.getElementById("sim-interactive")?.addEventListener("change", (e) => {
+      this.interactive = (e.target as HTMLInputElement).checked;
+      this.pauseSim();
+      this.renderSimPanel();
+    });
     const speedSelect = document.getElementById("sim-speed") as HTMLSelectElement | null;
     speedSelect?.addEventListener("change", () => {
       this.simSpeed = Number(speedSelect.value) || 2;
@@ -557,14 +585,17 @@ export class Interface {
       this.simFilter = filterSelect.value;
       this.renderSimPanel();
     });
-    const scrub = document.getElementById("sim-scrub") as HTMLInputElement | null;
-    scrub?.addEventListener("input", () => {
-      if (!this.sim) return;
-      this.pauseSim();
-      const f = Number(scrub.value);
-      if (f >= this.sim.history.length - 1) this.backToPresent();
-      else this.showReplay(f);
-    });
+    // The panel timeline and the one on the bar over the map do the same thing
+    for (const id of ["sim-scrub", "sim-bar-scrub"]) {
+      const scrub = document.getElementById(id) as HTMLInputElement | null;
+      scrub?.addEventListener("input", () => {
+        if (!this.sim) return;
+        this.pauseSim();
+        const f = Number(scrub.value);
+        if (f >= this.sim.history.length - 1) this.backToPresent();
+        else this.showReplay(f);
+      });
+    }
     document.getElementById("sim-present")?.addEventListener("click", () => this.backToPresent());
     document.getElementById("sim-gif")?.addEventListener("click", () => this.exportGif());
 
@@ -737,7 +768,7 @@ export class Interface {
     const openBtn = document.getElementById("open-world") as HTMLButtonElement | null;
     const openInput = document.getElementById("open-world-input") as HTMLInputElement | null;
     saveBtn?.addEventListener("click", async () => {
-      const blob = await saveWorld(this.generator);
+      const blob = await saveWorld(this.generator, this.sim?.save());
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -926,6 +957,48 @@ export class Interface {
     this.renderSimPanel();
   }
 
+  // Runs `years` years back to back, yielding to the browser between slices
+  private async jumpYears(years: number, simulate = true) {
+    if (this.jumping || this.generator.isGenerating || this.exportingGif) return;
+    this.jumping = true;
+    this.backToPresent();
+    const world = this.generator.getWorld();
+    this.sim ??= new Simulation(world, this.generator.getNoise());
+    const nationsBefore = world.nations.length;
+    const citiesBefore = world.cities.length;
+    const colorsBefore = world.nations.map((n) => n.color).join();
+    const btn = document.getElementById(simulate ? "sim-jump" : "sim-skip") as HTMLButtonElement | null;
+    const label = btn?.querySelector("span");
+    const idle = label?.textContent ?? "";
+    for (const id of ["sim-jump", "sim-skip"]) (document.getElementById(id) as HTMLButtonElement | null)?.setAttribute("disabled", "");
+    let changed = false;
+    try {
+      for (let done = 0; done < years; ) {
+        const t0 = performance.now();
+        this.inSimStep = true;
+        while (done < years && performance.now() - t0 < 40) {
+          if (simulate) changed = this.sim.step() || changed;
+          else this.sim.skipYear();
+          done++;
+        }
+        this.inSimStep = false;
+        if (label) label.textContent = `${done}/${years}`;
+        // A world regenerated meanwhile ends the run
+        if (this.generator.getWorld() !== world) return;
+        await new Promise((r) => setTimeout(r));
+      }
+      this.inSimStep = true;
+      this.applySimChanges(changed, nationsBefore, citiesBefore, colorsBefore);
+      this.inSimStep = false;
+    } finally {
+      this.inSimStep = false;
+      this.jumping = false;
+      for (const id of ["sim-jump", "sim-skip"]) document.getElementById(id)?.removeAttribute("disabled");
+      if (label) label.textContent = idle;
+      this.renderSimPanel();
+    }
+  }
+
   // Uploads and caches after the simulation changed the world (a year or a
   // commanded battle)
   private applySimChanges(changed: boolean, nationsBefore: number, citiesBefore: number, colorsBefore: string) {
@@ -987,7 +1060,7 @@ export class Interface {
           this.warPicking = false;
           this.warAttacker = world.nations[Number(v)] ?? null;
           this.setWarHint(
-            this.warAttacker ? `Commanding the army of ${this.warAttacker.name}. Click any other realm's land to attack it there.` : "Choose an army, then click any other realm's land on the map to attack it there. Your army always wins: it advances over the easiest ground, slowed by mountains, rivers and castles, and lands by sea when needed. Each battle is a step on the timeline.",
+            this.warAttacker ? `Commanding ${this.warAttacker.name}. Click enemy land to attack.` : "Pick an army, then click enemy land to attack. It always wins.",
           );
           this.renderWarRoom();
         },
@@ -1133,7 +1206,9 @@ export class Interface {
         ? `<svg viewBox="0 0 24 24" width="16" height="16"><path d="M7 4h3.5v16H7zM13.5 4H17v16h-3.5z" fill="currentColor"/></svg><span>Pause</span>`
         : `<svg viewBox="0 0 24 24" width="16" height="16"><path d="M7 4.5v15l12-7.5z" fill="currentColor"/></svg><span>${this.sim ? "Resume" : "Play"}</span>`;
     }
+    if (play) (play as HTMLButtonElement).disabled = this.interactive;
     const barPlay = document.getElementById("sim-bar-play");
+    if (barPlay) (barPlay as HTMLButtonElement).disabled = this.interactive;
     if (barPlay) {
       barPlay.innerHTML = playing
         ? `<svg viewBox="0 0 24 24" width="18" height="18"><path d="M7 4h3.5v16H7zM13.5 4H17v16h-3.5z" fill="currentColor"/></svg>`
@@ -1163,6 +1238,12 @@ export class Interface {
       scrub.value = String(replay ? replay.index : Math.max(0, frames - 1));
       scrub.disabled = frames < 2 || this.exportingGif;
       syncSliders(scrub.parentElement ?? document);
+    }
+    const barScrub = document.getElementById("sim-bar-scrub") as HTMLInputElement | null;
+    if (barScrub) {
+      barScrub.max = String(Math.max(0, frames - 1));
+      barScrub.value = String(replay ? replay.index : Math.max(0, frames - 1));
+      barScrub.disabled = frames < 2 || this.exportingGif;
     }
     const firstYear = sim && frames ? sim.history.frames[0].year : null;
     const setText = (id: string, t: string) => {
