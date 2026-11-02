@@ -23,6 +23,9 @@ export async function generateElevation(ctx: GeneratorContext): Promise<void> {
         // Fewer, larger plates make continent-sized crust blocks
         numPlates = 26;
         baseScale = 0.006 * invResScale;
+    } else if (preset === 'Landworld') {
+        numPlates = 30;
+        baseScale = 0.004 * invResScale;
     } else { // Pangea
         numPlates = 25;
         baseScale = 0.0025 * invResScale;
@@ -74,6 +77,16 @@ export async function generateElevation(ctx: GeneratorContext): Promise<void> {
         ? { x: (noise.random() - 0.5) * 0.25, y: (noise.random() - 0.5) * 0.15, r: 0.05 + noise.random() * 0.04 }
         : null;
 
+    // Landworld: an inverted Pangea. Land everywhere, with a few big basins
+    // (centers in cells, radii in map heights) holding the only water
+    const basins = preset === 'Landworld'
+        ? Array.from({ length: 2 + Math.floor(noise.random() * 3) }, () => ({
+            x: noise.random() * width,
+            y: height * (0.2 + noise.random() * 0.6),
+            r: height * (0.07 + noise.random() * 0.05),
+        }))
+        : [];
+
     // 1. Generate Base Elevation
     const guidedLand = guide ? await shapeFromGuide(ctx, guide, baseScale) : null;
     if (!guidedLand) for (let x = 0; x < width; x++) {
@@ -98,6 +111,17 @@ export async function generateElevation(ctx: GeneratorContext): Promise<void> {
                 if (innerSea) {
                     const sea = Math.hypot(wx - innerSea.x, (wy - innerSea.y) * 1.4) / innerSea.r;
                     if (sea < 1.6) e -= (1.6 - sea) * 0.22;
+                }
+            } else if (preset === 'Landworld') {
+                // Flat, high plains with gentle swells...
+                e = 0.57 + (e - 0.5) * 0.45;
+                // ...cut by a few irregular basins that fill with water
+                const wobble = (noise.fbmCylinder(x + 9100, y + 4100, width, 4, 0.5, 2.0, 0.012 * invResScale) - 0.5) * 0.7;
+                for (const b of basins) {
+                    let dx = Math.abs(x - b.x);
+                    if (dx > width / 2) dx = width - dx;
+                    const d = Math.hypot(dx, (y - b.y) * 1.3) / b.r + wobble;
+                    if (d < 1.25) e -= (1.25 - d) * 0.9;
                 }
             } else if (preset === 'Earthlike') {
                 // Detail only; continents come from plates below
@@ -264,7 +288,8 @@ export async function generateElevation(ctx: GeneratorContext): Promise<void> {
     const { dist, nearest } = distanceTransform(width, height, isSite);
     const searchRadius = Math.min(8, Math.max(4, Math.round(4 * resScale)));
     // A heightmap or terrain colors already carry the mountains
-    const stress = guide?.relief ? 0.3 : 1;
+    // (Landworld keeps plate rifts from flooding its plains)
+    const stress = guide?.relief || preset === 'Landworld' ? 0.3 : 1;
 
     for (let x = 0; x < width; x++) {
         if (x % 100 === 0) {

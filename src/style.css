@@ -395,6 +395,29 @@ code {
   grid-template-columns: 1fr 1fr;
 }
 
+.picker.rows .pick {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+}
+
+.pick-icon {
+  display: flex;
+  flex: none;
+}
+
+.pick-icon img {
+  display: block;
+  border-radius: 6px;
+}
+
+.pick-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .picker.grid-3 {
   grid-template-columns: repeat(3, 1fr);
 }

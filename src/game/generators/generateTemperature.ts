@@ -12,7 +12,7 @@ export async function generateTemperature(ctx: GeneratorContext): Promise<void> 
         for (let y = 0; y < height; y++) {
             const latitude = Math.abs(y / height - 0.5) * 2;
             const elevation = world.grid[x][y].elevation;
-            let temp = 1.0 - latitude + offset;
+            let temp = 1.0 - latitude + offset + (ctx.preset === "Landworld" ? 0.3 : 0);
             temp -= (elevation > 0.45 ? (elevation - 0.45) * 0.5 : 0);
             world.grid[x][y].temperature = Math.max(0, Math.min(1, temp));
         }

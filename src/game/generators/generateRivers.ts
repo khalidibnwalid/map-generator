@@ -12,7 +12,8 @@ export async function generateRivers(ctx: GeneratorContext): Promise<void> {
   const { world, width: W, height: H, noise, onProgress } = ctx;
   const N = W * H;
   const resScale = W / 800;
-  const T = 80 * resScale * resScale;
+  // Landworld is a desert: only the odd short stream makes it to a lake
+  const T = 80 * resScale * resScale * (ctx.preset === "Landworld" ? 25 : 1);
   world.rivers = [];
 
   // Flow accumulation: rainfall summed downstream along the receiver tree.

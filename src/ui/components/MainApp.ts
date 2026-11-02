@@ -35,7 +35,18 @@ const toggle = (id: string, label: string, checked: boolean, hint = "") => /* ht
   </label>`;
 
 // Visual pickers drive hidden <select>s so existing logic keeps reading them
-const picker = (selectId: string, cls: string, options: { value: string; label: string; sub?: string; swatch?: string }[], selected: string) => /* html */ `
+// Preview images for the landmass presets (public/presets)
+const presetImg = (name: string) =>
+  /* html */ `<img src="${import.meta.env.BASE_URL}presets/${name}.svg" width="60" height="36" alt="" />`;
+const PRESET_ICONS: Record<string, string> = {
+  "Heavy Landmass": presetImg("giant"),
+  Earthlike: presetImg("medium"),
+  "Realistic Continents": presetImg("small"),
+  Pangea: presetImg("supercontinent"),
+  Landworld: presetImg("landworld"),
+};
+
+const picker = (selectId: string, cls: string, options: { value: string; label: string; sub?: string; swatch?: string; icon?: string }[], selected: string) => /* html */ `
   <select id="${selectId}" class="visually-hidden" tabindex="-1">
     ${options.map((o) => `<option value="${o.value}" ${o.value === selected ? "selected" : ""}>${o.label}</option>`).join("")}
   </select>
@@ -44,7 +55,8 @@ const picker = (selectId: string, cls: string, options: { value: string; label: 
       .map(
         (o) => /* html */ `<button type="button" class="pick ${o.value === selected ? "active" : ""}" data-value="${o.value}">
           ${o.swatch ? `<span class="pick-swatch" style="background:${o.swatch}"></span>` : ""}
-          <span class="pick-label">${o.label}</span>${o.sub ? `<span class="pick-sub">${o.sub}</span>` : ""}
+          ${o.icon ? `<span class="pick-icon">${o.icon}</span>` : ""}
+          <span class="pick-text"><span class="pick-label">${o.label}</span>${o.sub ? `<span class="pick-sub">${o.sub}</span>` : ""}</span>
         </button>`,
       )
       .join("")}
@@ -107,12 +119,13 @@ export default function renderMainApp() {
               <div class="field-label">Landmass</div>
               ${picker(
                 "preset",
-                "grid-2",
+                "rows",
                 [
-                  { value: "Heavy Landmass", label: "Giant Continents", sub: "Huge landmasses, little sea" },
-                  { value: "Realistic Continents", label: "Small Continents", sub: "Many smaller landmasses" },
-                  { value: "Earthlike", label: "Medium Continents", sub: "Tectonic plates, ~38% land" },
-                  { value: "Pangea", label: "Supercontinent", sub: "One enormous landmass" },
+                  { value: "Heavy Landmass", label: "Giant Continents", sub: "Huge landmasses, little sea", icon: PRESET_ICONS["Heavy Landmass"] },
+                  { value: "Earthlike", label: "Medium Continents", sub: "Tectonic plates, ~38% land", icon: PRESET_ICONS["Earthlike"] },
+                  { value: "Realistic Continents", label: "Small Continents", sub: "Many smaller landmasses", icon: PRESET_ICONS["Realistic Continents"] },
+                  { value: "Pangea", label: "Supercontinent", sub: "One enormous landmass", icon: PRESET_ICONS["Pangea"] },
+                  { value: "Landworld", label: "Landworld", sub: "Desert plains, a few big lakes", icon: PRESET_ICONS["Landworld"] },
                 ],
                 "Heavy Landmass",
               )}
@@ -132,37 +145,37 @@ export default function renderMainApp() {
               </div>
             </div>
 
-            <div class="field">
-              <div class="field-label">Size</div>
-              ${picker(
-                "size",
-                "segmented",
-                [
-                  { value: "400x225", label: "S" },
-                  { value: "800x450", label: "M" },
-                  { value: "1600x900", label: "L" },
-                ],
-                "800x450",
-              )}
-            </div>
-
-            <div class="field">
-              <div class="field-label">Great powers</div>
-              ${picker(
-                "great-powers",
-                "segmented",
-                [
-                  { value: "0", label: "None" },
-                  { value: "1", label: "1" },
-                  { value: "2", label: "2" },
-                  { value: "3", label: "3" },
-                ],
-                "1",
-              )}
-            </div>
-
             <details class="advanced">
               <summary>Advanced</summary>
+              <div class="field">
+                <div class="field-label">Size</div>
+                ${picker(
+                  "size",
+                  "segmented",
+                  [
+                    { value: "400x225", label: "S" },
+                    { value: "800x450", label: "M" },
+                    { value: "1600x900", label: "L" },
+                  ],
+                  "800x450",
+                )}
+              </div>
+
+              <div class="field">
+                <div class="field-label">Great powers</div>
+                ${picker(
+                  "great-powers",
+                  "segmented",
+                  [
+                    { value: "0", label: "None" },
+                    { value: "1", label: "1" },
+                    { value: "2", label: "2" },
+                    { value: "3", label: "3" },
+                  ],
+                  "1",
+                )}
+              </div>
+
               ${OPTIONS.map((o) => {
                 const def = o.kind === "count" ? autoNations(800, 450) : Math.round(DEFAULT_SETTINGS[o.key] * 100);
                 return /* html */ `<div class="field">

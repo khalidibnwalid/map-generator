@@ -35,7 +35,8 @@ export async function generateCoast(ctx: GeneratorContext): Promise<void> {
     if (wc.sizes[i] > wc.sizes[largest]) largest = i;
 
   const compType = wc.sizes.map((size, id) => {
-    if (id === largest || size > N * 0.02) return WaterType.OCEAN;
+    // Landworld's basins stay lakes, apart from the largest one (the drainage outlet)
+    if (id === largest || (size > N * 0.02 && ctx.preset !== "Landworld")) return WaterType.OCEAN;
     if (size < minLake) return WaterType.LAND;
     return WaterType.LAKE;
   });
@@ -123,7 +124,7 @@ export async function generateCoast(ctx: GeneratorContext): Promise<void> {
     if (type[i] === WaterType.OCEAN) continue;
     // Even shallow basins hold water; leaving them as flats makes rivers run
     // across them in unnaturally straight lines.
-    if (type[i] === WaterType.LAKE || fill[i] - elev[i] > 0.004) pit[i] = 1;
+    if (type[i] === WaterType.LAKE || fill[i] - elev[i] > (ctx.preset === "Landworld" ? 0.08 : 0.004)) pit[i] = 1;
   }
   const pc = labelComponents(W, H, pit);
   for (let i = 0; i < N; i++) {

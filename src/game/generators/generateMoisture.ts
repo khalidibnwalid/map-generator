@@ -1,9 +1,11 @@
 import { yieldFrame } from "../util/grid";
 import type { GeneratorContext } from './types';
+import { decodeSdf } from "../../core/FieldNoise";
 
 export async function generateMoisture(ctx: GeneratorContext): Promise<void> {
     const { world, noise, width, height, onProgress } = ctx;
     const invResScale = 800 / width;
+    const resScale = width / 800;
     const scale = 0.005 * invResScale;
     const offset = ctx.settings?.rainfall ?? 0;
 
@@ -18,6 +20,11 @@ export async function generateMoisture(ctx: GeneratorContext): Promise<void> {
             // Colors of an imported map (green, tan) steer rainfall
             const hint = ctx.guide?.moisture?.[y * width + x];
             if (hint !== undefined && !cell.isWater) m = m * 0.35 + hint * 0.65;
+            if (!cell.isWater && ctx.preset === "Landworld") {
+                // Desert interior, with green belts around the lakes
+                const shore = decodeSdf(world.coastSdf[y * width + x]);
+                m = m * 0.3 - 0.04 + 0.5 * Math.exp(-Math.max(0, shore) / (14 * resScale));
+            }
             if (cell.isWater) {
                 m += 0.5;
             } else {

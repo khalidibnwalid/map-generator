@@ -30,7 +30,8 @@ export type Preset =
   | "Heavy Landmass"
   | "Realistic Continents"
   | "Earthlike"
-  | "Pangea";
+  | "Pangea"
+  | "Landworld";
 
 export class MapGenerator {
   private width: number;
