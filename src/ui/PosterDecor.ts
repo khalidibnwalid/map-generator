@@ -25,6 +25,7 @@ export interface PosterSpec {
   flags: boolean;
   theme: MapTheme;
   thematic: ThematicMode;
+  layers?: { thematic: ThematicMode; thematic2?: ThematicMode }; // draw these instead of the live map's layers
   imprint: string; // small print in the bottom margin
 }
 
@@ -141,7 +142,7 @@ export function posterView(L: PosterLayout, spec: PosterSpec): MapView {
   const w = Math.round(L.map.w * L.pr);
   const h = Math.round(L.map.h * L.pr);
   const scale = w / (spec.extent.x1 - spec.extent.x0);
-  return { x, y, w, h, scale, offsetX: -spec.extent.x0 * scale, offsetY: -spec.extent.y0 * scale, pixelRatio: L.pr, keep: spec.keep };
+  return { x, y, w, h, scale, offsetX: -spec.extent.x0 * scale, offsetY: -spec.extent.y0 * scale, pixelRatio: L.pr, keep: spec.keep, thematic: spec.layers?.thematic, thematic2: spec.layers?.thematic2 };
 }
 
 export function paintBackground(ctx: CanvasRenderingContext2D, L: PosterLayout, spec: PosterSpec) {
@@ -585,8 +586,9 @@ function paintLegend(
   let title = "Realms";
   let rows: Row[] = [];
   let more = 0;
-  if (spec.thematic === "cultures") {
-    title = "Cultures";
+  if (spec.thematic === "cultures" || spec.thematic === "races") {
+    const byRace = spec.thematic === "races";
+    title = byRace ? "Races" : "Cultures";
     // Only those present in view, by land share
     const count = new Map<number, number>();
     const W = world.width;
@@ -598,11 +600,11 @@ function paintLegend(
         if (c.isWater) continue;
         const n = c.nationIndex ?? -1;
         if (spec.keep && !spec.keep.has(n)) continue;
-        const id = c.cultureIndex ?? -1;
+        const id = (byRace ? c.raceIndex : c.cultureIndex) ?? -1;
         if (id >= 0) count.set(id, (count.get(id) ?? 0) + 1);
       }
     }
-    const list = world.cultures;
+    const list = byRace ? world.races : world.cultures;
     const ids = [...count.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id).filter((id) => list[id]);
     more = Math.max(0, ids.length - LEGEND_ROWS);
     rows = ids.slice(0, LEGEND_ROWS).map((id) => ({ label: list[id].name, color: list[id].color }));

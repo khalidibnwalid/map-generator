@@ -21,6 +21,8 @@ uniform sampler2D u_coastTex;
 uniform sampler2D u_nationsTexture;
 uniform sampler2D u_provincesTexture;
 uniform sampler2D u_thematicTex;
+uniform sampler2D u_thematicTex2; // the overlapping layer, drawn as stripes
+uniform int u_thematic2;
 uniform sampler2D u_nationIdxTex;
 
 uniform vec2 u_resolution;
@@ -49,6 +51,7 @@ uniform float u_hoverNationIndex;
 uniform vec3 u_hoverNationColor;
 uniform float u_hoverBloc[16]; // hovered nation plus its overlord/vassals
 uniform int u_hoverBlocCount;
+uniform vec3 u_hoverBlocColor; // the bloc's overlord color
 uniform bool u_showIce;
 uniform bool u_fast; // view is moving: skip fine detail, keep full resolution
 uniform float u_hoverProvinceIndex;
@@ -813,6 +816,25 @@ void main() {
     color = mix(color, vec3(0.12), tb * 0.5 * landMask);
   }
 
+  // --- Overlapping layer: diagonal stripes over whatever is underneath ---
+  if (u_thematic2 > 0) {
+    vec4 s00 = fetchW(u_thematicTex2, ixy);
+    vec4 s10 = fetchW(u_thematicTex2, ixy + ivec2(1, 0));
+    vec4 s01 = fetchW(u_thematicTex2, ixy + ivec2(0, 1));
+    vec4 s11 = fetchW(u_thematicTex2, ixy + ivec2(1, 1));
+    vec4 sc2 = fetchW(u_thematicTex2, ixy + dominantCorner(s00, s10, s01, s11, noisy_fxy));
+    float a2 = sc2.a * landMask * politicalFade;
+    float stripe = step(0.5, fract((sc.x - sc.y + u_frame.x - u_frame.y) / (8.0 * u_pixelRatio)));
+    color = mix(color, sc2.rgb, a2 * stripe * 0.8);
+    // A firm outline between the layer's regions, in a dark shade of their color
+    vec4 sBest = s00;
+    if (s10.a > sBest.a) sBest = s10;
+    if (s01.a > sBest.a) sBest = s01;
+    if (s11.a > sBest.a) sBest = s11;
+    float sb = getBorderStrength(s00, s10, s01, s11, noisy_fxy, 1.3 * field_per_pixel * zoomVisibility, aa);
+    color = mix(color, sBest.rgb * 0.3, sb * 0.9 * landMask);
+  }
+
   // --- Nations fill (land strong, territorial waters faint) ---
   if (u_showNations && u_thematic == 0) {
     vec4 c00 = fetchW(u_nationIdxTex, ixy);
@@ -864,6 +886,29 @@ void main() {
       float hw = mix(mix(hv.x, hv.y, hs.x), mix(hv.z, hv.w, hs.x), hs.y);
       float seaA = 0.18 * smoothstep(0.35, 0.65, hw) * (1.0 - max(landMask, isletMask)) * politicalFade;
       color = mix(color, u_hoverNationColor, seaA);
+    }
+  }
+
+  // --- Hovered realm: it stays clean with a bright inner rim, while the realms
+  // bound to it (its overlord or vassals) are hatched, so each one is easy to tell apart ---
+  if (u_hoverNationIndex >= 0.0) {
+    vec4 h00 = fetchW(u_nationIdxTex, ixy);
+    vec4 h10 = fetchW(u_nationIdxTex, ixy + ivec2(1, 0));
+    vec4 h01 = fetchW(u_nationIdxTex, ixy + ivec2(0, 1));
+    vec4 h11 = fetchW(u_nationIdxTex, ixy + ivec2(1, 1));
+    ivec2 hTexel = ixy + dominantCorner(h00, h10, h01, h11, noisy_fxy);
+    vec4 hOwner = fetchW(u_nationIdxTex, hTexel);
+    if (hOwner.a > 0.1) {
+      float hl = max(landMask, isletMask);
+      if (abs(decodeIdx(hOwner) - u_hoverNationIndex) < 0.5) {
+        float rim = getBorderStrength(h00, h10, h01, h11, noisy_fxy, 4.0 * field_per_pixel, aa * 2.0);
+        color = mix(color, vec3(1.0, 0.82, 0.3), hl * rim * 0.9);
+      } else if (inHover(hOwner) > 0.5) {
+        float hatch = step(0.5, fract((sc.x + sc.y + u_frame.x + u_frame.y) / (7.0 * u_pixelRatio)));
+        // Stripes in the overlord's color, lightened so they read on any terrain
+        vec3 stripe = mix(u_hoverBlocColor, vec3(1.0), 0.4);
+        color = mix(color, stripe, hl * (0.14 + 0.42 * hatch));
+      }
     }
   }
 

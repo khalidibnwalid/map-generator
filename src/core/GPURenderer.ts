@@ -3,15 +3,17 @@ import { distanceTransform } from "../game/util/grid";
 import { VERTEX_SHADER_SOURCE, FRAGMENT_SHADER_SOURCE } from "./MapShader";
 
 export type MapTheme = "Realistic" | "Historical" | "Atlas";
-export type ThematicMode = "none" | "cultures" | "religions" | "diplomacy" | "wealth";
+export type ThematicMode = "none" | "off" | "cultures" | "races" | "religions" | "diplomacy" | "wealth";
 
 const THEME_INDEX: Record<MapTheme, number> = { Realistic: 0, Historical: 1, Atlas: 2 };
 const THEMATIC_INDEX: Record<ThematicMode, number> = {
   none: 0,
   cultures: 1,
+  races: 1,
   religions: 2,
   diplomacy: 3,
   wealth: 4,
+  off: 5, // no layer: no nation fill either (the texture stays empty)
 };
 
 export interface RenderLayers {
@@ -42,6 +44,8 @@ export class GPURenderer {
   private nationIdxTexture: WebGLTexture | null = null; // exact ids for borders & hover
   private provincesTexture: WebGLTexture | null = null;
   private thematicTexture: WebGLTexture | null = null;
+  private thematicTexture2: WebGLTexture | null = null; // a second, overlapping layer
+  public thematic2: ThematicMode = "none";
   private buffer: WebGLBuffer | null = null;
   private vao: WebGLVertexArrayObject | null = null;
   private biomeColors: Float32Array;
@@ -52,6 +56,7 @@ export class GPURenderer {
   private nearestLandWorld: WorldData | null = null;
   private texSize = { w: 0, h: 0 };
   public hoverBloc: number[] = []; // nations highlighted with the hovered one
+  public hoverBlocColor: [number, number, number] = [1, 1, 1]; // the overlord's color, for the bloc's stripes
   public season = 0; // 0..1 through the year (0 = mid-January), when layers.season
   public time = 0; // seconds, when layers.weather
   private lightsTexture: WebGLTexture | null = null;
@@ -180,9 +185,9 @@ export class GPURenderer {
     const W = world.width;
     const H = world.height;
     if (this.texSize.w !== W || this.texSize.h !== H) {
-      for (const t of [this.texture, this.coastTexture, this.nationsTexture, this.nationIdxTexture, this.provincesTexture, this.thematicTexture])
+      for (const t of [this.texture, this.coastTexture, this.nationsTexture, this.nationIdxTexture, this.provincesTexture, this.thematicTexture, this.thematicTexture2])
         if (t) this.gl.deleteTexture(t);
-      this.texture = this.coastTexture = this.nationsTexture = this.nationIdxTexture = this.provincesTexture = this.thematicTexture = null;
+      this.texture = this.coastTexture = this.nationsTexture = this.nationIdxTexture = this.provincesTexture = this.thematicTexture = this.thematicTexture2 = null;
       this.texSize = { w: W, h: H };
     }
     if (!this.texture) this.texture = this.makeTexture(this.gl.LINEAR);
@@ -360,11 +365,13 @@ export class GPURenderer {
   public updateThematicTexture(
     world: WorldData,
     colorOf: (x: number, y: number) => [number, number, number, number] | null,
+    slot: 1 | 2 = 1, // 2 is the overlapping layer, drawn as stripes
   ) {
-    if (!this.thematicTexture) this.thematicTexture = this.makeTexture(this.gl.NEAREST);
+    if (slot === 2) this.thematicTexture2 ??= this.makeTexture(this.gl.NEAREST);
+    else this.thematicTexture ??= this.makeTexture(this.gl.NEAREST);
     const near = this.getNearestLand(world);
     const W = world.width;
-    this.writeRegion(this.thematicTexture, world, undefined, (x, y, out, o) => {
+    this.writeRegion((slot === 2 ? this.thematicTexture2 : this.thematicTexture)!, world, undefined, (x, y, out, o) => {
       let i = y * W + x;
       if (world.waterType[i] !== 0) i = near[i];
       const c = i >= 0 ? colorOf(i % W, (i - (i % W)) / W) : null;
@@ -482,6 +489,7 @@ export class GPURenderer {
     bind(4, this.thematicTexture, "u_thematicTex");
     bind(5, this.nationIdxTexture, "u_nationIdxTex");
     bind(6, this.lightsTexture, "u_lightsTex");
+    bind(7, this.thematicTexture2, "u_thematicTex2");
 
     // Split the camera into an integer cell near the screen center plus a
     // small local offset so the shader keeps sub-meter precision.
@@ -517,6 +525,7 @@ export class GPURenderer {
     gl.uniform1i(this.u("u_showProvinces"), layers.provinces ? 1 : 0);
     gl.uniform1i(this.u("u_theme"), THEME_INDEX[theme]);
     gl.uniform1i(this.u("u_thematic"), this.thematicTexture ? THEMATIC_INDEX[thematic] : 0);
+    gl.uniform1i(this.u("u_thematic2"), this.thematicTexture2 && this.thematic2 !== "none" ? 1 : 0);
 
     gl.uniform3fv(this.u("u_biomeColors"), this.biomeColors);
     gl.uniform1f(this.u("u_hoverNationIndex"), hoverNationIndex);
@@ -525,6 +534,7 @@ export class GPURenderer {
     bloc.slice(0, 16).forEach((v, i) => (blocArr[i] = v));
     gl.uniform1fv(this.u("u_hoverBloc"), blocArr);
     gl.uniform1i(this.u("u_hoverBlocCount"), hoverNationIndex >= 0 ? Math.min(16, bloc.length) : 0);
+    gl.uniform3f(this.u("u_hoverBlocColor"), this.hoverBlocColor[0], this.hoverBlocColor[1], this.hoverBlocColor[2]);
     gl.uniform3f(this.u("u_hoverNationColor"), hoverNationColor[0], hoverNationColor[1], hoverNationColor[2]);
     gl.uniform1i(this.u("u_showIce"), layers.ice ? 1 : 0);
     gl.uniform1i(this.u("u_fast"), fast ? 1 : 0);

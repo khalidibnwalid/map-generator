@@ -1,4 +1,5 @@
 import type { WorldData } from "./WorldData";
+import { cultureHint } from "./emblem";
 
 // Procedural flags. A flag is a field layout (up to three colors) plus an
 // optional emblem; vassals fly their overlord's flag in the canton. Fields are
@@ -253,7 +254,14 @@ function chargeCenter(pos: ChargePos, w: number, h: number): [number, number, nu
   return [w * 0.5, h * 0.5, h * 0.27];
 }
 
-export function generateFlag(seedText: string, nationColor: string, family: string, salt = 0): FlagSpec {
+// A nation's flag nods to its culture: the culture's color often joins the field,
+// and its logo's sigil often becomes the emblem
+export interface CultureHint {
+  color: string;
+  charge: FlagCharge;
+}
+
+export function generateFlag(seedText: string, nationColor: string, family: string, salt = 0, hint?: CultureHint): FlagSpec {
   const rand = mulberry(hash(seedText) ^ Math.imul(salt + 1, 0x9e3779b1));
   const pick = <V>(a: readonly V[]) => a[Math.floor(rand() * a.length)];
   const st = STYLES[family] ?? STYLES.Latin;
@@ -291,6 +299,18 @@ export function generateFlag(seedText: string, nationColor: string, family: stri
     spec.badgeColor = luminance(under) > 0.55 ? (colors.find((c) => luminance(c) < 0.45) ?? T.red) : metal;
   }
   spec.chargeColor = contrastCharge(spec, rand() < 0.5 ? GOLD : WHITE);
+  if (hint) {
+    // Drawn after everything else, so a flag without a culture is unchanged
+    if (rand() < 0.6) spec.colors[2] = deepen(hint.color);
+    if (rand() < (spec.charge === "none" ? 0.55 : 0.8)) {
+      if (spec.charge === "none" && spec.chargePos === "center" && rand() < 0.3) {
+        spec.badge = "disc";
+        spec.badgeColor = spec.colors[1];
+      }
+      spec.charge = hint.charge;
+    }
+    if (spec.charge !== "none") spec.chargeColor = contrastCharge(spec, spec.chargeColor);
+  }
   return spec;
 }
 
@@ -312,18 +332,18 @@ function familyOf(world: WorldData, cultureId: number): string {
 export function flagOf(world: WorldData, idx: number): FlagSpec | null {
   const n = world.nations[idx];
   if (!n) return null;
-  n.flag ??= generateFlag(n.name, n.color, familyOf(world, n.cultureId ?? 0));
+  n.flag ??= generateFlag(n.name, n.color, familyOf(world, n.cultureId ?? 0), 0, cultureHint(world, n.cultureId ?? 0));
   return n.flag;
 }
 
 export function randomFlagFor(world: WorldData, idx: number): FlagSpec {
   const n = world.nations[idx];
-  return generateFlag(n.name, n.color, familyOf(world, n.cultureId ?? 0), 1 + Math.floor(Math.random() * 1e6));
+  return generateFlag(n.name, n.color, familyOf(world, n.cultureId ?? 0), 1 + Math.floor(Math.random() * 1e6), cultureHint(world, n.cultureId ?? 0));
 }
 
 export function defaultFlagFor(world: WorldData, idx: number): FlagSpec {
   const n = world.nations[idx];
-  return generateFlag(n.name, n.color, familyOf(world, n.cultureId ?? 0));
+  return generateFlag(n.name, n.color, familyOf(world, n.cultureId ?? 0), 0, cultureHint(world, n.cultureId ?? 0));
 }
 
 // --- Rendering ---

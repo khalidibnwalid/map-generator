@@ -227,6 +227,18 @@ export interface Culture {
   color: string;
   centerX: number;
   centerY: number;
+  raceId?: number; // the race whose language family the culture speaks
+  logo?: string; // custom logo image as a data URL
+  logoSpec?: FlagSpec; // edited emblem design; absent = generated from the name
+  logoSeed?: number; // reroll of the generated emblem
+}
+
+// A people (Arabian, Hungarian...): a language family with its own territory layer
+export interface Race {
+  id: number;
+  name: string;
+  color: string;
+  family: string; // language family key, see names.ts
 }
 
 export interface Religion {
@@ -260,6 +272,7 @@ export interface CellData {
   provinceIndex?: number;
   isNationBorder?: boolean;
   cultureIndex?: number;
+  raceIndex?: number;
   religionIndex?: number;
 }
 
@@ -279,11 +292,13 @@ export class WorldData {
   public cities: City[] = [];
   public cultures: Culture[] = [];
   public religions: Religion[] = [];
+  public races: Race[] = [];
   public languages: Language[] = []; // one per culture, runtime only
   public pois: Poi[] = [];
   public seaRoutes: SeaRoute[] = [];
   public currents: CurrentField | null = null;
   public resources: Resource[] = [];
+  public culturesEdited = false; // cultures differ from what the seed generates
   public roadsEdited = false; // roads differ from what the seed generates
   public poisEdited = false; // landmarks were placed, renamed or removed
   // relations[a][b], symmetric except Vassal/Overlord pairs

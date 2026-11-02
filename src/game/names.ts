@@ -13,7 +13,7 @@ interface Family {
   names?: string[]; // traditional given names, mixed in with generated ones
 }
 
-const FAMILIES: Family[] = [
+const BASE_FAMILIES: Family[] = [
   {
     key: "Germanic",
     onsets: ["Al", "Bran", "Dor", "Eis", "Falk", "Gr", "Hal", "Kr", "Lin", "Mar", "Ost", "Rot", "St", "Wal", "Wolf", "Ul"],
@@ -87,6 +87,105 @@ const FAMILIES: Family[] = [
   },
 ];
 
+// Peoples that are never rolled by world generation (so existing seeds keep
+// their cultures); they can be chosen when editing a culture
+const EXTRA_FAMILIES: Family[] = [
+  {
+    key: "Magyar",
+    onsets: ["Bak", "Deb", "Esz", "Gyul", "Kal", "Mis", "Sze", "Tat", "Vesz", "Zal", "Nyir", "Hod", "Bek", "Sar"],
+    middles: ["a", "e", "o", "i"],
+    endings: ["vár", "háza", "falva", "tó", "hely", "kő"],
+    townSuffixes: ["vár", "háza", "falva", "tó", "hely", "egyháza"],
+    nationSuffixes: ["ország", "föld", "a"],
+    governments: ["Kingdom", "Principality", "Grand Principality", "Banate", "Voivodeship"],
+    given: ["án", "ló", "os", "ás", "mér", "ek"],
+    names: ["István", "László", "Béla", "Géza", "Árpád", "Kálmán", "Ferenc", "Mátyás", "Zoltán", "Gyula", "Andor", "Levente"],
+  },
+  {
+    key: "Persian",
+    onsets: ["Far", "Gol", "Ham", "Isf", "Kash", "Mash", "Nish", "Shir", "Tab", "Yaz", "Zan", "Bam", "Ker", "Rez"],
+    middles: ["a", "i", "u", "ab", "an"],
+    endings: ["abad", "shahr", "stan", "jan", "dasht", "kuh", "rud", "pur"],
+    townSuffixes: ["abad", "shahr", "pur", "jan", "dasht", "kuh", "rud"],
+    nationSuffixes: ["stan", "shahr", "an", "istan"],
+    governments: ["Shahdom", "Empire", "Satrapy", "Kingdom", "Emirate"],
+    given: ["shid", "dad", "zad", "vash", "bod", "an"],
+    names: ["Dariush", "Cyrus", "Kaveh", "Bahram", "Rostam", "Arash", "Farhad", "Shapur", "Khosrow", "Mehrdad", "Babak", "Kourosh"],
+  },
+  {
+    key: "Indian",
+    onsets: ["Am", "Bha", "Chan", "Dev", "Gan", "Jai", "Kan", "Lak", "Mah", "Nag", "Pra", "Raj", "Sur", "Var", "Uj"],
+    middles: ["a", "i", "u", "an", "ar"],
+    endings: ["pur", "nagar", "abad", "garh", "ganj", "vati", "pali", "giri"],
+    townSuffixes: ["pur", "nagar", "garh", "ganj", "vati", "pura", "giri"],
+    nationSuffixes: ["a", "vartha", "desh", "pradesh"],
+    governments: ["Raj", "Kingdom", "Mahajanapada", "Sultanate", "Empire"],
+    given: ["endra", "deva", "raj", "an", "esh", "ik", "ant"],
+    names: ["Arjun", "Rohan", "Vikram", "Aditya", "Karan", "Sanjay", "Rahul", "Ashok", "Chandra", "Harsha", "Bharat", "Ravi"],
+  },
+  {
+    key: "African",
+    onsets: ["Ab", "Bam", "Dak", "Gao", "Kum", "Lag", "Mal", "Nia", "Oyo", "Seg", "Tim", "Zan", "Ife", "Kan", "Wag"],
+    middles: ["a", "o", "u", "an", "em"],
+    endings: ["ba", "gu", "ko", "ana", "uru", "ndi", "ala", "wa"],
+    townSuffixes: ["ba", "gu", "ko", "ana", "ndi", "ala", "wa"],
+    nationSuffixes: ["land", "ia", "ana", "gu"],
+    governments: ["Kingdom", "Empire", "Confederacy", "Chiefdom", "Sultanate"],
+    given: ["u", "a", "ko", "ndo", "mba", "ye", "ba"],
+    names: ["Kofi", "Kwame", "Amadou", "Sundiata", "Mansa", "Oba", "Chike", "Tendai", "Jabari", "Sekou", "Idris", "Zuberi"],
+  },
+  {
+    key: "Steppe",
+    onsets: ["Alt", "Bat", "Chin", "Dag", "Gur", "Khan", "Mog", "Orh", "Sar", "Tem", "Ulu", "Yes", "Bor", "Kul"],
+    middles: ["a", "u", "o", "ag", "ur"],
+    endings: ["gai", "tai", "bator", "khan", "ur", "orum", "gol", "sar"],
+    townSuffixes: ["gol", "tai", "orum", "sar", "gai", "ur"],
+    nationSuffixes: ["khanate", "ia", "stan", "gol"],
+    governments: ["Khanate", "Horde", "Kaganate", "Ulus", "Confederation"],
+    given: ["khan", "tai", "bek", "gei", "dai", "mur"],
+    names: ["Temur", "Batu", "Subutai", "Kublai", "Jochi", "Berke", "Mongke", "Ogedei", "Tolui", "Arslan", "Toghrul", "Jebe"],
+  },
+];
+
+const FAMILIES: Family[] = [...BASE_FAMILIES, ...EXTRA_FAMILIES];
+
+// How the editor describes each naming style: by the endings its places carry
+const FAMILY_LABELS: Record<string, string> = {
+  Germanic: "-burg, -dorf",
+  Latin: "-ona, -ium",
+  Slavic: "-grad, -ov",
+  Nordic: "-vik, -fjord",
+  Desert: "-abad, -iya",
+  Celtic: "-dun, -glas",
+  Eastern: "-zhou, -jin",
+  Magyar: "-vár, -háza",
+  Persian: "-shahr, -stan",
+  Indian: "-pur, -nagar",
+  African: "-ndi, -ala",
+  Steppe: "-bator, -gol",
+};
+export const familyLabel = (key: string) => FAMILY_LABELS[key] ?? key;
+
+export function mulberry(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// An invented name for a people, in the sound of a family: "Tavorai", "Skelmen"
+const PEOPLE_ENDINGS = ["ai", "en", "ori", "ith", "oi", "ek", "un", "ar", "ene", "ul", "ish", "ath"];
+export function randomRaceName(rand: () => number, familyIndex: number): string {
+  const lang = new Language(rand, familyIndex);
+  return lang.word() + PEOPLE_ENDINGS[Math.floor(rand() * PEOPLE_ENDINGS.length)];
+}
+export const FAMILY_KEYS = FAMILIES.map((f) => f.key);
+export const familyIndexOf = (key: string) => Math.max(0, FAMILY_KEYS.indexOf(key));
+
 export class Language {
   public family: Family;
   private onsets: string[];
@@ -95,7 +194,7 @@ export class Language {
   constructor(rand: () => number, familyIndex?: number) {
     this.rand = rand;
     this.family =
-      FAMILIES[familyIndex ?? Math.floor(rand() * FAMILIES.length) % FAMILIES.length];
+      FAMILIES[familyIndex ?? Math.floor(rand() * BASE_FAMILIES.length) % BASE_FAMILIES.length];
     // Each culture uses a random subset so sister cultures still differ
     this.onsets = this.family.onsets.filter(() => rand() < 0.65);
     if (this.onsets.length < 4) this.onsets = this.family.onsets.slice();
@@ -146,7 +245,7 @@ export class Language {
 
   public cultureName(): string {
     const base = this.word();
-    const forms = ["ic", "ian", "ish", "ese", "an"];
+    const forms = ["kin", "folk", "born", "clan", "guard"];
     return this.cap(base + this.pick(forms));
   }
 
@@ -158,7 +257,8 @@ export class Language {
   }
 }
 
-export const familyCount = FAMILIES.length;
+// World generation only rolls the original families
+export const familyCount = BASE_FAMILIES.length;
 
 const RELIGION_ROOTS = ["Sol", "Ast", "Vel", "Mor", "Ith", "Ka", "Ner", "Ys", "Thal", "Or", "Zan", "Eld"];
 const RELIGION_FORMS = ["ism", "ianism", "ite Faith", " Covenant", " Way", " Mysteries", " Creed"];

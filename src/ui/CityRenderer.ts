@@ -467,7 +467,9 @@ export class CityRenderer {
       const alpha = a0 * tierFade;
       const hovered = city.nationIndex === this.hoveredNationIndex;
       const base = city.isCapital ? 1.3 : city.size === 2 ? 1.0 : city.size === 1 ? 0.8 : 0.4;
-      const r = Math.max(1, Math.min(city.isCapital ? 6 : 4.5, base * scale));
+      // The hovered realm's capital is drawn a bit larger, so it is easy to find
+      const grow = hovered && city.isCapital ? 1.8 : 1;
+      const r = Math.max(1, Math.min(city.isCapital ? 6 : 4.5, base * scale)) * grow + (grow > 1 ? 1.5 : 0);
       ctx.globalAlpha = alpha * (hovered ? 1 : city.isCapital ? 0.85 : 0.6);
       ctx.beginPath();
       ctx.arc(sx, sy, r, 0, Math.PI * 2);

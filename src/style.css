@@ -3227,3 +3227,139 @@ input[type="color"]::-moz-color-swatch {
   -webkit-appearance: none;
   margin: 0;
 }
+
+.culture-details {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 2px 0 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--well);
+}
+
+.culture-race {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.culture-race select {
+  flex: 1;
+  max-width: 170px;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--ink-hover);
+  color: var(--text);
+  font: inherit;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.culture-facts {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.culture-facts b {
+  color: var(--text);
+  font-weight: 600;
+  text-align: right;
+}
+
+.culture-spans {
+  font-size: 11px;
+}
+
+.culture-logo {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.culture-logo.big {
+  width: 52px;
+  height: 52px;
+}
+
+.culture-logo-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.culture-logo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.culture-logo {
+  cursor: pointer;
+}
+
+.fe-preview .le-canvas {
+  width: 180px;
+  height: 180px;
+  border-radius: 50%;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+.logo-editor .fe-thumb canvas {
+  width: 44px;
+  height: 44px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+}
+
+.nation-item.hovered {
+  background: rgba(255, 214, 90, 0.16);
+  box-shadow: inset 3px 0 0 #ffd65a;
+}
+
+/* A layer drawn over the first one as stripes */
+.pick.overlay {
+  border-style: dashed;
+  border-color: var(--accent);
+  background: repeating-linear-gradient(135deg, transparent 0 6px, var(--accent-soft) 6px 9px);
+}
+
+.fs-map-modes {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.fs-map-modes button {
+  flex: 1;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.fs-map-modes button:hover {
+  border-color: var(--line-strong);
+}
+
+.fs-map-modes button.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}

@@ -1,5 +1,5 @@
 import type { GeneratorContext } from "./types";
-import { Language, familyCount, religionName, hslHex } from "../names";
+import { Language, familyCount, familyIndexOf, mulberry, randomRaceName, religionName, hslHex } from "../names";
 import { growRegions, fillUnreached, pickSpacedSeeds, warpOwnerArray } from "../util/regionGrow";
 import { yieldFrame } from "../util/grid";
 
@@ -65,6 +65,23 @@ export async function generateCultures(ctx: GeneratorContext): Promise<void> {
     });
   });
 
+  // --- Races: one per language family in use (derived, so no random draws) ---
+  const raceOfFamily = new Map<string, number>();
+  world.races = [];
+  const raceRand = mulberry(world.seed ^ 0x51ed270b); // its own stream: generation is unaffected
+  const raceNames = new Set<string>();
+  world.cultures.forEach((culture, id) => {
+    const key = world.languages[id].family.key;
+    if (!raceOfFamily.has(key)) {
+      raceOfFamily.set(key, world.races.length);
+      let raceName = randomRaceName(raceRand, familyIndexOf(key));
+      for (let k = 0; k < 8 && raceNames.has(raceName); k++) raceName = randomRaceName(raceRand, familyIndexOf(key));
+      raceNames.add(raceName);
+      world.races.push({ id: world.races.length, name: raceName, color: hslHex((world.races.length * 83 + 12) % 360, 0.5, 0.58), family: key });
+    }
+    culture.raceId = raceOfFamily.get(key);
+  });
+
   // --- Religions ---
   const religionCount = Math.max(2, Math.min(9, Math.round(cultureCount / 3)));
   const religionSeeds = pickSpacedSeeds(world, noise.random, religionCount, 90 * resScale, density);
@@ -101,6 +118,7 @@ export async function generateCultures(ctx: GeneratorContext): Promise<void> {
       const i = y * W + x;
       const cell = world.grid[x][y];
       cell.cultureIndex = cultureOwner[i] >= 0 ? cultureOwner[i] : undefined;
+      cell.raceIndex = cell.cultureIndex !== undefined ? world.cultures[cell.cultureIndex].raceId : undefined;
       cell.religionIndex = religionOwner[i] >= 0 ? religionOwner[i] : undefined;
     }
   }

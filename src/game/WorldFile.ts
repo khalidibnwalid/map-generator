@@ -1,5 +1,7 @@
 import type { MapGenerator, Preset } from "./MapGenerator";
-import type { City, Nation, Province, RelationType, Road, WorldData } from "./WorldData";
+import type { City, Culture, Nation, Province, Race, RelationType, Road, WorldData } from "./WorldData";
+import { Language, familyIndexOf } from "./names";
+import { seededRand } from "./sim/Rulers";
 import type { Poi } from "./generators/generatePOIs";
 import { DEFAULT_SETTINGS, type WorldSettings } from "./generators/types";
 import { computeTrade } from "./generators/generateTrade";
@@ -62,6 +64,10 @@ interface WorldFileData {
   roads?: string; // only when edits changed the road network
   pois?: Poi[]; // only when landmarks were edited
   year?: number; // simulated year, so ruler ages carry on after loading
+  cultures?: (Culture & { family: string })[]; // only when cultures were edited
+  cultureGrid?: string; // RLE + base64 of per-cell culture index (-1 none)
+  races?: Race[];
+  raceGrid?: string; // same encoding, per-cell race index
   guide?: SavedGuide; // imported picture the terrain was shaped from
   sim?: SavedSimData; // year-by-year history, battles and chronicle
 }
@@ -257,9 +263,20 @@ export async function saveWorld(generator: MapGenerator, sim?: SavedSim | null):
     for (let b = 0; b < n; b++) rel += Math.max(0, RELATION_CODES.indexOf(world.relations[a]?.[b] ?? "Neutral"));
 
   const customSettings = (Object.keys(DEFAULT_SETTINGS) as (keyof WorldSettings)[]).some((k) => generator.settings[k] !== DEFAULT_SETTINGS[k]);
+  let cultureGrid: Int32Array | undefined;
+  let raceGrid: Int32Array | undefined;
+  if (world.culturesEdited) {
+    cultureGrid = new Int32Array(N);
+    raceGrid = new Int32Array(N);
+    for (let x = 0; x < W; x++)
+      for (let y = 0; y < world.height; y++) {
+        cultureGrid[y * W + x] = world.grid[x][y].cultureIndex ?? -1;
+        raceGrid[y * W + x] = world.grid[x][y].raceIndex ?? -1;
+      }
+  }
   const data: WorldFileData = {
     format: FORMAT,
-    version: generator.guide || customSettings ? VERSION : 1,
+    version: generator.guide || customSettings || world.culturesEdited ? VERSION : 1,
     seed: generator.currentSeed,
     preset: generator.currentPreset,
     greatPowers: generator.greatPowers,
@@ -275,6 +292,10 @@ export async function saveWorld(generator: MapGenerator, sim?: SavedSim | null):
     roads: world.roadsEdited ? encodeRoads(world.worldRoads) : undefined,
     pois: world.poisEdited ? world.pois : undefined,
     year: world.year || undefined,
+    cultures: cultureGrid ? world.cultures.map((c, i) => ({ ...c, family: world.languages[i]?.family.key ?? "Latin" })) : undefined,
+    cultureGrid: cultureGrid ? rleEncode(cultureGrid) : undefined,
+    races: raceGrid ? world.races : undefined,
+    raceGrid: raceGrid ? rleEncode(raceGrid) : undefined,
     guide: generator.guide ? await encodeGuide(generator.guide) : undefined,
     sim: sim && sim.history.frames.length ? encodeSim(sim) : undefined,
   };
@@ -329,6 +350,27 @@ export async function loadWorld(
       c.nationIndex = nationGrid[y * W + x];
       c.provinceIndex = provinceGrid[y * W + x];
     }
+  }
+  // Edited cultures replace the generated ones; each gets its language back from its race
+  if (data.cultures && data.cultureGrid) {
+    const grid = rleDecode(data.cultureGrid, N);
+    world.cultures = data.cultures.map(({ family: _family, ...c }) => c);
+    world.languages = data.cultures.map((c, i) => new Language(seededRand(world.seed ^ (i * 7919) ^ (familyIndexOf(c.family) * 104729)), familyIndexOf(c.family)));
+    for (let x = 0; x < W; x++)
+      for (let y = 0; y < world.height; y++) {
+        const v = grid[y * W + x];
+        world.grid[x][y].cultureIndex = v >= 0 ? v : undefined;
+      }
+    if (data.races && data.raceGrid) {
+      world.races = data.races;
+      const rg = rleDecode(data.raceGrid, N);
+      for (let x = 0; x < W; x++)
+        for (let y = 0; y < world.height; y++) {
+          const v = rg[y * W + x];
+          world.grid[x][y].raceIndex = v >= 0 ? v : undefined;
+        }
+    }
+    world.culturesEdited = true;
   }
   // Border flags follow the restored ownership
   for (let x = 0; x < W; x++) {

@@ -53,6 +53,7 @@ export class PosterDialog {
   private scope: Scope = "world";
   private picked = new Set<number>();
   private vassals = true;
+  private layers: "live" | "cultures" | "races" | "both" = "live";
   private size = 4096;
   private format: Format = "png";
   private decor: Record<DecorKey, boolean> = { title: true, compass: true, scaleBar: true, legend: true, frame: true, flags: false };
@@ -91,6 +92,15 @@ export class PosterDialog {
                 <span class="pd-count" id="pd-count"></span>
               </div>
               ${switchRow("pd-vassals", "Include vassals", true)}
+            </div>
+            <div class="field">
+              <div class="field-label">Map layers</div>
+              ${seg("layers", [
+                { value: "live", label: "As shown" },
+                { value: "cultures", label: "Cultures" },
+                { value: "races", label: "Races" },
+                { value: "both", label: "Both" },
+              ])}
             </div>
             <div class="field">
               <div class="field-label">Size <span class="pd-dims" id="pd-dims"></span></div>
@@ -151,6 +161,7 @@ export class PosterDialog {
         const v = b.dataset.value!;
         const key = el.dataset.key;
         if (key === "scope") this.scope = v as Scope;
+        else if (key === "layers") this.layers = v as typeof this.layers;
         else if (key === "size") this.size = Number(v);
         else if (key === "format") this.format = v as Format;
         this.sync();
@@ -259,6 +270,7 @@ export class PosterDialog {
         .querySelectorAll<HTMLElement>(`.pd-seg[data-key="${key}"] .pick`)
         .forEach((b) => b.classList.toggle("active", b.dataset.value === value));
     mark("scope", this.scope);
+    mark("layers", this.layers);
     mark("size", String(this.size));
     mark("format", this.format);
     $("pd-nations").style.display = this.scope === "nations" ? "flex" : "none";
@@ -334,7 +346,11 @@ export class PosterDialog {
       frame: this.decor.frame,
       flags: this.decor.flags,
       theme: this.host.mapTheme(),
-      thematic: this.host.thematicMode(),
+      thematic: this.layers === "cultures" || this.layers === "both" ? "cultures" : this.layers === "races" ? "races" : this.host.thematicMode(),
+      layers:
+        this.layers === "live"
+          ? undefined
+          : { thematic: this.layers === "races" ? "races" : "cultures", thematic2: this.layers === "both" ? "races" : undefined },
       imprint: `Seed ${world.seed} · ${world.width} × ${world.height} cells of 5 km${year > 0 ? ` · Year ${year}` : ""}`,
     };
   }

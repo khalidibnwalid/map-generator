@@ -17,6 +17,8 @@ export interface MapView {
   offsetY: number;
   pixelRatio: number;
   keep?: Set<number> | null; // nations drawn vividly; other land is dimmed
+  thematic?: ThematicMode; // layer to draw instead of the live map's (with thematic2 striped over it)
+  thematic2?: ThematicMode;
   waitForCities?: boolean; // wait (bounded) for detailed city plans in view
   onProgress?: (fraction: number, label: string) => void;
   canceled?: () => boolean;

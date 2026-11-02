@@ -4,6 +4,7 @@ import { RELATION_COLORS } from "../game/generators/generateDiplomacy";
 import { RESOURCE_INFO, WEALTH_TIERS, type ResourceKind } from "../game/generators/generateEconomy";
 import { relation } from "../game/politics";
 import type { SimEvent } from "../game/sim/Simulation";
+import type { ThematicMode } from "../core/GPURenderer";
 import { downloadBlob, escapeHtml, fileSlug, frameExtent, nationsExtent, type AtlasHost } from "./AtlasRender";
 import { loadPosterFonts } from "./PosterDecor";
 
@@ -31,6 +32,7 @@ interface Facts {
   topCities: City[];
   provinces: number;
   cultures: Share[];
+  races: Share[];
   resources: { label: string; color: string; count: number }[];
   wealthTier: string;
   wealthRank: number;
@@ -59,6 +61,7 @@ function computeFacts(host: AtlasHost, idx: number): Facts {
   const W = world.width;
   const H = world.height;
   const cult = new Map<number, number>();
+  const racesOn = new Map<number, number>();
   const border = new Map<number, number>();
   let land = 0;
   for (let x = 0; x < W; x++) {
@@ -77,6 +80,7 @@ function computeFacts(host: AtlasHost, idx: number): Facts {
       if (a !== idx || world.waterType[y * W + x] !== 0) continue;
       land++;
       if ((c.cultureIndex ?? -1) >= 0) cult.set(c.cultureIndex!, (cult.get(c.cultureIndex!) ?? 0) + 1);
+      if ((c.raceIndex ?? -1) >= 0) racesOn.set(c.raceIndex!, (racesOn.get(c.raceIndex!) ?? 0) + 1);
     }
   }
   const shares = (m: Map<number, number>, list: { name: string; color: string }[]): Share[] => {
@@ -132,6 +136,7 @@ function computeFacts(host: AtlasHost, idx: number): Facts {
     topCities: [...own].sort((a, b) => b.population - a.population).slice(0, 5),
     provinces: world.provinces.filter((p) => p.nationIndex === idx).length,
     cultures: shares(cult, world.cultures),
+    races: shares(racesOn, world.races),
     resources: [...res.entries()]
       .sort((a, b) => RESOURCE_INFO[b[0]].value - RESOURCE_INFO[a[0]].value || b[1] - a[1])
       .map(([k, n]) => ({ label: RESOURCE_INFO[k].label, color: RESOURCE_INFO[k].color, count: n })),
@@ -162,6 +167,8 @@ export class FactSheet {
   private map: HTMLCanvasElement | null = null;
   private mapJob: Promise<void> | null = null;
   private token = 0;
+  // Which layers the realm's map shows: as in the app, or its cultures / races
+  private mapLayer: "live" | "cultures" | "races" | "both" = "live";
 
   constructor(host: AtlasHost) {
     this.host = host;
@@ -180,6 +187,11 @@ export class FactSheet {
       const t = e.target as HTMLElement;
       if (t.closest("#fs-close, #fs-close-2")) this.close();
       else if (t.closest("#fs-export")) this.exportImage();
+      else if (t.closest("[data-maplayer]")) {
+        this.mapLayer = t.closest<HTMLElement>("[data-maplayer]")!.dataset.maplayer as FactSheet["mapLayer"];
+        this.root.querySelectorAll<HTMLElement>("[data-maplayer]").forEach((b) => b.classList.toggle("active", b.dataset.maplayer === this.mapLayer));
+        if (this.facts) this.renderMap(this.host.getWorld(), this.facts.idx);
+      }
       else {
         const link = t.closest<HTMLElement>("[data-nation]");
         if (link) this.open(Number(link.dataset.nation));
@@ -235,6 +247,7 @@ export class FactSheet {
         offsetY: -ext.y0 * scale,
         pixelRatio: pr,
         keep,
+        ...this.layerView(),
         canceled: () => token !== this.token,
       })
       .then(() => {
@@ -248,6 +261,13 @@ export class FactSheet {
         console.error(err);
         holder.classList.remove("loading");
       });
+  }
+
+  private layerView(): { thematic?: ThematicMode; thematic2?: ThematicMode } {
+    if (this.mapLayer === "cultures") return { thematic: "cultures" };
+    if (this.mapLayer === "races") return { thematic: "races" };
+    if (this.mapLayer === "both") return { thematic: "cultures", thematic2: "races" };
+    return {};
   }
 
   private renderDom(world: WorldData, f: Facts) {
@@ -302,7 +322,8 @@ export class FactSheet {
             ${f.overlord !== null && world.nations[f.overlord] ? row("Overlord", link(f.overlord)) : ""}
             ${f.vassals.length ? row("Vassals", `<span class="fs-links">${f.vassals.map(link).join("")}</span>`) : ""}
           </dl>
-          <section><h3>Peoples</h3>${bars(f.cultures)}</section>
+          <section><h3>Cultures</h3>${bars(f.cultures)}</section>
+          <section><h3>Races</h3>${bars(f.races)}</section>
           <section><h3>Resources</h3>${
             f.resources.length
               ? `<div class="fs-chips">${f.resources
@@ -312,7 +333,12 @@ export class FactSheet {
           }</section>
         </div>
         <div class="fs-col">
-          <figure class="fs-map-fig"><div class="fs-map" id="fs-map"></div><figcaption>The realm of ${escapeHtml(f.name)}</figcaption></figure>
+          <figure class="fs-map-fig"><div class="fs-map" id="fs-map"></div>
+            <div class="fs-map-modes" title="Which layers the map shows">${(
+              [["live", "As shown"], ["cultures", "Cultures"], ["races", "Races"], ["both", "Both"]] as const
+            )
+              .map(([k, label]) => `<button type="button" data-maplayer="${k}" class="${this.mapLayer === k ? "active" : ""}">${label}</button>`)
+              .join("")}</div><figcaption>The realm of ${escapeHtml(f.name)}</figcaption></figure>
           <section><h3>Largest cities</h3>${
             f.topCities.length
               ? `<ol class="fs-cities">${f.topCities
@@ -545,7 +571,8 @@ function paintSheet(ctx: CanvasRenderingContext2D, world: WorldData, f: Facts, m
     }
     yl += 10;
   };
-  bars("Peoples", f.cultures);
+  bars("Cultures", f.cultures);
+  bars("Races", f.races);
   yl = heading("Resources", lx, yl);
   if (f.resources.length) {
     let cx = lx;

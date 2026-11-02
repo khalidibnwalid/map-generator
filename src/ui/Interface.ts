@@ -6,6 +6,8 @@ import { GPURenderer, type MapTheme, type ThematicMode } from "../core/GPURender
 import { TooltipManager } from "./TooltipManager";
 import { LabelRenderer } from "./LabelRenderer";
 import { NationsManager } from "./NationsManager";
+import { CulturesManager } from "./CulturesManager";
+import { RacesManager } from "./RacesManager";
 import { UIManager } from "./UIManager";
 import { CityRenderer } from "./CityRenderer";
 import { NetworkRenderer } from "./NetworkRenderer";
@@ -23,6 +25,7 @@ import { WorldData } from "../game/WorldData";
 import { RELATION_COLORS } from "../game/generators/generateDiplomacy";
 import { blocOf } from "../game/politics";
 import { nationFlagUrl } from "../game/flags";
+import { familyLabel } from "../game/names";
 import { installSliders, syncSliders } from "./components/Slider";
 import { Simulation, type SimEvent } from "../game/sim/Simulation";
 import { viewStats, type SnapNation } from "../game/sim/History";
@@ -123,7 +126,7 @@ export class Interface {
   private replay: Replay | null = null;
   private simFilter = "all";
   private exportingGif = false;
-  private activeTab: "generate" | "layers" | "nations" | "build" | "history" | "file" = "generate";
+  private activeTab: "generate" | "layers" | "nations" | "cultures" | "races" | "build" | "history" | "file" = "generate";
   private buildTool!: BuildTool;
   private sim: Simulation | null = null;
   private simTimer = 0;
@@ -138,6 +141,9 @@ export class Interface {
   private warPicking = false; // next map click chooses the army's realm
   private theme: MapTheme = "Realistic";
   private thematic: ThematicMode = "none";
+  private thematic2: ThematicMode = "none"; // a second layer drawn over it as stripes
+  private thematic2Key = "";
+  private thematicLocked = false; // an export is drawing its own layers
   private thematicFocus = -2; // nation the diplomacy texture was built for
   private exporting = false; // a poster or fact-sheet map is being rendered
   private renderChain: Promise<void> = Promise.resolve();
@@ -150,6 +156,10 @@ export class Interface {
   private tooltipManager!: TooltipManager;
   private labelRenderer!: LabelRenderer;
   private nationsManager!: NationsManager;
+  private culturesManager!: CulturesManager;
+  private racesManager!: RacesManager;
+  // A culture or race row under the mouse: its land is highlighted, whatever layers are on
+  private hoverHighlight: { kind: "cultures" | "races"; id: number } | null = null;
   private uiManager!: UIManager;
   private cityRenderer!: CityRenderer;
   private networkRenderer = new NetworkRenderer();
@@ -188,6 +198,35 @@ export class Interface {
         this.uiManager,
         this.cityRenderer,
       );
+      this.culturesManager = new CulturesManager(this.generator, this.canvasManager, this.uiManager);
+      this.racesManager = new RacesManager(this.generator, this.canvasManager, this.uiManager);
+      const hookPeople = (m: CulturesManager | RacesManager, kind: "cultures" | "races") => {
+        m.onChanged = () => {
+          this.thematicFocus = -2;
+          this.canvasManager.scheduleRender();
+        };
+        m.onHover = (id) => {
+          this.hoverHighlight = id >= 0 ? { kind, id } : null;
+          this.canvasManager.scheduleRender();
+        };
+        m.onEditToggle = (on) => {
+          this.canvasManager.panningLocked = on;
+          this.canvasManager.canvas.style.cursor = on ? "default" : "grab";
+          if (on) {
+            // Show the layer being painted
+            const sel = document.getElementById("thematic") as HTMLSelectElement | null;
+            if (sel && sel.value !== kind) {
+              if (sel.dataset.secondary === kind) sel.dataset.secondary = "";
+              sel.value = kind;
+              sel.dispatchEvent(new Event("change"));
+              refreshPickers();
+            }
+          }
+          this.canvasManager.scheduleRender();
+        };
+      };
+      hookPeople(this.culturesManager, "cultures");
+      hookPeople(this.racesManager, "races");
       this.buildTool = new BuildTool(this.generator, this.nationsManager);
       this.buildTool.onChanged = () => {
         const sel = this.buildTool.selected;
@@ -253,6 +292,13 @@ export class Interface {
     this.renderSimPanel();
     this.gpuRenderer.updateWorldTexture(world);
     this.gpuRenderer.updateProvincesDataTexture(world);
+    for (const m of [this.culturesManager, this.racesManager]) {
+      m?.setEditing(false);
+      if (m) m.selected = -1;
+    }
+    this.hoverHighlight = null;
+    if (this.activeTab === "cultures") this.culturesManager?.renderList();
+    if (this.activeTab === "races") this.racesManager?.renderList();
     this.nationsManager.nationsStateDirty = true;
     this.nationsManager.hoveredNationIndex = -1;
     this.nationsManager.selectedNationIndex = -1;
@@ -284,6 +330,10 @@ export class Interface {
       ) {
         this.canvasManager.canvas.style.cursor = "crosshair";
         this.updateTooltipBar();
+      } else if (this.peopleEditor()) {
+        const pm = this.peopleEditor()!;
+        if (pm.isPainting) pm.handlePainting(e.clientX, e.clientY);
+        this.canvasManager.scheduleRender(); // brush overlay
       } else if (!this.nationsManager.isEditingNations) {
         this.updateHover(e.clientX, e.clientY);
       } else if (this.activeTab === "nations" && this.nationsManager.isEditingNations) {
@@ -375,11 +425,29 @@ export class Interface {
         this.nationsManager.selectedNationIndex =
           !cell.isWater && (cell.nationIndex ?? -1) >= 0 ? cell.nationIndex! : -1;
         this.canvasManager.scheduleRender();
+      } else if (!dragged && wy >= 0 && wy < world.height && !this.nationsManager.isEditingNations && !this.peopleEditor()) {
+        // Plain click on a realm selects it; the Nations list scrolls to it
+        const cell = world.grid[Math.floor(x)][wy];
+        const owner = cell.isWater ? -1 : (cell.nationIndex ?? -1);
+        if (owner >= 0 && owner !== this.nationsManager.selectedNationIndex) {
+          this.nationsManager.selectedNationIndex = owner;
+          this.nationsManager.selectedProvinceIndex = -1;
+          if (this.activeTab === "nations") {
+            this.nationsManager.renderList();
+            this.nationsManager.revealSelected();
+          }
+          this.canvasManager.scheduleRender();
+        }
       }
     });
 
     canvas.addEventListener("mousedown", (e) => {
       this.pointerDown = { x: e.clientX, y: e.clientY };
+      const pm = this.peopleEditor();
+      if (pm && e.button === 0 && !e.shiftKey) {
+        pm.startPainting();
+        pm.handlePainting(e.clientX, e.clientY);
+      }
       if (
         this.activeTab === "nations" &&
         this.nationsManager.isEditingNations &&
@@ -430,6 +498,8 @@ export class Interface {
     window.addEventListener("mouseup", () => {
       isAttemptingPaint = false;
       this.nationsManager.stopPainting();
+      this.culturesManager.stopPainting();
+      this.racesManager.stopPainting();
     });
 
     canvas.addEventListener("mouseleave", () => {
@@ -499,8 +569,8 @@ export class Interface {
     }
 
     // --- Rail tabs: one panel at a time; clicking the open one closes it ---
-    const tabs = ["generate", "layers", "nations", "build", "history", "file"] as const;
-    const titles = { generate: "World", layers: "Layers", nations: "Nations", build: "Build", history: "History", file: "File" };
+    const tabs = ["generate", "layers", "nations", "cultures", "races", "build", "history", "file"] as const;
+    const titles = { generate: "World", layers: "Layers", nations: "Nations", cultures: "Cultures", races: "Races", build: "Build", history: "History", file: "File" };
     tabs.forEach((tab) => {
       const btn = document.getElementById(`tab-${tab}`);
       const content = document.getElementById(`content-${tab}`);
@@ -522,7 +592,15 @@ export class Interface {
           content.classList.add("active");
           const title = document.getElementById("panel-title");
           if (title) title.textContent = titles[tab];
-          if (tab === "nations") this.nationsManager.renderList();
+          if (tab === "nations") {
+            this.nationsManager.renderList();
+            this.nationsManager.revealSelected();
+          }
+          if (tab !== "cultures") this.culturesManager.setEditing(false);
+          else this.culturesManager.renderList();
+          if (tab !== "races") this.racesManager.setEditing(false);
+          else this.racesManager.renderList();
+          this.hoverHighlight = null;
           if (tab === "build") this.buildTool.render();
           if (tab === "history") {
             this.renderWarRoom();
@@ -642,6 +720,7 @@ export class Interface {
     const thematicSelect = document.getElementById("thematic") as HTMLSelectElement | null;
     thematicSelect?.addEventListener("change", () => {
       this.thematic = thematicSelect.value as ThematicMode;
+      this.thematic2 = (thematicSelect.dataset.secondary || "none") as ThematicMode;
       this.thematicFocus = -2;
       this.updateLegend();
       this.canvasManager.scheduleRender();
@@ -1377,21 +1456,105 @@ export class Interface {
     } else if (log) log.innerHTML = '<p class="muted">Nothing has happened yet.</p>';
   }
 
+  // The culture or race manager whose tab is open and in paint mode
+  private peopleEditor(): CulturesManager | RacesManager | null {
+    const m = this.activeTab === "cultures" ? this.culturesManager : this.activeTab === "races" ? this.racesManager : null;
+    return m?.isEditing ? m : null;
+  }
+
+  // The thematic mode actually drawn: a hovered culture or race row highlights
+  // its land with stripes over whatever is shown
+  private drawnThematic(): ThematicMode {
+    return this.thematic;
+  }
+
+  // The land to highlight: a hovered culture or race row (hovered realms are drawn by the map shader)
+  private activeHighlight(): { kind: "cultures" | "races"; id: number } | null {
+    return this.hoverHighlight;
+  }
+
   // Rebuilds the thematic overlay texture when the mode or focus changes
   private refreshThematic(world: WorldData) {
-    if (this.thematic === "none") return;
-    const focus =
-      this.thematic === "diplomacy"
-        ? this.nationsManager.selectedNationIndex >= 0
-          ? this.nationsManager.selectedNationIndex
-          : this.nationsManager.hoveredNationIndex
-        : -1;
+    if (this.thematicLocked) return;
+    // -2 means "data changed": the overlapping layer is rebuilt too, then the flag
+    // becomes -3, which still forces the primary rebuild but isn't seen again
+    if (this.thematicFocus === -2) {
+      this.thematic2Key = "";
+      this.thematicFocus = -3;
+    }
+    this.refreshSecondary(world);
+    if (this.thematic === "none") {
+      this.thematicMode = "none";
+      return;
+    }
+    if (this.thematic === "off") {
+      // Nothing drawn: an empty overlay also keeps the nation fill hidden
+      if (this.thematicMode === "off" && this.thematicFocus === -1) return;
+      this.thematicFocus = -1;
+      this.thematicMode = "off";
+      this.gpuRenderer.updateThematicTexture(world, () => null);
+      return;
+    }
+    const focus = this.diplomacyFocus(this.thematic);
     const key = this.thematic === "diplomacy" ? focus : -1;
     if (this.thematicFocus === key && this.thematicMode === this.thematic) return;
     this.thematicFocus = key;
     this.thematicMode = this.thematic;
+    const paint = this.thematicPainter(world, this.thematic, focus);
+    if (paint) this.gpuRenderer.updateThematicTexture(world, paint);
+    if (this.thematic === "diplomacy" || this.thematic2 === "diplomacy") this.updateLegend();
+  }
 
-    if (this.thematic === "wealth") {
+  // The nation a diplomacy layer centers on (pinned, else hovered)
+  private diplomacyFocus(mode: ThematicMode): number {
+    if (mode !== "diplomacy") return -1;
+    return this.nationsManager.selectedNationIndex >= 0 ? this.nationsManager.selectedNationIndex : this.nationsManager.hoveredNationIndex;
+  }
+
+  // Textures for an export's own layers; the live view repaints its own afterwards
+  private paintOverride(world: WorldData, mode: ThematicMode, mode2: ThematicMode) {
+    const painter = (m: ThematicMode) => (m === "none" || m === "off" ? null : this.thematicPainter(world, m, this.diplomacyFocus(m)));
+    const p1 = painter(mode);
+    if (p1) this.gpuRenderer.updateThematicTexture(world, p1);
+    const p2 = painter(mode2);
+    this.gpuRenderer.thematic2 = p2 ? mode2 : "none";
+    if (p2) this.gpuRenderer.updateThematicTexture(world, p2, 2);
+  }
+
+  // The overlapping second layer, drawn as stripes over the first
+  private refreshSecondary(world: WorldData) {
+    // A hovered culture or race row is striped over whatever is shown (the
+    // layers and nation colors underneath stay as they are)
+    const hl = this.activeHighlight();
+    if (hl) {
+      const key = `hl:${hl.kind}:${hl.id}`;
+      if (this.thematic2Key === key) return;
+      this.thematic2Key = key;
+      const entity = hl.kind === "cultures" ? world.cultures[hl.id] : world.races[hl.id];
+      const rgb = entity ? hexRgb(entity.color) : ([255, 220, 120] as [number, number, number]);
+      this.gpuRenderer.thematic2 = hl.kind;
+      this.gpuRenderer.updateThematicTexture(
+        world,
+        (x, y) => {
+          const cell = world.grid[x][y];
+          return (hl.kind === "cultures" ? cell.cultureIndex : cell.raceIndex) === hl.id ? [rgb[0], rgb[1], rgb[2], 255] : null;
+        },
+        2,
+      );
+      return;
+    }
+    const mode = this.thematic2;
+    const key = `${mode}:${this.diplomacyFocus(mode)}`;
+    if (this.thematic2Key === key) return;
+    this.thematic2Key = key;
+    const paint = mode === "none" || mode === "off" ? null : this.thematicPainter(world, mode, this.diplomacyFocus(mode));
+    this.gpuRenderer.thematic2 = paint ? mode : "none";
+    if (paint) this.gpuRenderer.updateThematicTexture(world, paint, 2);
+  }
+
+  // How each thematic layer colors a cell (null where it draws nothing)
+  private thematicPainter(world: WorldData, mode: ThematicMode, focus: number): ((x: number, y: number) => [number, number, number, number] | null) | null {
+    if (mode === "wealth") {
       // Province wealth: its settlements' wealth per unit of land
       const pw = new Float32Array(world.provinces.length);
       for (const c of world.cities) if ((c.provinceIndex ?? -1) >= 0) pw[c.provinceIndex!] += (c.wealth ?? 0) * (1 + c.size);
@@ -1410,26 +1573,27 @@ export class Interface {
         const b = t < 0.5 ? 100 - t * 60 : 70 - (t - 0.5) * 80;
         return [Math.round(r), Math.round(g), Math.round(b), 210] as [number, number, number, number];
       });
-      this.gpuRenderer.updateThematicTexture(world, (x, y) => {
+      return (x, y) => {
         const p = world.grid[x][y].provinceIndex ?? -1;
         return p >= 0 && ramp[p] ? ramp[p] : null;
-      });
-    } else if (this.thematic === "cultures") {
-      const list = world.cultures;
-      const colors = list.map((c) => hexRgb(c.color));
-      this.gpuRenderer.updateThematicTexture(world, (x, y) => {
+      };
+    }
+    if (mode === "races" || mode === "cultures") {
+      const colors = (mode === "races" ? world.races : world.cultures).map((e) => hexRgb(e.color));
+      return (x, y) => {
         const cell = world.grid[x][y];
-        const id = cell.cultureIndex;
+        const id = mode === "races" ? cell.raceIndex : cell.cultureIndex;
         if (id === undefined || id < 0 || !colors[id]) return null;
         const c = colors[id];
         return [c[0], c[1], c[2], 200];
-      });
-    } else {
+      };
+    }
+    if (mode === "diplomacy") {
       const relColors = Object.fromEntries(
         Object.entries(RELATION_COLORS).map(([k, v]) => [k, hexRgb(v)]),
       ) as Record<string, [number, number, number]>;
       const neutral = hexRgb("#b9b4a6");
-      this.gpuRenderer.updateThematicTexture(world, (x, y) => {
+      return (x, y) => {
         const n = world.grid[x][y].nationIndex ?? -1;
         if (n < 0 || n >= world.nations.length) return null;
         if (focus < 0) return [neutral[0], neutral[1], neutral[2], 120];
@@ -1437,9 +1601,9 @@ export class Interface {
         const rel = world.relations[focus]?.[n] ?? "Neutral";
         const c = relColors[rel];
         return [c[0], c[1], c[2], 200];
-      });
-      this.updateLegend();
+      };
     }
+    return null;
   }
   private thematicMode: ThematicMode = "none";
 
@@ -1447,38 +1611,46 @@ export class Interface {
     const el = document.getElementById("map-legend");
     if (!el) return;
     const world = this.generator.getWorld();
-    if (this.thematic === "none") {
-      el.style.display = "none";
-      return;
-    }
     const row = (color: string, text: string) =>
       `<div class="legend-row"><span class="legend-swatch" style="background:${color}"></span><span>${text}</span></div>`;
-    let html = "";
-    if (this.thematic === "cultures") {
-      html = `<div class="legend-title">Cultures</div>` +
-        world.cultures
-          .map((c) => row(c.color, `${c.name} <span style="opacity:.6">(${world.languages[c.id]?.family.key ?? ""})</span>`))
-          .join("");
-    } else if (this.thematic === "wealth") {
-      html =
-        '<div class="legend-title">Provincial wealth</div>' +
-        row("rgb(120,110,100)", "Poorest") +
-        row("rgb(160,180,70)", "Average") +
-        row("rgb(240,200,30)", "Richest") +
-        '<div class="legend-hint">From resources, harbors, rivers and trade</div>';
-    } else {
-      const focus =
-        this.nationsManager.selectedNationIndex >= 0
-          ? this.nationsManager.selectedNationIndex
-          : this.nationsManager.hoveredNationIndex;
-      const nation = world.nations[focus];
-      html =
-        `<div class="legend-title">Diplomacy${nation ? ` · ${nation.name}` : ""}</div>` +
-        row("#e6be3c", "Focus nation") +
-        Object.entries(RELATION_COLORS)
-          .map(([k, v]) => row(v, k))
-          .join("") +
-        `<div class="legend-hint">${nation ? `${nation.government ?? ""}` : "Hover a nation · click to pin"}</div>`;
+    const legendFor = (mode: ThematicMode): string => {
+      if (mode === "races") {
+        return `<div class="legend-title">Races</div>` +
+          world.races.map((r) => row(r.color, `${r.name} <span style="opacity:.6">(${familyLabel(r.family)})</span>`)).join("");
+      }
+      if (mode === "cultures") {
+        return `<div class="legend-title">Cultures</div>` +
+          world.cultures
+            .map((c) => row(c.color, `${c.name} <span style="opacity:.6">(${familyLabel(world.languages[c.id]?.family.key ?? "")})</span>`))
+            .join("");
+      }
+      if (mode === "wealth") {
+        return (
+          '<div class="legend-title">Provincial wealth</div>' +
+          row("rgb(120,110,100)", "Poorest") +
+          row("rgb(160,180,70)", "Average") +
+          row("rgb(240,200,30)", "Richest") +
+          '<div class="legend-hint">From resources, harbors, rivers and trade</div>'
+        );
+      }
+      if (mode === "diplomacy") {
+        const nation = world.nations[this.diplomacyFocus("diplomacy")];
+        return (
+          `<div class="legend-title">Diplomacy${nation ? ` · ${nation.name}` : ""}</div>` +
+          row("#e6be3c", "Focus nation") +
+          Object.entries(RELATION_COLORS)
+            .map(([k, v]) => row(v, k))
+            .join("") +
+          `<div class="legend-hint">${nation ? `${nation.government ?? ""}` : "Hover a nation · click to pin"}</div>`
+        );
+      }
+      return "";
+    };
+    // The overlapping layer is drawn as stripes, so its key says so
+    const html = [legendFor(this.thematic), this.thematic2 !== "none" ? legendFor(this.thematic2).replace("legend-title\">", "legend-title\">Stripes · ") : ""].filter(Boolean).join("");
+    if (!html) {
+      el.style.display = "none";
+      return;
     }
     el.innerHTML = html;
     el.style.display = "block";
@@ -1605,9 +1777,55 @@ export class Interface {
       ctx.restore();
     }
 
+    // --- Locator: a hovered Nations-list row whose capital is off screen gets an edge arrow ---
+    {
+      const hn = this.nationsManager.hoveredNationIndex;
+      const nat = hn >= 0 && this.nationsManager.hoverSource === "list" && !this.replay ? world.nations[hn] : undefined;
+      if (nat) {
+        const cx = (nat.capitalX + 0.5) * scale;
+        const cy = (nat.capitalY + 0.5) * scale + offsetY;
+        // The nearest copy of the (wrapping) world to the screen's center
+        const span = world.width * scale;
+        const sx0 = cx + offsetX;
+        const sx = sx0 + Math.round((width / 2 - sx0) / span) * span;
+        ctx.save();
+        ctx.font = "700 13px Inter, system-ui, sans-serif";
+        ctx.textAlign = "center";
+        const inside = sx > 30 && sx < width - 30 && cy > 30 && cy < height - 30;
+        if (!inside) {
+          // Off screen: an arrow on the edge, pointing toward it
+          const mx = width / 2;
+          const my = height / 2;
+          const ang = Math.atan2(cy - my, sx - mx);
+          const k = Math.min((width / 2 - 36) / Math.max(1e-3, Math.abs(Math.cos(ang))), (height / 2 - 36) / Math.max(1e-3, Math.abs(Math.sin(ang))));
+          const ax = mx + Math.cos(ang) * k;
+          const ay = my + Math.sin(ang) * k;
+          ctx.translate(ax, ay);
+          ctx.rotate(ang);
+          ctx.beginPath();
+          ctx.moveTo(14, 0);
+          ctx.lineTo(-10, -11);
+          ctx.lineTo(-10, 11);
+          ctx.closePath();
+          ctx.fillStyle = "#ffd65a";
+          ctx.strokeStyle = "rgba(20, 16, 11, 0.9)";
+          ctx.lineWidth = 3;
+          ctx.stroke();
+          ctx.fill();
+          ctx.rotate(-ang);
+          ctx.lineWidth = 4;
+          ctx.strokeText(nat.name, 0, Math.sin(ang) > 0.5 ? -20 : 26);
+          ctx.fillStyle = "#ffe9a8";
+          ctx.fillText(nat.name, 0, Math.sin(ang) > 0.5 ? -20 : 26);
+        }
+        ctx.restore();
+      }
+    }
+
     // --- Brush Overlay ---
     if (
-      this.nationsManager.isEditingNations &&
+      ((this.activeTab === "nations" && this.nationsManager.isEditingNations) ||
+        this.peopleEditor()) &&
       !this.canvasManager.isInteracting &&
       !this.tooltipManager.isVisible
     ) {
@@ -1618,7 +1836,7 @@ export class Interface {
 
         ctx.save();
         ctx.beginPath();
-        const radius = (this.nationsManager.brushSize * scale) / 2;
+        const radius = ((this.peopleEditor()?.brushSize ?? this.nationsManager.brushSize) * scale) / 2;
         ctx.arc(sx, sy, radius, 0, Math.PI * 2);
         ctx.strokeStyle = "rgba(212, 168, 90, 0.9)";
         ctx.lineWidth = 2;
@@ -1644,6 +1862,8 @@ export class Interface {
     const hoveredNation =
       !replay && this.nationsManager.hoveredNationIndex < world.nations.length ? this.nationsManager.hoveredNationIndex : -1;
     this.gpuRenderer.hoverBloc = hoveredNation >= 0 ? blocOf(world, hoveredNation) : [];
+    const head = world.nations[this.gpuRenderer.hoverBloc[0]];
+    this.gpuRenderer.hoverBlocColor = head ? (hexRgb(head.color).map((c) => c / 255) as [number, number, number]) : [1, 1, 1];
     this.gpuRenderer.season = this.seasonMonth / 12;
     this.gpuRenderer.time = (performance.now() - this.weatherStart) / 1000;
     this.gpuRenderer.render(
@@ -1660,7 +1880,7 @@ export class Interface {
       this.nationsManager.hoveredProvinceIndex,
       world.seed,
       this.theme,
-      this.thematic,
+      this.drawnThematic(),
       hoveredNation >= 0
         ? (hexRgb(world.nations[hoveredNation].color).map((c) => c / 255) as [number, number, number])
         : [1, 1, 1],
@@ -1759,7 +1979,14 @@ export class Interface {
       this.nationsManager.nationsStateDirty = false;
       this.thematicFocus = -2;
     }
-    this.refreshThematic(world);
+    // An export may ask for its own layers (a realm's cultures, races...)
+    const ovr = v.thematic !== undefined;
+    const mode: ThematicMode = ovr ? v.thematic! : this.thematic;
+    if (ovr) {
+      this.paintOverride(world, mode, v.thematic2 ?? "none");
+      this.thematicLocked = true; // the live view must not repaint them mid-export
+    }
+    else this.refreshThematic(world);
     this.exporting = true;
     try {
       // City plans build in the background: wait (bounded) for those in view
@@ -1794,7 +2021,7 @@ export class Interface {
         gpu.pixelRatio = pr;
         gpu.frame = { x: t.x, y: t.y, w: v.w, h: v.h };
         gpu.hoverBloc = [];
-        gpu.render(t.w, t.h, world.width, world.height, v.scale, v.offsetX - t.x, v.offsetY - t.y, L, -1, -1, world.seed, this.theme, this.thematic, [1, 1, 1], false);
+        gpu.render(t.w, t.h, world.width, world.height, v.scale, v.offsetX - t.x, v.offsetY - t.y, L, -1, -1, world.seed, this.theme, mode, [1, 1, 1], false);
         ctx.drawImage(this.gpuCanvas, 0, lim.bufferH - t.h, t.w, t.h, v.x + t.x, v.y + t.y, t.w, t.h);
         gpu.pixelRatio = 1;
         gpu.frame = null;
@@ -1861,6 +2088,12 @@ export class Interface {
       this.gpuRenderer.pixelRatio = 1;
       this.gpuRenderer.frame = null;
       this.exporting = false;
+      if (ovr) {
+        // Hand the textures back to the live view
+        this.thematicLocked = false;
+        this.thematicFocus = -2;
+        this.thematic2Key = "";
+      }
       this.canvasManager.scheduleRender();
     }
   }
@@ -2024,7 +2257,8 @@ export class Interface {
 
     if (newHovered !== this.nationsManager.hoveredNationIndex) {
       this.nationsManager.hoveredNationIndex = newHovered;
-      if (this.thematic === "diplomacy" && this.nationsManager.selectedNationIndex < 0) this.updateLegend();
+      this.nationsManager.hoverSource = "map";
+      if ((this.thematic === "diplomacy" || this.thematic2 === "diplomacy") && this.nationsManager.selectedNationIndex < 0) this.updateLegend();
       this.canvasManager.scheduleRender();
 
       document.querySelectorAll(".nation-item").forEach((el) => el.classList.remove("hovered"));

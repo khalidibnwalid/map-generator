@@ -45,6 +45,7 @@ function compact(n: number): string {
 
 export class NationsManager {
   public hoveredNationIndex: number = -1;
+  public hoverSource: "list" | "map" = "map"; // where the hover came from: a list row gets a locator on the map
   public hoveredProvinceIndex: number = -1;
   public hoveredCityId: number = -1; // city row under the mouse in the list
   public selectedNationIndex: number = -1;
@@ -109,6 +110,11 @@ export class NationsManager {
     const radiusCells = (city.radiusM * 1.6) / 5000;
     const fit = (Math.min(cm.getWidth(), cm.getHeight()) * 0.45) / Math.max(radiusCells, 1e-3);
     cm.lookAt(city.x, city.y, Math.max(cm.scale, Math.min(fit, 20000)));
+  }
+
+  // Scrolls the Nations list to the selected realm (after a map click, or when the tab opens)
+  public revealSelected() {
+    document.querySelector(".nation-item.selected")?.scrollIntoView({ block: "center" });
   }
 
   public renderList() {
@@ -325,6 +331,7 @@ export class NationsManager {
       item.addEventListener("mouseenter", () => {
         if (this.isPainting) return;
         this.hoveredNationIndex = idx;
+        this.hoverSource = "list";
         this.canvasManager.scheduleRender();
       });
 

@@ -9,6 +9,8 @@ const ICONS = {
   world: icon(`<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>`),
   layers: icon(`<path d="m12 3 9 5-9 5-9-5 9-5z"/><path d="m3 13 9 5 9-5"/>`),
   nations: icon(`<path d="M5 21V4"/><path d="M5 4h11l-2 4 2 4H5"/>`),
+  cultures: icon(`<circle cx="8" cy="8" r="3"/><circle cx="16.5" cy="9.5" r="2.5"/><path d="M2.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5M14 18.5c.5-2 2-3.4 4-3.4 2 0 3.5 1.4 3.5 3.9"/>`),
+  races: icon(`<circle cx="12" cy="7" r="3"/><path d="M5 20c0-4 3-6 7-6s7 2 7 6"/><path d="M3.5 11.5c1-.7 2-.8 3-.3M20.5 11.5c-1-.7-2-.8-3-.3"/>`),
   file: icon(`<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>`),
   close: icon(`<path d="M6 6l12 12M18 6 6 18"/>`),
   dice: icon(`<rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="9" cy="9" r="1" fill="currentColor"/><circle cx="15" cy="15" r="1" fill="currentColor"/><circle cx="15" cy="9" r="1" fill="currentColor"/><circle cx="9" cy="15" r="1" fill="currentColor"/>`),
@@ -88,7 +90,10 @@ export function refreshPickers() {
   document.querySelectorAll<HTMLElement>(".picker").forEach((p) => {
     const sel = document.getElementById(p.dataset.for!) as HTMLSelectElement | null;
     if (!sel) return;
-    p.querySelectorAll<HTMLElement>(".pick").forEach((b) => b.classList.toggle("active", b.dataset.value === sel.value));
+    p.querySelectorAll<HTMLElement>(".pick").forEach((b) => {
+      b.classList.toggle("active", b.dataset.value === sel.value);
+      b.classList.toggle("overlay", !!sel.dataset.secondary && b.dataset.value === sel.dataset.secondary);
+    });
   });
 }
 
@@ -101,6 +106,8 @@ export default function renderMainApp() {
         <button id="tab-generate" class="rail-btn active" title="World">${ICONS.world}<span>World</span></button>
         <button id="tab-layers" class="rail-btn" title="Layers">${ICONS.layers}<span>Layers</span></button>
         <button id="tab-nations" class="rail-btn" title="Nations">${ICONS.nations}<span>Nations</span></button>
+        <button id="tab-cultures" class="rail-btn" title="Cultures">${ICONS.cultures}<span>Cultures</span></button>
+        <button id="tab-races" class="rail-btn" title="Races">${ICONS.races}<span>Races</span></button>
         <button id="tab-build" class="rail-btn" title="Build">${ICONS.build}<span>Build</span></button>
         <button id="tab-history" class="rail-btn" title="History">${ICONS.history}<span>History</span></button>
         <button id="tab-file" class="rail-btn" title="File">${ICONS.file}<span>File</span></button>
@@ -222,18 +229,20 @@ export default function renderMainApp() {
             </div>
 
             <div class="field">
-              <div class="field-label">Thematic map</div>
+              <div class="field-label" title="Click a layer to show it. Ctrl+click another to overlay it as stripes.">Thematic map</div>
               ${picker(
                 "thematic",
                 "grid-2 chips",
                 [
                   { value: "none", label: "Political" },
                   { value: "cultures", label: "Cultures" },
+                  { value: "races", label: "Races" },
                   { value: "diplomacy", label: "Diplomacy" },
                   { value: "wealth", label: "Wealth" },
                 ],
                 "none",
               )}
+              <p class="muted">Ctrl+click a layer to overlay it as stripes.</p>
             </div>
 
             <div class="group">
@@ -294,6 +303,22 @@ export default function renderMainApp() {
             <div id="nations-list" class="nations-list">
               <!-- Dynamically populated -->
             </div>
+          </section>
+
+          <!-- Cultures -->
+          <section id="content-cultures" class="tab-content">
+            <div class="nations-sticky">
+              <div id="cultures-head" class="nations-head"></div>
+            </div>
+            <div id="cultures-list" class="nations-list"></div>
+          </section>
+
+          <!-- Races -->
+          <section id="content-races" class="tab-content">
+            <div class="nations-sticky">
+              <div id="races-head" class="nations-head"></div>
+            </div>
+            <div id="races-list" class="nations-list"></div>
           </section>
 
           <!-- Build -->
@@ -451,7 +476,24 @@ export default function renderMainApp() {
       const btn = (e.target as HTMLElement).closest<HTMLElement>(".pick");
       const sel = document.getElementById(p.dataset.for!) as HTMLSelectElement | null;
       if (!btn || !sel) return;
-      sel.value = btn.dataset.value!;
+      if (p.dataset.for === "thematic") {
+        // A plain click picks the main layer. Ctrl+click overlays a second one as
+        // stripes (click it again to remove it)
+        const val = btn.dataset.value!;
+        const ev = e as MouseEvent;
+        let primary = sel.value;
+        let secondary = sel.dataset.secondary ?? "";
+        if (ev.ctrlKey || ev.metaKey) {
+          if (val === "none" || val === primary) return;
+          secondary = val === secondary ? "" : val;
+        } else {
+          primary = val === primary ? "off" : val; // clicking the picked layer again picks none
+          if (secondary === primary) secondary = "";
+        }
+        if (!sel.querySelector('option[value="off"]')) sel.add(new Option("None", "off"));
+        sel.value = primary;
+        sel.dataset.secondary = secondary;
+      } else sel.value = btn.dataset.value!;
       sel.dispatchEvent(new Event("change"));
       refreshPickers();
     });
