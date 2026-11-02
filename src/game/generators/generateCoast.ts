@@ -26,6 +26,29 @@ export async function generateCoast(ctx: GeneratorContext): Promise<void> {
   for (let x = 0; x < W; x++)
     for (let y = 0; y < H; y++) elev[y * W + x] = world.grid[x][y].elevation;
 
+  // --- 0. Thin land ---
+  // Plate rifts and ridges can leave long, narrow straps of land. Everything
+  // narrower than ~2r is removed, except scattered specks that stay as islets
+  // (morphological opening: erode land by r, grow the core back by r).
+  if (!ctx.guide) {
+    const r = Math.max(2, Math.round(4 * resScale));
+    const isWater0 = new Uint8Array(N);
+    for (let i = 0; i < N; i++) isWater0[i] = elev[i] < SEA_LEVEL ? 1 : 0;
+    const toWater0 = distanceTransform(W, H, isWater0).dist;
+    const core = new Uint8Array(N);
+    for (let i = 0; i < N; i++) core[i] = !isWater0[i] && toWater0[i] > r ? 1 : 0;
+    const toCore = distanceTransform(W, H, core).dist;
+    const specks = 0.64;
+    for (let x = 0; x < W; x++) {
+      for (let y = 0; y < H; y++) {
+        const i = y * W + x;
+        if (isWater0[i] || toCore[i] <= r) continue;
+        if (noise.fbmCylinder(x + 2300, y + 7700, W, 3, 0.5, 2.0, 0.09 / resScale) > specks) continue;
+        elev[i] = SEA_LEVEL - 0.03;
+      }
+    }
+  }
+
   // --- 1. Water components ---
   const water = new Uint8Array(N);
   for (let i = 0; i < N; i++) water[i] = elev[i] < SEA_LEVEL ? 1 : 0;
