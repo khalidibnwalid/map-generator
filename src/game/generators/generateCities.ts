@@ -124,6 +124,7 @@ export async function generateCities(ctx: GeneratorContext): Promise<void> {
     return false;
   };
 
+  const density = Math.max(0, ctx.settings?.settlements ?? 1);
   const totalNations = world.nations.length;
   for (let i = 0; i < totalNations; i++) {
     const nation = world.nations[i];
@@ -137,7 +138,7 @@ export async function generateCities(ctx: GeneratorContext): Promise<void> {
     validCells.sort((a, b) => b.density - a.density);
 
     let placed = 1; // 1 for capital
-    const maxCitiesPerNation = 300;
+    const maxCitiesPerNation = Math.round(300 * density);
 
     for (const cell of validCells) {
       if (placed >= maxCitiesPerNation) break;
@@ -149,7 +150,7 @@ export async function generateCities(ctx: GeneratorContext): Promise<void> {
       else if (cell.density >= 0.2) chance = 0.0012;
       else chance = 0.0001;
 
-      if (noise.random() >= chance) continue;
+      if (noise.random() >= Math.min(1, chance * density)) continue;
       const cx = cell.x + 0.5;
       const cy = cell.y + 0.5;
       if (tooClose(cx, cy)) continue;
@@ -175,7 +176,7 @@ export async function generateCities(ctx: GeneratorContext): Promise<void> {
 
     // Villages and hamlets fill the countryside, thicker where land is fertile
     for (const cell of validCells) {
-      if (noise.random() >= 0.07 * Math.pow(cell.density + 0.05, 1.2)) continue;
+      if (noise.random() >= 0.07 * density * Math.pow(cell.density + 0.05, 1.2)) continue;
       const cx = cell.x + 0.2 + noise.random() * 0.6;
       const cy = cell.y + 0.2 + noise.random() * 0.6;
       if (world.sampler.coastField(cx, cy, 6) < 0.08) continue;

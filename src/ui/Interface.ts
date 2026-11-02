@@ -17,7 +17,8 @@ import { RESOURCE_INFO, WEALTH_TIERS } from "../game/generators/generateEconomy"
 import { cityExports, cityTrade, tradeRole } from "../game/generators/generateTrade";
 import { THEMES, NIGHT_THEMES } from "./themes";
 import { MONTHS, seasonFlood } from "../core/Season";
-import { refreshPickers } from "./components/MainApp";
+import { DEFAULT_SETTINGS } from "../game/generators/types";
+import { OPTIONS, autoNations, formatOption, refreshPickers } from "./components/MainApp";
 import { WorldData } from "../game/WorldData";
 import { RELATION_COLORS } from "../game/generators/generateDiplomacy";
 import { blocOf } from "../game/politics";
@@ -763,6 +764,84 @@ export class Interface {
     seedInput.value = this.generator.currentSeed.toString();
     installSliders();
 
+    // --- Generation options: sliders with a live number ---
+    // The nations slider counts realms, so its range and default follow the map size
+    let lastAuto = autoNations(800, 450);
+    const syncNationsRange = (w: number, h: number, count?: number) => {
+      const slider = document.getElementById("opt-nations") as HTMLInputElement | null;
+      if (!slider) return;
+      const auto = autoNations(w, h);
+      const wasAuto = Number(slider.value) === lastAuto;
+      slider.max = String(auto * 2);
+      slider.value = String(count ?? (wasAuto ? auto : Math.min(Number(slider.value), auto * 2)));
+      lastAuto = auto;
+      syncOptionSliders();
+    };
+    const sizeEl = document.getElementById("size") as HTMLSelectElement | null;
+    sizeEl?.addEventListener("change", () => {
+      const [w, h] = sizeEl.value.split("x").map(Number);
+      syncNationsRange(w, h);
+    });
+    const syncOptionSliders = () => {
+      for (const o of OPTIONS) {
+        const slider = document.getElementById(`opt-${o.key}`) as HTMLInputElement | null;
+        const out = document.getElementById(`opt-${o.key}-val`);
+        if (slider && out && !out.querySelector("input")) out.textContent = formatOption(o, Number(slider.value));
+      }
+      syncSliders();
+    };
+    for (const o of OPTIONS) document.getElementById(`opt-${o.key}`)?.addEventListener("input", syncOptionSliders);
+    document.getElementById("opt-reset")?.addEventListener("click", () => {
+      for (const o of OPTIONS) {
+        const slider = document.getElementById(`opt-${o.key}`) as HTMLInputElement | null;
+        if (!slider) continue;
+        slider.min = String(o.min);
+        slider.max = String(o.max);
+        slider.value = String(o.kind === "count" ? 0 : Math.round(DEFAULT_SETTINGS[o.key] * 100));
+      }
+      const [w, h] = ((document.getElementById("size") as HTMLSelectElement | null)?.value ?? "800x450").split("x").map(Number);
+      lastAuto = autoNations(w, h);
+      syncNationsRange(w, h, lastAuto);
+    });
+    // Clicking the number swaps it for an input, so any value can be typed
+    for (const o of OPTIONS) {
+      const out = document.getElementById(`opt-${o.key}-val`);
+      const slider = document.getElementById(`opt-${o.key}`) as HTMLInputElement | null;
+      if (!out || !slider) continue;
+      out.addEventListener("click", () => {
+        if (out.querySelector("input")) return;
+        const input = document.createElement("input");
+        input.type = "number";
+        input.className = "opt-edit";
+        input.step = o.kind === "times" ? "0.05" : "1";
+        input.value = o.kind === "times" ? String(Number(slider.value) / 100) : slider.value;
+        out.textContent = "";
+        out.appendChild(input);
+        input.focus();
+        input.select();
+        let done = false;
+        const finish = (apply: boolean) => {
+          if (done) return;
+          done = true;
+          const typed = parseFloat(input.value);
+          if (apply && Number.isFinite(typed)) {
+            const v = Math.round(Math.max(o.lo, Math.min(o.hi, o.kind === "times" ? typed * 100 : typed)));
+            // The slider widens to hold a value outside its usual range
+            slider.min = String(Math.min(o.min, v));
+            slider.max = String(Math.max(Number(slider.max), v));
+            slider.value = String(v);
+          }
+          out.textContent = "";
+          syncOptionSliders();
+        };
+        input.addEventListener("blur", () => finish(true));
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") finish(true);
+          else if (e.key === "Escape") finish(false);
+        });
+      });
+    }
+
     // --- Save / open ---
     const saveBtn = document.getElementById("save-world") as HTMLButtonElement | null;
     const openBtn = document.getElementById("open-world") as HTMLButtonElement | null;
@@ -802,6 +881,11 @@ export class Interface {
         if (sizeSelect) sizeSelect.value = `${W}x${H}`;
         const powersSelect = document.getElementById("great-powers") as HTMLSelectElement | null;
         if (powersSelect) powersSelect.value = String(this.generator.greatPowers);
+        for (const o of OPTIONS) {
+          const slider = document.getElementById(`opt-${o.key}`) as HTMLInputElement | null;
+          if (slider && o.kind !== "count") slider.value = String(Math.round(this.generator.settings[o.key] * 100));
+        }
+        syncNationsRange(W, H, this.generator.settings.nations || autoNations(W, H));
         refreshPickers();
         this.guideName = file.name.replace(/\.world$/i, "");
         this.syncGuideCard();
@@ -875,6 +959,13 @@ export class Interface {
       this.generator.currentSeed = seedVal;
       const powersSelect = document.getElementById("great-powers") as HTMLSelectElement | null;
       if (powersSelect) this.generator.greatPowers = Number(powersSelect.value) || 0;
+      for (const o of OPTIONS) {
+        const slider = document.getElementById(`opt-${o.key}`) as HTMLInputElement | null;
+        if (!slider) continue;
+        const v = Number(slider.value);
+        // Nations at the size's default stays "auto", so the setting isn't pinned
+        this.generator.settings[o.key] = o.kind === "count" ? (v === autoNations(newW, newH) ? 0 : v) : v / 100;
+      }
 
       if (sizeChanged) {
         this.generator.setSize(newW, newH);

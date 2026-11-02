@@ -22,6 +22,8 @@ import {
   generateEconomy,
   generateTrade,
   type GeneratorContext,
+  type WorldSettings,
+  DEFAULT_SETTINGS,
 } from "./generators";
 
 export type Preset =
@@ -40,6 +42,7 @@ export class MapGenerator {
   public currentSeed: number;
   public isGenerating = false;
   public greatPowers = 1;
+  public settings: WorldSettings = { ...DEFAULT_SETTINGS };
   // Imported picture shaping the land; null for the preset generators
   public guide: TerrainGuide | null = null;
 
@@ -93,6 +96,7 @@ export class MapGenerator {
       height: this.height,
       preset: this.currentPreset,
       greatPowers: this.greatPowers,
+      settings: this.settings,
       guide: this.guide ? sampleGuide(this.guide, this.width, this.height, this.currentSeed) : undefined,
     };
 

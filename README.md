@@ -72,8 +72,8 @@ Zoom from a whole continent down to individual streets. Cities get procedural pl
 ## Features
 
 **World generation**
-- Earthlike tectonic continents, heavy landmass, realistic continents and Pangea presets
-- Four map sizes from 400 × 225 up to 3200 × 1800 cells
+- Giant, medium (tectonic), small and supercontinent landmass presets
+- Three map sizes from 400 × 225 up to 1600 × 900 cells
 - Shape the land from an image: a rough filled blob, a coastline sketch, a colored map or a grayscale heightmap. Blue reads as sea, browns and white as mountains, and gaps in hand-drawn outlines are bridged. Sliders add coast detail and offshore islands and set how large the picture sits on the world
 - Rivers, lakes, coast distance fields, ocean currents, polar ice
 - Rich biomes: deep ocean, taiga, steppe, marsh, savanna and more with smooth zoom transitions

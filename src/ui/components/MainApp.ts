@@ -1,5 +1,7 @@
 // use vscode extension 'es6-string-html' for your mental health :D
 
+import { DEFAULT_SETTINGS } from "../../game/generators/types";
+
 const icon = (d: string) =>
   /* html */ `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
 
@@ -48,6 +50,28 @@ const picker = (selectId: string, cls: string, options: { value: string; label: 
       .join("")}
   </div>`;
 
+// Generation options as sliders. The slider holds whole numbers; the setting
+// is that value / 100 (45 is a sea level of 0.45, 150 a multiplier of 1.5),
+// except nations, which is a plain count. Typing a number may go past the
+// slider's range, up to lo..hi
+export const OPTIONS = [
+  { key: "seaLevel", label: "Sea level", min: 35, max: 55, lo: 20, hi: 70, kind: "plain" },
+  { key: "mountains", label: "Mountain height", min: 50, max: 150, lo: 10, hi: 400, kind: "times" },
+  { key: "climate", label: "Temperature", min: -20, max: 20, lo: -50, hi: 50, kind: "signed" },
+  { key: "rainfall", label: "Rainfall", min: -20, max: 20, lo: -50, hi: 50, kind: "signed" },
+  { key: "settlements", label: "Settlements", min: 25, max: 300, lo: 0, hi: 600, kind: "times" },
+  { key: "nations", label: "Nations", min: 2, max: 120, lo: 1, hi: 1000, kind: "count" },
+] as const;
+
+// Realms a map of this size gets by default (see generateNations)
+export const autoNations = (w: number, h: number) => Math.max(1, Math.floor((w * h) / 6000));
+
+export function formatOption(o: (typeof OPTIONS)[number], v: number) {
+  if (o.kind === "times") return `×${(v / 100).toFixed(2)}`;
+  if (o.kind === "signed" && v > 0) return `+${v}`;
+  return String(v);
+}
+
 export function refreshPickers() {
   document.querySelectorAll<HTMLElement>(".picker").forEach((p) => {
     const sel = document.getElementById(p.dataset.for!) as HTMLSelectElement | null;
@@ -85,10 +109,10 @@ export default function renderMainApp() {
                 "preset",
                 "grid-2",
                 [
-                  { value: "Heavy Landmass", label: "Heavy", sub: "Large continents" },
-                  { value: "Realistic Continents", label: "Continents", sub: "Earth-like" },
-                  { value: "Earthlike", label: "Earthlike", sub: "Tectonic continents" },
-                  { value: "Pangea", label: "Pangea", sub: "One supercontinent" },
+                  { value: "Heavy Landmass", label: "Giant Continents", sub: "Huge landmasses, little sea" },
+                  { value: "Realistic Continents", label: "Small Continents", sub: "Many smaller landmasses" },
+                  { value: "Earthlike", label: "Medium Continents", sub: "Tectonic plates, ~38% land" },
+                  { value: "Pangea", label: "Supercontinent", sub: "One enormous landmass" },
                 ],
                 "Heavy Landmass",
               )}
@@ -117,7 +141,6 @@ export default function renderMainApp() {
                   { value: "400x225", label: "S" },
                   { value: "800x450", label: "M" },
                   { value: "1600x900", label: "L" },
-                  { value: "3200x1800", label: "XL" },
                 ],
                 "800x450",
               )}
@@ -137,6 +160,18 @@ export default function renderMainApp() {
                 "1",
               )}
             </div>
+
+            <details class="advanced">
+              <summary>Advanced</summary>
+              ${OPTIONS.map((o) => {
+                const def = o.kind === "count" ? autoNations(800, 450) : Math.round(DEFAULT_SETTINGS[o.key] * 100);
+                return /* html */ `<div class="field">
+                  <div class="field-label">${o.label}<span id="opt-${o.key}-val" class="opt-val" title="Click to type a value">${formatOption(o, def)}</span></div>
+                  <input type="range" id="opt-${o.key}" min="${o.min}" max="${o.max}" step="${o.kind === "times" ? 5 : 1}" value="${def}" aria-label="${o.label}" />
+                </div>`;
+              }).join("")}
+              <button type="button" id="opt-reset" class="btn-ghost">Reset settings</button>
+            </details>
 
             <div class="field">
               <div class="field-label">Seed</div>

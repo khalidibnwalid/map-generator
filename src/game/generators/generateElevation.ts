@@ -316,6 +316,22 @@ export async function generateElevation(ctx: GeneratorContext): Promise<void> {
             cell.isWater = cell.elevation < 0.45;
         }
     }
+
+    // 5. Sea level and mountain height: remap elevation, keeping 0.45 as the coast
+    const L = guide ? 0.45 : Math.max(0.2, Math.min(0.7, ctx.settings?.seaLevel ?? 0.45));
+    const k = ctx.settings?.mountains ?? 1;
+    if (L !== 0.45 || k !== 1) {
+        for (let x = 0; x < width; x++) {
+            for (let y = 0; y < height; y++) {
+                const cell = world.grid[x][y];
+                let e = cell.elevation;
+                e = e < L ? (e * 0.45) / L : 0.45 + ((e - L) * 0.55) / (1 - L);
+                if (e > 0.45) e = 0.45 + (e - 0.45) * k;
+                cell.elevation = Math.max(0, Math.min(1, e));
+                cell.isWater = cell.elevation < 0.45;
+            }
+        }
+    }
 }
 
 // Land and sea follow the imported picture. Noise only roughens the coast

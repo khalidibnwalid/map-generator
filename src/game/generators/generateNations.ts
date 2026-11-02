@@ -219,8 +219,10 @@ export async function generateNations(ctx: GeneratorContext): Promise<void> {
   };
 
   // Base number of nations based on map scale
-  const numNations = Math.floor((width * height) / 6000);
-  const minDistance = 40 * (width / 800);
+  const autoNations = Math.max(1, Math.floor((width * height) / 6000));
+  const numNations = Math.max(1, Math.round(ctx.settings?.nations || autoNations));
+  const nationScale = numNations / autoNations;
+  const minDistance = (40 * (width / 800)) / Math.sqrt(nationScale);
 
   // 1. Pick Capitals (bucketed so the spacing check stays cheap on large maps)
   const bucket = Math.max(8, Math.floor(minDistance));

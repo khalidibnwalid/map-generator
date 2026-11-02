@@ -5,6 +5,7 @@ export async function generateMoisture(ctx: GeneratorContext): Promise<void> {
     const { world, noise, width, height, onProgress } = ctx;
     const invResScale = 800 / width;
     const scale = 0.005 * invResScale;
+    const offset = ctx.settings?.rainfall ?? 0;
 
     for (let x = 0; x < width; x++) {
         if (x % 100 === 0) {
@@ -19,6 +20,8 @@ export async function generateMoisture(ctx: GeneratorContext): Promise<void> {
             if (hint !== undefined && !cell.isWater) m = m * 0.35 + hint * 0.65;
             if (cell.isWater) {
                 m += 0.5;
+            } else {
+                m += offset;
             }
             cell.moisture = Math.max(0, Math.min(1, m));
         }

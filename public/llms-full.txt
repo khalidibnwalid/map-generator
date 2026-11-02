@@ -10,8 +10,8 @@ A browser-based procedural worldbuilding tool. You choose a seed and a landmass 
 Game masters running tabletop RPG campaigns (D&D and similar), fantasy authors, game developers and worldbuilders who need a believable map with a political layer and a history.
 
 ## World generation
-- Landmass presets: Heavy Landmass, Realistic Continents, Earthlike (tectonic continents), Pangea.
-- Sizes: 400x225, 800x450, 1600x900, 3200x1800 cells (a cell is about 5 km in the example poster).
+- Landmass presets: Giant Continents, Medium Continents (tectonic), Small Continents, Supercontinent.
+- Sizes: 400x225, 800x450, 1600x900 cells (a cell is about 5 km in the example poster).
 - Rivers, lakes, coastlines, ocean currents, polar ice.
 - Biomes include deep ocean, taiga, steppe, marsh and savanna, with smooth transitions when zooming.
 - Overlays: temperature, population, moisture.

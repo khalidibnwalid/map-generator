@@ -3133,3 +3133,74 @@ input[type="color"]::-moz-color-swatch {
 .war-room[open] > summary::after {
   content: "▾";
 }
+
+.advanced {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.advanced > summary {
+  cursor: pointer;
+  list-style: none;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.advanced > summary::after {
+  content: "  +";
+}
+
+.advanced[open] > summary::after {
+  content: "  −";
+}
+
+.advanced[open] > summary {
+  margin-bottom: 14px;
+}
+
+.opt-val {
+  float: right;
+  color: var(--text, inherit);
+  font-variant-numeric: tabular-nums;
+}
+
+.opt-val {
+  cursor: text;
+}
+
+.opt-val:hover {
+  text-decoration: underline dotted;
+}
+
+.field-label:has(.opt-val) {
+  height: 16px;
+  line-height: 16px;
+}
+
+.opt-edit {
+  box-sizing: border-box;
+  width: 64px;
+  height: 16px;
+  margin: 0;
+  padding: 0 2px;
+  border-width: 1px;
+  text-align: right;
+  font: inherit;
+  line-height: 14px;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.opt-edit::-webkit-inner-spin-button,
+.opt-edit::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}

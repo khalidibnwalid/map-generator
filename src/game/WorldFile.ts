@@ -1,6 +1,7 @@
 import type { MapGenerator, Preset } from "./MapGenerator";
 import type { City, Nation, Province, RelationType, Road, WorldData } from "./WorldData";
 import type { Poi } from "./generators/generatePOIs";
+import { DEFAULT_SETTINGS, type WorldSettings } from "./generators/types";
 import { computeTrade } from "./generators/generateTrade";
 import type { TerrainGuide } from "./ImageGuide";
 import type { SavedSim } from "./sim/Simulation";
@@ -11,8 +12,8 @@ import type { SavedSim } from "./sim/Simulation";
 // then base64'd inside the JSON before compression.
 
 const FORMAT = "mapgen-world";
-// Version 2 adds the image guide; worlds without one are still written as 1
-// so older builds keep opening them
+// Version 2 adds the image guide and generation settings; worlds using
+// neither are still written as 1 so older builds keep opening them
 const VERSION = 2;
 
 interface SavedGuide {
@@ -49,6 +50,7 @@ interface WorldFileData {
   seed: number;
   preset: Preset;
   greatPowers?: number; // absent in files from before the setting (none)
+  settings?: WorldSettings; // absent in files from before the options (defaults)
   width: number;
   height: number;
   nations: Nation[];
@@ -254,12 +256,14 @@ export async function saveWorld(generator: MapGenerator, sim?: SavedSim | null):
   for (let a = 0; a < n; a++)
     for (let b = 0; b < n; b++) rel += Math.max(0, RELATION_CODES.indexOf(world.relations[a]?.[b] ?? "Neutral"));
 
+  const customSettings = (Object.keys(DEFAULT_SETTINGS) as (keyof WorldSettings)[]).some((k) => generator.settings[k] !== DEFAULT_SETTINGS[k]);
   const data: WorldFileData = {
     format: FORMAT,
-    version: generator.guide ? VERSION : 1,
+    version: generator.guide || customSettings ? VERSION : 1,
     seed: generator.currentSeed,
     preset: generator.currentPreset,
     greatPowers: generator.greatPowers,
+    settings: customSettings ? generator.settings : undefined,
     width: W,
     height: world.height,
     nations: world.nations,
@@ -291,6 +295,7 @@ export async function loadWorld(
   generator.currentSeed = data.seed;
   generator.currentPreset = data.preset;
   generator.greatPowers = data.greatPowers ?? 0;
+  generator.settings = { ...DEFAULT_SETTINGS, ...data.settings };
   generator.guide = data.guide ? await decodeGuide(data.guide) : null;
   generator.setSize(data.width, data.height);
   await generator.generate(onProgress);
