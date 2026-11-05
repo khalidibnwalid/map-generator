@@ -12,11 +12,8 @@ import { UIManager } from "./UIManager";
 import { CityRenderer } from "./CityRenderer";
 import { NetworkRenderer } from "./NetworkRenderer";
 import { PoiRenderer } from "./PoiRenderer";
-import { nearestPoi, POI_LABELS } from "../game/generators/generatePOIs";
 import { installSteppers } from "./components/NumberInput";
-import { saveWorld, loadWorld } from "../game/WorldFile";
-import { RESOURCE_INFO, WEALTH_TIERS } from "../game/generators/generateEconomy";
-import { cityExports, cityTrade, tradeRole } from "../game/generators/generateTrade";
+import { saveWorld } from "../game/WorldFile";
 import { computeTrade } from "../game/generators/generateTrade";
 import { THEMES, NIGHT_THEMES } from "./themes";
 import { MONTHS, seasonFlood } from "../core/Season";
@@ -30,11 +27,12 @@ import { familyLabel } from "../game/names";
 import { installSliders, syncSliders } from "./components/Slider";
 import { Simulation, type SimEvent } from "../game/sim/Simulation";
 import { background, toast } from "./components/Toast";
-import { recipeFromHash, recipeToHash, type WorldRecipe } from "../game/WorldLink";
+import { describePoint, describeReplayPoint, peoplePerKm2, realmAt, type TooltipContent } from "./MapTooltip";
 import { EditSession, type EditSessionHost } from "./EditSession";
+import { WorldFiles } from "./WorldFiles";
 import type { RestoreResult } from "../game/EditHistory";
 import { viewStats, type SnapNation } from "../game/sim/History";
-import { crownRulers, rulerStyle, seededRand } from "../game/sim/Rulers";
+import { crownRulers, seededRand } from "../game/sim/Rulers";
 import { BuildTool } from "./BuildTool";
 import { createDropdown } from "./components/Dropdown";
 import { dimOutside, layoutContext, yieldToUI, type AtlasHost, type MapView } from "./AtlasRender";
@@ -89,10 +87,7 @@ function hexRgb(hex: string): [number, number, number] {
   return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
 }
 
-// People per km² for a normalized density value (rural + urban mix)
-export function peoplePerKm2(d: number): number {
-  return Math.round(2 + Math.pow(Math.max(0, d), 1.6) * 160);
-}
+export { peoplePerKm2 };
 
 // Landmass names as the World tab shows them
 const PRESET_NAMES: Record<Preset, string> = {
@@ -166,6 +161,7 @@ export class Interface {
   private guideName = "";
   private factSheet: FactSheet | null = null;
   private session!: EditSession; // undo, redo and autosave
+  private files!: WorldFiles; // File tab, world links and exports
   // Set up in setupUI: the nations slider range follows the map size
   private syncNationsRange: (w: number, h: number, count?: number) => void = () => {};
 
@@ -281,8 +277,7 @@ export class Interface {
 
     this.setupUI();
     // The first world may come from a link: show its options
-    this.syncWorldControls();
-    document.getElementById("tab-file")?.addEventListener("click", () => this.syncWorldLink());
+    this.files.syncControls();
     this.canvasManager.onRender = this.renderMap.bind(this);
 
     this.setupEventListeners();
@@ -315,7 +310,7 @@ export class Interface {
         if (world.year) parts.push(`year ${world.year}`);
         return { seed: this.generator.currentSeed, title: parts.join(" · ") };
       },
-      open: (blob, name) => this.openWorld(blob, name),
+      open: (blob, name) => this.files.open(blob, name),
     };
   }
 
@@ -354,7 +349,7 @@ export class Interface {
   // `keep`: the user chose this world (generated, opened or restored), so it is autosaved
   private onWorldGenerated(keep = true) {
     this.session?.worldReplaced(keep);
-    this.syncWorldLink();
+    this.files?.syncLink();
     this.pauseSim();
     this.warAttacker = null;
     this.warPicking = false;
@@ -1083,45 +1078,26 @@ export class Interface {
       });
     }
 
-    // --- Save / open ---
-    const saveBtn = document.getElementById("save-world") as HTMLButtonElement | null;
-    const openBtn = document.getElementById("open-world") as HTMLButtonElement | null;
-    const openInput = document.getElementById("open-world-input") as HTMLInputElement | null;
-    saveBtn?.addEventListener("click", async () => {
-      const blob = await saveWorld(this.generator, this.sim?.save());
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `world-${this.generator.currentSeed}.world`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    // --- File tab: save, open, links and exports ---
+    this.files = new WorldFiles({
+      generator: this.generator,
+      canvasManager: this.canvasManager,
+      uiManager: this.uiManager,
+      simSave: () => this.sim?.save(),
+      edited: () => this.session?.edited ?? false,
+      title: () => this.editSessionHost().describe().title,
+      syncNationsRange: (w, h, count) => this.syncNationsRange(w, h, count),
+      setGuideName: (name) => (this.guideName = name),
+      syncGuideCard: () => this.syncGuideCard(),
+      worldOpened: () => {
+        this.onWorldGenerated();
+        this.nationsManager.renderList();
+      },
     });
-    openBtn?.addEventListener("click", () => openInput?.click());
-    document.getElementById("share-link")?.addEventListener("click", () => background(this.shareWorldLink(), "Sharing the link"));
-    const exportBusy = (btn: HTMLElement, work: () => Promise<void>, what: string) => {
-      if (this.generator.isGenerating || btn.classList.contains("loading")) return;
-      btn.classList.add("loading");
-      background(work().finally(() => btn.classList.remove("loading")), what);
-    };
-    const dataBtn = document.getElementById("export-data");
-    dataBtn?.addEventListener("click", () =>
-      exportBusy(dataBtn, () => import("./DataExport").then((m) => m.downloadGameExport(this.generator)), "Exporting world data"),
-    );
-    const svgBtn = document.getElementById("export-svg");
-    svgBtn?.addEventListener("click", () =>
-      exportBusy(svgBtn, () => import("./DataExport").then((m) => m.downloadSvg(this.generator, this.editSessionHost().describe().title)), "Exporting the SVG"),
-    );
-    window.addEventListener("hashchange", () => this.openWorldLink());
     document.getElementById("export-poster")?.addEventListener("click", () => {
       if (this.generator.isGenerating) return; // textures and statistics are not ready
       this.posterDialog ??= new PosterDialog(this.atlasHost());
       this.posterDialog.open(this.nationsManager.selectedNationIndex);
-    });
-    openInput?.addEventListener("change", async () => {
-      const file = openInput.files?.[0];
-      openInput.value = "";
-      if (!file) return;
-      await this.openWorld(file, file.name);
     });
 
     // --- Shape from an image ---
@@ -1215,108 +1191,6 @@ export class Interface {
         this.uiManager.setBtnLoading(false, originalText);
       }
     });
-  }
-
-  // Opens a .world file (File > Open, or the autosave) and syncs the World tab to it
-  private async openWorld(file: Blob, name: string) {
-    if (this.generator.isGenerating) return;
-    this.uiManager.showLoadingModal();
-    try {
-      await loadWorld(file, this.generator, (pct) => this.uiManager.updateLoadingModal(pct));
-      const W = this.generator.getWidth();
-      const H = this.generator.getHeight();
-      const fitScale = window.innerHeight / H;
-      this.canvasManager.scale = fitScale;
-      this.canvasManager.offsetX = (window.innerWidth - W * fitScale) / 2;
-      this.canvasManager.offsetY = 0;
-      this.syncWorldControls();
-      this.guideName = name.replace(/\.world$/i, "");
-      this.syncGuideCard();
-      this.onWorldGenerated();
-      this.nationsManager.renderList();
-    } catch (err) {
-      console.error(err);
-      await this.uiManager.confirm("OPEN WORLD", `Could not open this file: ${(err as Error).message}`);
-    } finally {
-      this.uiManager.hideLoadingModal();
-    }
-  }
-
-  // World tab controls show the generator's seed, landmass, size and options
-  private syncWorldControls(W = this.generator.getWidth(), H = this.generator.getHeight()) {
-    const seedInput = document.getElementById("seed") as HTMLInputElement | null;
-    if (seedInput) seedInput.value = this.generator.currentSeed.toString();
-    installSliders();
-    const presetSelect = document.getElementById("preset") as HTMLSelectElement | null;
-    if (presetSelect) presetSelect.value = this.generator.currentPreset;
-    const sizeSelect = document.getElementById("size") as HTMLSelectElement | null;
-    if (sizeSelect) sizeSelect.value = `${W}x${H}`;
-    const powersSelect = document.getElementById("great-powers") as HTMLSelectElement | null;
-    if (powersSelect) powersSelect.value = String(this.generator.greatPowers);
-    for (const o of OPTIONS) {
-      const slider = document.getElementById(`opt-${o.key}`) as HTMLInputElement | null;
-      if (slider && o.kind !== "count") slider.value = String(Math.round(this.generator.settings[o.key] * 100));
-    }
-    this.syncNationsRange(W, H, this.generator.settings.nations || autoNations(W, H));
-    refreshPickers();
-  }
-
-  // --- World links ---
-
-  private recipe(): WorldRecipe {
-    const g = this.generator;
-    return { seed: g.currentSeed, preset: g.currentPreset, width: g.getWidth(), height: g.getHeight(), greatPowers: g.greatPowers, settings: { ...g.settings } };
-  }
-
-  // The address bar always links to the world on screen (worlds shaped from
-  // an image can't be linked: the picture isn't in the URL)
-  private syncWorldLink() {
-    const hash = this.generator.guide ? "" : recipeToHash(this.recipe());
-    if (location.hash !== hash) history.replaceState(null, "", hash ? hash : location.pathname + location.search);
-    const btn = document.getElementById("share-link") as HTMLButtonElement | null;
-    const info = document.getElementById("share-link-info");
-    if (btn) btn.disabled = !hash;
-    if (info)
-      info.textContent = !hash
-        ? "Worlds shaped from an image can't be linked; save a .world file"
-        : this.session?.edited
-          ? "Seed and options only: your edits travel in .world files"
-          : "Anyone with the link gets this exact world";
-  }
-
-  private async shareWorldLink() {
-    if (this.generator.guide) return;
-    const url = location.origin + location.pathname + recipeToHash(this.recipe());
-    // Phones get the system share sheet; elsewhere the link is copied
-    if (navigator.share && matchMedia("(pointer: coarse)").matches) {
-      try {
-        await navigator.share({ title: "A generated world", url });
-        return;
-      } catch (e) {
-        if ((e as Error).name === "AbortError") return;
-      }
-    }
-    try {
-      await navigator.clipboard.writeText(url);
-      toast("Link copied");
-    } catch {
-      toast(url, { ms: 10000 }); // no clipboard access: show it to copy by hand
-    }
-  }
-
-  // A world link pasted into the address bar of an open tab
-  private openWorldLink() {
-    const r = recipeFromHash(location.hash);
-    if (!r || this.generator.isGenerating || recipeToHash(r) === recipeToHash(this.recipe())) return;
-    this.generator.guide = null;
-    this.syncGuideCard();
-    this.generator.currentSeed = r.seed;
-    this.generator.currentPreset = r.preset;
-    this.generator.greatPowers = r.greatPowers;
-    this.generator.settings = r.settings;
-    // The Generate button reads the controls, so set them and press it
-    this.syncWorldControls(r.width, r.height);
-    (document.getElementById("generate") as HTMLButtonElement | null)?.click();
   }
 
   // World tab: the imported picture in use, which overrides the presets
@@ -2532,156 +2406,31 @@ export class Interface {
     const world = this.generator.getWorld();
     const cm = this.canvasManager;
     const rect = cm.canvas.getBoundingClientRect();
-    const sx = clientX - rect.left;
-    const sy = clientY - rect.top;
-    const fx = (sx - cm.offsetX) / cm.scale;
-    const fy = (sy - cm.offsetY) / cm.scale;
-    const wy = Math.floor(fy);
-    const x = ((Math.floor(fx) % world.width) + world.width) % world.width;
+    const fx = (clientX - rect.left - cm.offsetX) / cm.scale;
+    const fy = (clientY - rect.top - cm.offsetY) / cm.scale;
+    const show = (c: TooltipContent | null) => (c ? this.tooltipManager.show(clientX, clientY, c.title, c.text, c.icon) : this.tooltipManager.hide());
     // Replay: name the realm that held this ground in the shown year
-    const replay = this.replay;
-    if (replay) {
+    if (this.replay) {
       this.nationsManager.hoveredNationIndex = -1;
-      const k = wy >= 0 && wy < world.height && !world.sampler.isWater(fx, fy) ? replay.owner[wy * world.width + x] : -1;
-      const s = replay.nations[k];
-      if (!s) {
-        this.tooltipManager.hide();
-        return;
-      }
-      const over = replay.nations.find((o) => o.uid === s.overlord);
-      const lines = [`In the year ${replay.year}`];
-      if (s.ruler) lines.push(`Ruled by ${s.ruler}`);
-      if (over) lines.push(`Vassal of ${over.name}`);
-      this.tooltipManager.show(clientX, clientY, s.name, lines.join("\n"), nationFlagUrl(replay.world, k, 24, 16));
+      show(describeReplayPoint(world, this.replay, fx, fy));
       return;
     }
-    let newHovered = -1;
-    let cell = null;
-    const onLand = wy >= 0 && wy < world.height && !world.sampler.isWater(fx, fy);
-    if (wy >= 0 && wy < world.height) {
-      cell = world.grid[x][wy];
-      if (onLand && cell.nationIndex !== undefined && cell.nationIndex >= 0) newHovered = cell.nationIndex;
-    }
-
-    if (newHovered !== this.nationsManager.hoveredNationIndex) {
-      this.nationsManager.hoveredNationIndex = newHovered;
+    const hovered = realmAt(world, fx, fy);
+    if (hovered !== this.nationsManager.hoveredNationIndex) {
+      this.nationsManager.hoveredNationIndex = hovered;
       this.nationsManager.hoverSource = "map";
       if ((this.thematic === "diplomacy" || this.thematic2 === "diplomacy") && this.nationsManager.selectedNationIndex < 0) this.updateLegend();
       this.canvasManager.scheduleRender();
-
       document.querySelectorAll(".nation-item").forEach((el) => el.classList.remove("hovered"));
-      if (newHovered !== -1) {
-        const item = document.querySelector(`.nation-item[data-index="${newHovered}"]`);
-        item?.classList.add("hovered");
-      }
+      if (hovered !== -1) document.querySelector(`.nation-item[data-index="${hovered}"]`)?.classList.add("hovered");
     }
-
-    if (!cell) {
-      this.tooltipManager.hide();
-      return;
-    }
-
-    // Nearby city takes priority
-    let nearestCity = null;
-    let nearestDist = Infinity;
-    for (const city of world.cities) {
-      let dx = Math.abs(fx - city.x);
-      if (dx > world.width / 2) dx = world.width - dx;
-      const dist = Math.hypot(dx, fy - city.y);
-      if (dist < nearestDist) {
-        nearestDist = dist;
-        nearestCity = city;
-      }
-    }
-    const nation = newHovered >= 0 ? world.nations[newHovered] : null;
-    const lines: string[] = [];
-    if (this.activeLayers.resources && cm.scale > 2.8) {
-      let best = null;
-      let bd = 8 / cm.scale;
-      for (const r of world.resources) {
-        let dx = Math.abs(r.x - fx);
-        if (dx > world.width / 2) dx = world.width - dx;
-        const d = Math.hypot(dx, r.y - fy);
-        if (d < bd) {
-          bd = d;
-          best = r;
-        }
-      }
-      if (best) {
-        const info = RESOURCE_INFO[best.kind];
-        const grade = best.richness > 1.2 ? "Rich" : best.richness > 0.85 ? "Good" : "Modest";
-        this.tooltipManager.show(clientX, clientY, info.label, grade + " deposit · trade value " + info.value + "/12");
-        return;
-      }
-    }
-    if (this.activeLayers.pois && cm.scale > 2.6) {
-      const poi = nearestPoi(world, fx, fy, 9 / cm.scale);
-      if (poi) {
-        const owner = world.nations[poi.nationIndex];
-        this.tooltipManager.show(clientX, clientY, poi.name, `${POI_LABELS[poi.kind]}${owner ? ` · ${owner.name}` : ""}`);
-        return;
-      }
-    }
-    if (nearestCity && nearestDist < Math.max(10 / cm.scale, (nearestCity.radiusM / 5000) * 1.1)) {
-      const owner = world.nations[nearestCity.nationIndex];
-      const kind = nearestCity.isCapital ? "♦ Capital" : nearestCity.size === 2 ? "● City" : nearestCity.size === 1 ? "● Town" : "· Village";
-      lines.push(`${kind}${owner ? ` of ${owner.name}` : ""}`);
-      lines.push(`Population ${nearestCity.population.toLocaleString()}`);
-      lines.push(`Area ~${(Math.PI * (nearestCity.radiusM / 1000) ** 2).toFixed(1)} km²${nearestCity.isPort ? " · Port" : ""}`);
-      lines.push("Wealth: " + WEALTH_TIERS[nearestCity.wealthTier ?? 2]);
-      // e.g. "Trade hub · 3 caravan routes · 1 sea lane", then exports
-      const trade = cityTrade(nearestCity);
-      const plural = (k: number, one: string) => `${k} ${one}${k === 1 ? "" : "s"}`;
-      const tradeBits = [tradeRole(trade, !!nearestCity.isPort)];
-      if (trade?.caravans) tradeBits.push(plural(trade.caravans, "caravan route"));
-      if (trade?.lanes) tradeBits.push(plural(trade.lanes, "sea lane"));
-      lines.push(tradeBits.join(" · "));
-      if (trade?.cut) lines.push(`War has cut ${plural(trade.cut, "trade route")}`);
-      const exports = cityExports(nearestCity);
-      if (exports.length) lines.push((trade && trade.volume > 0 ? "Exports " : "Produces ") + exports.join(", "));
-      const prov = world.provinces[nearestCity.provinceIndex ?? -1];
-      if (prov) lines.push(`Province: ${prov.name}`);
-      this.tooltipManager.show(clientX, clientY, nearestCity.name, lines.join("\n"));
-      return;
-    }
-
-    if (!onLand) {
-      const owner = world.nations[cell.nationIndex ?? -1];
-      const lake = world.waterType[wy * world.width + x] === 2;
-      lines.push(owner ? `${lake ? "Internal waters" : "Territorial waters"} of ${owner.name}` : "International waters");
-      lines.push(`Depth ~${Math.abs(WorldData.elevationMeters(Math.min(cell.elevation, 0.449))).toLocaleString()} m`);
-      this.tooltipManager.show(clientX, clientY, lake ? "Lake" : cell.elevation < 0.3 ? "Open Ocean" : "Sea", lines.join("\n"));
-      return;
-    }
-
-    if (nation) {
-      lines.push(`${nation.government ?? "Realm"} of ${nation.name}`);
-      const r = nation.ruler;
-      if (r) {
-        const reign = world.year - r.since;
-        lines.push(`${rulerStyle(nation)}${nation.dynasty ? ` · House of ${nation.dynasty}` : ""}`);
-        lines.push(`Age ${world.year - r.born} · ${reign < 1 ? "newly crowned" : `${reign} year${reign === 1 ? "" : "s"} on the throne`}`);
-      }
-      const prov = world.provinces[cell.provinceIndex ?? -1];
-      if (prov) lines.push(`Province: ${prov.name}${prov.area ? ` (${prov.area.toLocaleString()} km²)` : ""}`);
-      if (this.thematic === "diplomacy") {
-        const focus = this.nationsManager.selectedNationIndex;
-        if (focus >= 0 && focus !== newHovered) {
-          lines.push(`Relation with ${world.nations[focus]?.name}: ${world.relations[focus]?.[newHovered] ?? "Neutral"}`);
-        }
-      }
-    }
-    const culture = world.cultures[cell.cultureIndex ?? -1];
-    if (culture) lines.push(`Culture: ${culture.name}`);
-    lines.push(`${cell.biome} · ${WorldData.elevationMeters(cell.elevation).toLocaleString()} m · ${WorldData.temperatureC(cell.temperature)}°C`);
-    lines.push(`Density ~${peoplePerKm2(cell.populationDensity)} /km²${cell.hasRiver ? " · River" : ""}`);
-    if (nation) lines.push("Alt+click for the fact sheet");
-    this.tooltipManager.show(
-      clientX,
-      clientY,
-      nation ? nation.name : "Unclaimed Land",
-      lines.join("\n"),
-      nation ? nationFlagUrl(world, newHovered, 24, 16) : "",
+    show(
+      describePoint(world, fx, fy, {
+        scale: cm.scale,
+        resources: this.activeLayers.resources,
+        pois: this.activeLayers.pois,
+        diplomacyFocus: this.thematic === "diplomacy" ? this.nationsManager.selectedNationIndex : -1,
+      }),
     );
   }
 

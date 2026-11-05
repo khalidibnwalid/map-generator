@@ -95,6 +95,7 @@ Zoom from a whole continent down to individual streets. Cities get procedural pl
 - Dynasties and rulers, plus a filterable chronicle
 - Command your own battles with terrain-bound advances
 - Timeline replay and animated GIF export
+- What-if branches: rewind to any recorded year and let history take another course, then switch between the two timelines
 
 **Atmosphere and styles**
 - Three map styles: Realistic, Historical and Atlas
@@ -106,6 +107,10 @@ Zoom from a whole continent down to individual streets. Cities get procedural pl
 - Print-ready poster export with title, legend, compass and frame
 - Nation fact sheets
 - Save and open `.world` files
+- Undo and redo for every editor (Ctrl+Z / Ctrl+Shift+Z), and an autosave that brings your last session back
+- World links: the address bar always reproduces the world on screen (`#seed=982332&land=medium`)
+- Export for game engines: world.json, a 16-bit RAW heightmap and lookup images in one zip
+- Layered SVG export for Inkscape or Illustrator
 
 ## Run it locally
 
@@ -118,13 +123,16 @@ pnpm install
 pnpm dev
 ```
 
-Then open the URL Vite prints. A browser with **WebGL2** is required.
+Then open the URL Vite prints. A browser with **WebGL2** is required. Worlds are generated in a Web Worker, and the map works with touch: drag to pan, pinch to zoom, long-press a realm for its fact sheet.
 
 | Command        | What it does                          |
 | -------------- | ------------------------------------- |
 | `pnpm dev`     | Start the dev server                  |
 | `pnpm build`   | Type-check and build to `dist/`       |
 | `pnpm preview` | Serve the production build locally    |
+| `pnpm test`    | Determinism, save/load, undo, branching and export tests |
+| `pnpm lint`    | ESLint                                |
+| `pnpm check`   | Type-check, lint and test             |
 
 ## Deployment
 
