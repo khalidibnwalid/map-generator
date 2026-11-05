@@ -2,6 +2,8 @@ import { NoiseEngine } from "../core/NoiseEngine";
 import { WorldData } from "./WorldData";
 import { yieldFrame } from "./util/grid";
 import { sampleGuide, type TerrainGuide } from "./ImageGuide";
+import { unpackWorld } from "./WorldTransfer";
+import type { WorkerMessage } from "./generate.worker";
 import {
   generateElevation,
   generateCoast,
@@ -33,6 +35,20 @@ export type Preset =
   | "Pangea"
   | "Landworld";
 
+// Everything a generation depends on, as sent to the worker
+export interface GenerateRequest {
+  width: number;
+  height: number;
+  seed: number;
+  preset: Preset;
+  greatPowers: number;
+  settings: WorldSettings;
+  guide: TerrainGuide | null;
+}
+
+// The worker could not start at all (blocked, unsupported): generate here instead
+class WorkerUnavailable extends Error {}
+
 export class MapGenerator {
   private width: number;
   private height: number;
@@ -46,6 +62,9 @@ export class MapGenerator {
   public settings: WorldSettings = { ...DEFAULT_SETTINGS };
   // Imported picture shaping the land; null for the preset generators
   public guide: TerrainGuide | null = null;
+  // Generate in a Web Worker when the platform has one (browsers); tests and
+  // the worker itself run the stages in place
+  public useWorker = typeof Worker !== "undefined" && typeof window !== "undefined";
 
   constructor(width: number, height: number, seed: number) {
     this.width = width;
@@ -72,17 +91,67 @@ export class MapGenerator {
   public async generate(onProgress?: (pct: number) => void) {
     this.isGenerating = true;
     try {
+      if (this.useWorker) {
+        try {
+          return await this.generateInWorker(onProgress);
+        } catch (e) {
+          if (!(e instanceof WorkerUnavailable)) throw e;
+          console.warn("[MapGenerator] Worker unavailable, generating on the main thread:", e.message);
+          this.useWorker = false;
+        }
+      }
       return await this.runStages(onProgress);
     } finally {
       this.isGenerating = false;
     }
   }
 
+  private generateInWorker(onProgress?: (pct: number) => void): Promise<WorldData> {
+    const request: GenerateRequest = {
+      width: this.width,
+      height: this.height,
+      seed: this.currentSeed,
+      preset: this.currentPreset,
+      greatPowers: this.greatPowers,
+      settings: { ...this.settings },
+      guide: this.guide,
+    };
+    return new Promise<WorldData>((resolve, reject) => {
+      const worker = new Worker(new URL("./generate.worker.ts", import.meta.url), { type: "module", name: "world-generation" });
+      let started = false;
+      const finish = () => worker.terminate();
+      worker.onmessage = (e: MessageEvent<WorkerMessage>) => {
+        const m = e.data;
+        started = true;
+        if (m.type === "progress") onProgress?.(m.pct);
+        else if (m.type === "error") {
+          finish();
+          const err = new Error(m.message);
+          if (m.stack) err.stack = m.stack;
+          reject(err);
+        } else {
+          finish();
+          const { world, noise } = unpackWorld(m.packed);
+          this.world = world;
+          this.noise = noise;
+          resolve(world);
+        }
+      };
+      worker.onerror = (e) => {
+        finish();
+        // Before any message the worker failed to load; after, generation crashed
+        const msg = e.message || "worker failed";
+        reject(started ? new Error(msg) : new WorkerUnavailable(msg));
+      };
+      worker.postMessage(request);
+    });
+  }
+
   private async runStages(onProgress?: (pct: number) => void) {
     onProgress?.(0);
     // Let the loading state paint (rAF never fires in background tabs, hence the timeout)
     await new Promise((r) => {
-      requestAnimationFrame(r);
+      if (typeof requestAnimationFrame === "function") requestAnimationFrame(r);
       setTimeout(r, 50);
     });
 

@@ -200,6 +200,19 @@ export class Language {
     if (this.onsets.length < 4) this.onsets = this.family.onsets.slice();
   }
 
+  // What the language drew at creation, so it can be rebuilt elsewhere
+  // without drawing again (see WorldTransfer)
+  public get spec(): { family: number; onsets: string[] } {
+    return { family: FAMILIES.indexOf(this.family), onsets: this.onsets.slice() };
+  }
+  public static revive(spec: { family: number; onsets: string[] }, rand: () => number): Language {
+    const l = Object.create(Language.prototype) as Language;
+    l.rand = rand;
+    l.family = FAMILIES[spec.family];
+    l.onsets = spec.onsets.slice();
+    return l;
+  }
+
   private pick<T>(arr: T[]): T {
     return arr[Math.floor(this.rand() * arr.length)];
   }

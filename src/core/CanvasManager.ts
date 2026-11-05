@@ -10,6 +10,13 @@ export class CanvasManager {
     private isDragging: boolean = false;
     private lastX: number = 0;
     private lastY: number = 0;
+    // Fingers on the map (touch and pen), by pointer id
+    private touches = new Map<number, { x: number; y: number }>();
+    private pinch: { dist: number; midX: number; midY: number } | null = null;
+    // Two fingers are down: editors ignore the gesture, it only moves the view
+    public get isPinching() {
+        return this.touches.size >= 2;
+    }
 
     // Render callback hook
     public isInteracting: boolean = false;
@@ -37,7 +44,82 @@ export class CanvasManager {
         this.scheduleRender();
     }
 
+    // Zoom by `factor` keeping screen point (sx, sy) fixed
+    public zoomAt(factor: number, sx: number, sy: number) {
+        const MAX_SCALE = 250000; // ~2 cm per pixel (1 cell = 5 km)
+        if (this.scale * factor > MAX_SCALE) factor = MAX_SCALE / this.scale;
+        this.offsetX = sx - (sx - this.offsetX) * factor;
+        this.offsetY = sy - (sy - this.offsetY) * factor;
+        this.scale *= factor;
+        this.setInteracting();
+    }
+
+    // Touch: one finger pans (unless an editor holds the map), two fingers
+    // pinch-zoom and pan together, editor or not. Mice keep their own handlers.
+    private setupTouch() {
+        const c = this.canvas;
+        c.style.touchAction = 'none'; // the page itself must not scroll or zoom
+        const pinchState = () => {
+            const [a, b] = [...this.touches.values()];
+            return { dist: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)), midX: (a.x + b.x) / 2, midY: (a.y + b.y) / 2 };
+        };
+        c.addEventListener('pointerdown', (e) => {
+            if (e.pointerType === 'mouse') return;
+            this.touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+            try {
+                c.setPointerCapture(e.pointerId); // keep the finger when it slides over a panel
+            } catch {
+                /* pointer already gone */
+            }
+            if (this.touches.size === 2) {
+                this.pinch = pinchState();
+                this.isDragging = false;
+            } else if (this.touches.size === 1 && !this.panningLocked) {
+                this.isDragging = true;
+                this.lastX = e.clientX;
+                this.lastY = e.clientY;
+            }
+            this.setInteracting();
+        });
+        c.addEventListener('pointermove', (e) => {
+            const t = this.touches.get(e.pointerId);
+            if (!t) return;
+            t.x = e.clientX;
+            t.y = e.clientY;
+            if (this.touches.size >= 2 && this.pinch) {
+                const now = pinchState();
+                const rect = c.getBoundingClientRect();
+                // Pan with the midpoint, zoom about it
+                this.offsetX += now.midX - this.pinch.midX;
+                this.offsetY += now.midY - this.pinch.midY;
+                this.zoomAt(now.dist / this.pinch.dist, now.midX - rect.left, now.midY - rect.top);
+                this.pinch = now;
+            } else if (this.isDragging && this.touches.size === 1) {
+                this.offsetX += e.clientX - this.lastX;
+                this.offsetY += e.clientY - this.lastY;
+                this.lastX = e.clientX;
+                this.lastY = e.clientY;
+                this.setInteracting();
+            }
+        });
+        const lift = (e: PointerEvent) => {
+            if (!this.touches.delete(e.pointerId)) return;
+            if (this.touches.size < 2) this.pinch = null;
+            if (this.touches.size === 1 && !this.panningLocked) {
+                // The remaining finger carries on panning from where it is
+                const [t] = [...this.touches.values()];
+                this.isDragging = true;
+                this.lastX = t.x;
+                this.lastY = t.y;
+            } else if (this.touches.size === 0) this.isDragging = false;
+            this.scheduleHighResRender();
+        };
+        c.addEventListener('pointerup', lift);
+        c.addEventListener('pointercancel', lift);
+    }
+
     private setupEvents() {
+        this.setupTouch();
         // Prevent context menu to allow right-click panning
         this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
@@ -45,22 +127,12 @@ export class CanvasManager {
             // Fast enough to go from continent to street level in a few flicks
             const zoomSensitivity = 0.0018;
             const wheelDelta = Math.max(-300, Math.min(300, e.deltaY));
-            let zoomFactor = Math.exp(-wheelDelta * zoomSensitivity);
-            const MAX_SCALE = 250000; // ~2 cm per pixel (1 cell = 5 km)
-            if (this.scale * zoomFactor > MAX_SCALE) zoomFactor = MAX_SCALE / this.scale;
-
             // Zoom towards mouse position
-            const mouseX = e.clientX - this.canvas.offsetLeft;
-            const mouseY = e.clientY - this.canvas.offsetTop;
-
-            this.offsetX = mouseX - (mouseX - this.offsetX) * zoomFactor;
-            this.offsetY = mouseY - (mouseY - this.offsetY) * zoomFactor;
-            this.scale *= zoomFactor;
-
-            this.setInteracting();
+            this.zoomAt(Math.exp(-wheelDelta * zoomSensitivity), e.clientX - this.canvas.offsetLeft, e.clientY - this.canvas.offsetTop);
         });
 
         this.canvas.addEventListener('mousedown', (e) => {
+            if (this.touches.size || (e as MouseEvent & { sourceCapabilities?: { firesTouchEvents?: boolean } }).sourceCapabilities?.firesTouchEvents) return;
             // allowing right-click (2) or middle-click (1) to pan even if locked
             // Also allow left-click (0) with Shift key to pan even if locked
             if (this.panningLocked && e.button === 0 && !e.shiftKey) return;

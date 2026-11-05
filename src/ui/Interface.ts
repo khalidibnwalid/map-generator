@@ -397,9 +397,54 @@ export class Interface {
     let isAttemptingPaint = false;
 
     const canvas = this.canvasManager.canvas;
-    canvas.addEventListener("mousemove", (e) => {
+    const stopAllPainting = () => {
+      isAttemptingPaint = false;
+      this.nationsManager.stopPainting();
+      this.culturesManager.stopPainting();
+      this.racesManager.stopPainting();
+    };
+    // Touch: a long press is the finger's Alt+click (fact sheet), or its
+    // right-click while building (remove)
+    let pressTimer = 0;
+    const cancelPress = () => {
+      clearTimeout(pressTimer);
+      pressTimer = 0;
+    };
+    const longPress = (clientX: number, clientY: number) => {
+      pressTimer = 0;
+      if (this.canvasManager.isPinching) return;
+      const cm = this.canvasManager;
+      const rect = cm.canvas.getBoundingClientRect();
+      const world = this.generator.getWorld();
+      const fx = (clientX - rect.left - cm.offsetX) / cm.scale;
+      const fy = (clientY - rect.top - cm.offsetY) / cm.scale;
+      const x = ((fx % world.width) + world.width) % world.width;
+      const wy = Math.floor(fy);
+      if (wy < 0 || wy >= world.height) return;
+      stopAllPainting();
+      if (this.activeTab === "build") {
+        this.buildTool.remove(this.buildTool.pick(x, fy, cm.scale));
+        return;
+      }
+      const n = world.sampler.isWater(fx, fy) ? -1 : (world.grid[Math.floor(x)][wy].nationIndex ?? -1);
+      if (n >= 0) {
+        this.tooltipManager.hide();
+        this.showFacts(n);
+        navigator.vibrate?.(15);
+      }
+    };
+
+    canvas.addEventListener("pointermove", (e) => {
+      if (pressTimer && Math.hypot(e.clientX - this.pointerDown.x, e.clientY - this.pointerDown.y) > 8) cancelPress();
+      // Two fingers move the view; nothing under them is edited
+      if (this.canvasManager.isPinching) {
+        cancelPress();
+        stopAllPainting();
+        return;
+      }
       this.lastMouseX = e.clientX;
       this.lastMouseY = e.clientY;
+      const touch = e.pointerType !== "mouse";
 
       if (
         this.nationsManager.cityPlacementMode !== -1 ||
@@ -415,7 +460,8 @@ export class Interface {
         if (pm.isPainting) pm.handlePainting(e.clientX, e.clientY);
         this.canvasManager.scheduleRender(); // brush overlay
       } else if (!this.nationsManager.isEditingNations) {
-        this.updateHover(e.clientX, e.clientY);
+        // A dragging finger pans; a tap shows the tooltip instead (pointerup)
+        if (!touch) this.updateHover(e.clientX, e.clientY);
       } else if (this.activeTab === "nations" && this.nationsManager.isEditingNations) {
         if (isAttemptingPaint && !this.nationsManager.isPainting) {
           const dist = Math.hypot(e.clientX - mousedownX, e.clientY - mousedownY);
@@ -521,8 +567,18 @@ export class Interface {
       }
     });
 
-    canvas.addEventListener("mousedown", (e) => {
+    canvas.addEventListener("pointerdown", (e) => {
+      if (this.canvasManager.isPinching) {
+        cancelPress();
+        stopAllPainting();
+        return;
+      }
       this.pointerDown = { x: e.clientX, y: e.clientY };
+      cancelPress();
+      if (e.pointerType === "touch") {
+        const { clientX, clientY } = e;
+        pressTimer = window.setTimeout(() => longPress(clientX, clientY), 550);
+      }
       const pm = this.peopleEditor();
       if (pm && e.button === 0 && !e.shiftKey) {
         pm.startPainting();
@@ -575,14 +631,22 @@ export class Interface {
       }
     });
 
-    window.addEventListener("mouseup", () => {
-      isAttemptingPaint = false;
-      this.nationsManager.stopPainting();
-      this.culturesManager.stopPainting();
-      this.racesManager.stopPainting();
+    window.addEventListener("pointerup", (e) => {
+      cancelPress();
+      stopAllPainting();
+      // A tap shows what is under the finger
+      if (e.pointerType !== "mouse" && e.target === canvas && !this.canvasManager.isPinching) {
+        const moved = Math.hypot(e.clientX - this.pointerDown.x, e.clientY - this.pointerDown.y) > 8;
+        if (!moved && !this.nationsManager.isEditingNations && !this.peopleEditor()) this.updateHover(e.clientX, e.clientY);
+      }
+    });
+    window.addEventListener("pointercancel", () => {
+      cancelPress();
+      stopAllPainting();
     });
 
-    canvas.addEventListener("mouseleave", () => {
+    canvas.addEventListener("pointerleave", (e) => {
+      if (e.pointerType !== "mouse") return; // lifting a finger "leaves" too
       this.nationsManager.hoveredNationIndex = -1;
       this.tooltipManager.hide();
       this.canvasManager.scheduleRender();
@@ -592,6 +656,7 @@ export class Interface {
     canvas.addEventListener("contextmenu", (e) => {
       if (this.activeTab !== "build") return;
       e.preventDefault();
+      if ((e as PointerEvent).pointerType === "touch") return; // the long press handles it
       const cm = this.canvasManager;
       const rect = cm.canvas.getBoundingClientRect();
       const world = this.generator.getWorld();
@@ -646,6 +711,11 @@ export class Interface {
 
     if (toggleBtn && uiPanel) {
       toggleBtn.addEventListener("click", () => uiPanel.classList.add("collapsed"));
+      // On a phone the open panel would hide the map: start with it closed
+      if (window.matchMedia("(max-width: 640px)").matches) {
+        uiPanel.classList.add("collapsed");
+        document.getElementById("tab-generate")?.classList.remove("active");
+      }
     }
 
     // --- Rail tabs: one panel at a time; clicking the open one closes it ---

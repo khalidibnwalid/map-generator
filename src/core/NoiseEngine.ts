@@ -3,11 +3,16 @@ export class NoiseEngine {
     private perm: Uint8Array;
     private permMod12: Uint8Array;
     public random: () => number;
+    // Mulberry32 counter, kept in an object so the stream can be handed to
+    // another thread and resumed there (see WorldTransfer)
+    private rng = { a: 0 };
 
     // Seed random generator (Mulberry32)
     private mulberry32(a: number) {
+        const rng = this.rng;
+        rng.a = a;
         return function () {
-            let t = a += 0x6D2B79F5;
+            let t = rng.a += 0x6D2B79F5;
             t = Math.imul(t ^ t >>> 15, t | 1);
             t ^= t + Math.imul(t ^ t >>> 7, t | 61);
             return ((t ^ t >>> 14) >>> 0) / 4294967296;
@@ -29,6 +34,14 @@ export class NoiseEngine {
             this.perm[i] = this.p[i & 255];
             this.permMod12[i] = (this.perm[i] % 12);
         }
+    }
+
+    // Where the random stream stands, and how to continue from there
+    public get randomState(): number {
+        return this.rng.a;
+    }
+    public set randomState(a: number) {
+        this.rng.a = a;
     }
 
     private hashString(str: string) {
