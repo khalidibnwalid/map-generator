@@ -571,7 +571,6 @@ export class CityRenderer {
   }
 
   private buildPaths(D: WardDetail, st: ThemedStyle): WardPaths {
-    let wp: WardPaths;
     const bucketPolys = (n: number) => Array.from({ length: n }, () => [[], [], [], []] as Poly[][]);
     const roofs = bucketPolys(st.roofShades.length);
     const wRoofs = bucketPolys(st.wRoofShades.length);
@@ -588,7 +587,7 @@ export class CityRenderer {
       pathsP.moveTo(pl[0].x, pl[0].y);
       for (const p of pl) pathsP.lineTo(p.x, p.y);
     }
-    wp = {
+    const wp: WardPaths = {
       blocks: path(D.blocks),
       plazas: path(D.plazas),
       shadow: path(all, 2.2, 2.2),

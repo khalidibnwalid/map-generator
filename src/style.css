@@ -3363,3 +3363,52 @@ input[type="color"]::-moz-color-swatch {
   background: var(--accent-soft);
   color: var(--accent);
 }
+
+/* Status notes (components/Toast.ts) */
+.toasts {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+  max-width: calc(100vw - 32px);
+}
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: var(--glass-strong);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  backdrop-filter: blur(8px);
+  pointer-events: auto;
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.toast.in {
+  opacity: 1;
+  transform: none;
+}
+.toast.error {
+  border-color: var(--danger);
+}
+.toast button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font-weight: 600;
+  cursor: pointer;
+}
+.toast button:hover {
+  text-decoration: underline;
+}

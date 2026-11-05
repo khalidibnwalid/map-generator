@@ -120,7 +120,7 @@ export async function generatePopulationDensity(ctx: GeneratorContext) {
         }
 
         // Swap buffers
-        let temp = currentDensity;
+        const temp = currentDensity;
         currentDensity = nextDensity;
         nextDensity = temp;
     }

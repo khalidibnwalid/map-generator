@@ -19,6 +19,7 @@ import { createDropdown } from "./components/Dropdown";
 import { CELL_KM2 } from "../game/WorldData";
 import type { UIManager } from "./UIManager";
 import type { CityRenderer } from "./CityRenderer";
+import { background } from "./components/Toast";
 
 type SortKey = "name" | "area" | "population" | "cities" | "wealth";
 interface NationStats {
@@ -298,7 +299,7 @@ export class NationsManager {
           `Are you sure you want to dissolve ${nation.name}? Its territory will be cleared, but its cities will remain independent.`,
         );
         if (confirmed) {
-          this.deleteNation(idx);
+          background(this.deleteNation(idx), "Dissolving the nation");
         }
       });
 

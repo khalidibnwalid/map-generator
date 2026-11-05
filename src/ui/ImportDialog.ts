@@ -10,6 +10,7 @@ import {
   type TerrainGuide,
 } from "../game/ImageGuide";
 import { NoiseEngine } from "../core/NoiseEngine";
+import { background } from "./components/Toast";
 import { syncSliders } from "./components/Slider";
 
 const MODES: { value: ImportMode; label: string; hint: string }[] = [
@@ -295,7 +296,11 @@ export class ImportDialog {
     return { w, h, land, relief, depth, moisture, fit: this.fit, roughness: this.roughness, islands: this.islands, zoom: this.zoom };
   }
 
-  private async load(file: Blob, name: string) {
+  private load(file: Blob, name: string) {
+    background(this.read(file, name), "Loading the picture");
+  }
+
+  private async read(file: Blob, name: string) {
     const msg = this.root.querySelector<HTMLElement>("#im-msg")!;
     const url = URL.createObjectURL(file);
     try {
@@ -384,7 +389,11 @@ export class ImportDialog {
     this.paintTimer = window.setTimeout(() => this.paint(), 90);
   }
 
-  private async paint() {
+  private paint() {
+    background(this.paintPreview(), "Drawing the preview");
+  }
+
+  private async paintPreview() {
     const id = ++this.paintId;
     const box = this.root.querySelector<HTMLElement>("#im-preview")!;
     const canvas = this.root.querySelector<HTMLCanvasElement>("#im-canvas")!;

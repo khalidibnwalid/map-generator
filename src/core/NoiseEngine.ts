@@ -7,7 +7,7 @@ export class NoiseEngine {
     // Seed random generator (Mulberry32)
     private mulberry32(a: number) {
         return function () {
-            var t = a += 0x6D2B79F5;
+            let t = a += 0x6D2B79F5;
             t = Math.imul(t ^ t >>> 15, t | 1);
             t ^= t + Math.imul(t ^ t >>> 7, t | 61);
             return ((t ^ t >>> 14) >>> 0) / 4294967296;
@@ -15,7 +15,7 @@ export class NoiseEngine {
     }
 
     constructor(seed: string | number) {
-        let seedRef = typeof seed === 'string' ? this.hashString(seed) : seed;
+        const seedRef = typeof seed === 'string' ? this.hashString(seed) : seed;
         this.random = this.mulberry32(seedRef);
 
         this.p = new Uint8Array(256);
@@ -34,7 +34,7 @@ export class NoiseEngine {
     private hashString(str: string) {
         let hash = 0;
         for (let i = 0; i < str.length; i++) {
-            let char = str.charCodeAt(i);
+            const char = str.charCodeAt(i);
             hash = ((hash << 5) - hash) + char;
             hash = hash & hash;
         }
@@ -49,14 +49,14 @@ export class NoiseEngine {
         let n0, n1, n2; // Noise contributions from the three corners
 
         // Skew the input space to determine which simplex cell we're in
-        let s = (xin + yin) * F2; // Hairy factor for 2D
-        let i = Math.floor(xin + s);
-        let j = Math.floor(yin + s);
-        let t = (i + j) * G2;
-        let X0 = i - t; // Unskew the cell origin back to (x,y) space
-        let Y0 = j - t;
-        let x0 = xin - X0; // The x,y distances from the cell origin
-        let y0 = yin - Y0;
+        const s = (xin + yin) * F2; // Hairy factor for 2D
+        const i = Math.floor(xin + s);
+        const j = Math.floor(yin + s);
+        const t = (i + j) * G2;
+        const X0 = i - t; // Unskew the cell origin back to (x,y) space
+        const Y0 = j - t;
+        const x0 = xin - X0; // The x,y distances from the cell origin
+        const y0 = yin - Y0;
 
         // Determine which simplex we are in
         let i1, j1; // Offsets for second (middle) corner of simplex in (i,j) coords
@@ -64,13 +64,13 @@ export class NoiseEngine {
         else { i1 = 0; j1 = 1; } // upper triangle, YX order: (0,0)->(0,1)->(1,1)
 
         // Calculate the contributions from the three corners
-        let x1 = x0 - i1 + G2;
-        let y1 = y0 - j1 + G2;
-        let x2 = x0 - 1.0 + 2.0 * G2;
-        let y2 = y0 - 1.0 + 2.0 * G2;
+        const x1 = x0 - i1 + G2;
+        const y1 = y0 - j1 + G2;
+        const x2 = x0 - 1.0 + 2.0 * G2;
+        const y2 = y0 - 1.0 + 2.0 * G2;
 
-        let ii = i & 255;
-        let jj = j & 255;
+        const ii = i & 255;
+        const jj = j & 255;
 
         let t0 = 0.5 - x0 * x0 - y0 * y0;
         if (t0 < 0) n0 = 0.0;
@@ -135,14 +135,14 @@ export class NoiseEngine {
         const G3 = 1.0 / 6.0;
         let n0, n1, n2, n3;
 
-        let s = (xin + yin + zin) * F3;
-        let i = Math.floor(xin + s);
-        let j = Math.floor(yin + s);
-        let k = Math.floor(zin + s);
+        const s = (xin + yin + zin) * F3;
+        const i = Math.floor(xin + s);
+        const j = Math.floor(yin + s);
+        const k = Math.floor(zin + s);
 
-        let t = (i + j + k) * G3;
-        let X0 = i - t; let Y0 = j - t; let Z0 = k - t;
-        let x0 = xin - X0; let y0 = yin - Y0; let z0 = zin - Z0;
+        const t = (i + j + k) * G3;
+        const X0 = i - t; const Y0 = j - t; const Z0 = k - t;
+        const x0 = xin - X0; const y0 = yin - Y0; const z0 = zin - Z0;
 
         let i1, j1, k1; let i2, j2, k2;
         if (x0 >= y0) {
@@ -155,11 +155,11 @@ export class NoiseEngine {
             else { i1 = 0; j1 = 1; k1 = 0; i2 = 1; j2 = 1; k2 = 0; }
         }
 
-        let x1 = x0 - i1 + G3; let y1 = y0 - j1 + G3; let z1 = z0 - k1 + G3;
-        let x2 = x0 - i2 + 2.0 * G3; let y2 = y0 - j2 + 2.0 * G3; let z2 = z0 - k2 + 2.0 * G3;
-        let x3 = x0 - 1.0 + 3.0 * G3; let y3 = y0 - 1.0 + 3.0 * G3; let z3 = z0 - 1.0 + 3.0 * G3;
+        const x1 = x0 - i1 + G3; const y1 = y0 - j1 + G3; const z1 = z0 - k1 + G3;
+        const x2 = x0 - i2 + 2.0 * G3; const y2 = y0 - j2 + 2.0 * G3; const z2 = z0 - k2 + 2.0 * G3;
+        const x3 = x0 - 1.0 + 3.0 * G3; const y3 = y0 - 1.0 + 3.0 * G3; const z3 = z0 - 1.0 + 3.0 * G3;
 
-        let ii = i & 255; let jj = j & 255; let kk = k & 255;
+        const ii = i & 255; const jj = j & 255; const kk = k & 255;
 
         let t0 = 0.6 - x0 * x0 - y0 * y0 - z0 * z0;
         if (t0 < 0) n0 = 0.0;

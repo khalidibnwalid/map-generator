@@ -4,8 +4,8 @@ import { shapeCoast, type GuideField } from '../ImageGuide';
 
 export async function generateElevation(ctx: GeneratorContext): Promise<void> {
     const { world, noise, width, height, preset, guide, onProgress } = ctx;
-    let numPlates = 40;
-    let baseScale = 0.005;
+    let numPlates: number;
+    let baseScale: number;
 
     const invResScale = 800 / width;
     const resScale = width / 800;
@@ -177,8 +177,8 @@ export async function generateElevation(ctx: GeneratorContext): Promise<void> {
                 while (dx > width) dx -= width;
                 if (dx > width / 2) dx = width - dx;
 
-                let dy = (y + distortY) - p.seedY;
-                let dist = dx * dx + dy * dy;
+                const dy = (y + distortY) - p.seedY;
+                const dist = dx * dx + dy * dy;
 
                 if (dist < minDist) {
                     minDist = dist;

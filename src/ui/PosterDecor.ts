@@ -584,7 +584,7 @@ function paintLegend(
   const theme = spec.theme;
   type Row = { label: string; value?: string; color?: string; flag?: number };
   let title = "Realms";
-  let rows: Row[] = [];
+  let rows: Row[];
   let more = 0;
   if (spec.thematic === "cultures" || spec.thematic === "races") {
     const byRace = spec.thematic === "races";

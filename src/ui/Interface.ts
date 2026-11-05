@@ -28,6 +28,7 @@ import { nationFlagUrl } from "../game/flags";
 import { familyLabel } from "../game/names";
 import { installSliders, syncSliders } from "./components/Slider";
 import { Simulation, type SimEvent } from "../game/sim/Simulation";
+import { background } from "./components/Toast";
 import { viewStats, type SnapNation } from "../game/sim/History";
 import { crownRulers, rulerStyle, seededRand } from "../game/sim/Rulers";
 import { BuildTool } from "./BuildTool";
@@ -245,14 +246,15 @@ export class Interface {
 
       console.log("Starting initial generation...");
       this.uiManager.showLoadingModal();
-      this.generator
-        .generate((pct) => {
-          this.uiManager.updateLoadingModal(pct);
-        })
-        .then(() => {
-          this.onWorldGenerated();
-          this.uiManager.hideLoadingModal();
-        });
+      background(
+        this.generator
+          .generate((pct) => {
+            this.uiManager.updateLoadingModal(pct);
+          })
+          .then(() => this.onWorldGenerated())
+          .finally(() => this.uiManager.hideLoadingModal()),
+        "Generating the world",
+      );
     } catch (e) {
       console.error("Failed to initialize GPURenderer:", e);
     }
@@ -400,24 +402,24 @@ export class Interface {
         this.canvasManager.scheduleRender();
       } else if (this.nationsManager.nationPlacementMode) {
         if (wy >= 0 && wy < world.height) {
-          (async () => {
-            await this.nationsManager.addNation(Math.floor(x), wy);
-            this.updateTooltipBar();
-          })();
+          background(
+            this.nationsManager.addNation(Math.floor(x), wy).then(() => this.updateTooltipBar()),
+            "Founding the nation",
+          );
         }
       } else if (this.nationsManager.provincePlacementMode !== -1) {
         if (wy >= 0 && wy < world.height) {
-          (async () => {
-            await this.nationsManager.addProvince(this.nationsManager.provincePlacementMode, x, fy);
-            this.updateTooltipBar();
-          })();
+          background(
+            this.nationsManager.addProvince(this.nationsManager.provincePlacementMode, x, fy).then(() => this.updateTooltipBar()),
+            "Adding the province",
+          );
         }
       } else if (this.nationsManager.cityPlacementMode !== -1) {
         if (wy >= 0 && wy < world.height) {
-          (async () => {
-            await this.nationsManager.addCity(this.nationsManager.cityPlacementMode, x, fy);
-            this.updateTooltipBar();
-          })();
+          background(
+            this.nationsManager.addCity(this.nationsManager.cityPlacementMode, x, fy).then(() => this.updateTooltipBar()),
+            "Adding the city",
+          );
         }
       } else if (this.thematic === "diplomacy" && wy >= 0 && wy < world.height) {
         // Click to pin the diplomacy focus
