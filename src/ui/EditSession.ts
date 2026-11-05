@@ -36,11 +36,17 @@ export class EditSession {
   private undoBtn: HTMLButtonElement | null;
   private redoBtn: HTMLButtonElement | null;
   private previous: AutosaveEntry | null = null;
+  // The world differs from what its seed generates (edits or simulated years)
+  private changed = false;
+  get edited() {
+    return this.changed;
+  }
 
   constructor(host: EditSessionHost) {
     this.host = host;
     this.history = new EditHistory(host.world());
     this.history.onChange = () => {
+      this.changed = true;
       this.syncButtons();
       this.worthSaving = true;
       this.scheduleAutosave();
@@ -61,6 +67,7 @@ export class EditSession {
   public worldReplaced(keep: boolean) {
     clearTimeout(this.commitTimer);
     this.history.reset(this.host.world());
+    this.changed = false;
     this.syncButtons();
     if (keep) {
       this.worthSaving = true;
@@ -73,6 +80,7 @@ export class EditSession {
   public historyMoved() {
     clearTimeout(this.commitTimer);
     this.history.reset();
+    this.changed = true;
     this.syncButtons();
     this.worthSaving = true;
     this.scheduleAutosave();

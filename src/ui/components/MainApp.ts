@@ -28,6 +28,9 @@ const ICONS = {
   poster: icon(`<rect x="3" y="4" width="18" height="16" rx="1.5"/><rect x="6" y="7" width="12" height="10" rx="0.5"/><path d="m6 15 3.5-3.5 2.5 2.5 2-2 4 4"/>`),
   undo: icon(`<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>`),
   redo: icon(`<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>`),
+  link: icon(`<path d="M10 14a4.5 4.5 0 0 0 6.4 0l3.2-3.2a4.5 4.5 0 0 0-6.4-6.4L12 5.6"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3.2 3.2a4.5 4.5 0 0 0 6.4 6.4L12 18.4"/>`),
+  data: icon(`<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/><path d="M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"/>`),
+  vector: icon(`<path d="M4 18 12 5l8 13"/><circle cx="12" cy="5" r="2"/><circle cx="4" cy="18" r="2"/><circle cx="20" cy="18" r="2"/>`),
   restore: icon(`<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 8v4l2.5 2.5"/>`),
   image: icon(`<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/>`),
 };
@@ -422,9 +425,22 @@ export default function renderMainApp() {
               <span><strong>Open world</strong><small>Load a .world file</small></span>
             </button>
             <input type="file" id="open-world-input" accept=".world" style="display:none" />
+            <button id="share-link" class="file-card">
+              ${ICONS.link}
+              <span><strong>Copy link</strong><small id="share-link-info">Anyone with the link gets this exact world</small></span>
+            </button>
             <button id="restore-autosave" class="file-card" style="display:none">
               ${ICONS.restore}
               <span><strong>Restore last session</strong><small id="restore-autosave-info">Autosaved in this browser</small></span>
+            </button>
+            <div class="group-title">Export</div>
+            <button id="export-data" class="file-card">
+              ${ICONS.data}
+              <span><strong>Export for game engines</strong><small>JSON, 16-bit heightmap and lookup images (.zip)</small></span>
+            </button>
+            <button id="export-svg" class="file-card">
+              ${ICONS.vector}
+              <span><strong>Export SVG</strong><small>Layered vector map for Inkscape or Illustrator</small></span>
             </button>
             <div class="group-title">Atlas</div>
             <button id="export-poster" class="file-card">

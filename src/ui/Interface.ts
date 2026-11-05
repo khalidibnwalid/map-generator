@@ -29,7 +29,8 @@ import { nationFlagUrl } from "../game/flags";
 import { familyLabel } from "../game/names";
 import { installSliders, syncSliders } from "./components/Slider";
 import { Simulation, type SimEvent } from "../game/sim/Simulation";
-import { background } from "./components/Toast";
+import { background, toast } from "./components/Toast";
+import { recipeFromHash, recipeToHash, type WorldRecipe } from "../game/WorldLink";
 import { EditSession, type EditSessionHost } from "./EditSession";
 import type { RestoreResult } from "../game/EditHistory";
 import { viewStats, type SnapNation } from "../game/sim/History";
@@ -279,6 +280,9 @@ export class Interface {
     }
 
     this.setupUI();
+    // The first world may come from a link: show its options
+    this.syncWorldControls();
+    document.getElementById("tab-file")?.addEventListener("click", () => this.syncWorldLink());
     this.canvasManager.onRender = this.renderMap.bind(this);
 
     this.setupEventListeners();
@@ -350,6 +354,7 @@ export class Interface {
   // `keep`: the user chose this world (generated, opened or restored), so it is autosaved
   private onWorldGenerated(keep = true) {
     this.session?.worldReplaced(keep);
+    this.syncWorldLink();
     this.pauseSim();
     this.warAttacker = null;
     this.warPicking = false;
@@ -1090,6 +1095,21 @@ export class Interface {
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     });
     openBtn?.addEventListener("click", () => openInput?.click());
+    document.getElementById("share-link")?.addEventListener("click", () => background(this.shareWorldLink(), "Sharing the link"));
+    const exportBusy = (btn: HTMLElement, work: () => Promise<void>, what: string) => {
+      if (this.generator.isGenerating || btn.classList.contains("loading")) return;
+      btn.classList.add("loading");
+      background(work().finally(() => btn.classList.remove("loading")), what);
+    };
+    const dataBtn = document.getElementById("export-data");
+    dataBtn?.addEventListener("click", () =>
+      exportBusy(dataBtn, () => import("./DataExport").then((m) => m.downloadGameExport(this.generator)), "Exporting world data"),
+    );
+    const svgBtn = document.getElementById("export-svg");
+    svgBtn?.addEventListener("click", () =>
+      exportBusy(svgBtn, () => import("./DataExport").then((m) => m.downloadSvg(this.generator, this.editSessionHost().describe().title)), "Exporting the SVG"),
+    );
+    window.addEventListener("hashchange", () => this.openWorldLink());
     document.getElementById("export-poster")?.addEventListener("click", () => {
       if (this.generator.isGenerating) return; // textures and statistics are not ready
       this.posterDialog ??= new PosterDialog(this.atlasHost());
@@ -1207,21 +1227,7 @@ export class Interface {
       this.canvasManager.scale = fitScale;
       this.canvasManager.offsetX = (window.innerWidth - W * fitScale) / 2;
       this.canvasManager.offsetY = 0;
-      const seedInput = document.getElementById("seed") as HTMLInputElement | null;
-      if (seedInput) seedInput.value = this.generator.currentSeed.toString();
-      installSliders();
-      const presetSelect = document.getElementById("preset") as HTMLSelectElement | null;
-      if (presetSelect) presetSelect.value = this.generator.currentPreset;
-      const sizeSelect = document.getElementById("size") as HTMLSelectElement | null;
-      if (sizeSelect) sizeSelect.value = `${W}x${H}`;
-      const powersSelect = document.getElementById("great-powers") as HTMLSelectElement | null;
-      if (powersSelect) powersSelect.value = String(this.generator.greatPowers);
-      for (const o of OPTIONS) {
-        const slider = document.getElementById(`opt-${o.key}`) as HTMLInputElement | null;
-        if (slider && o.kind !== "count") slider.value = String(Math.round(this.generator.settings[o.key] * 100));
-      }
-      this.syncNationsRange(W, H, this.generator.settings.nations || autoNations(W, H));
-      refreshPickers();
+      this.syncWorldControls();
       this.guideName = name.replace(/\.world$/i, "");
       this.syncGuideCard();
       this.onWorldGenerated();
@@ -1232,6 +1238,83 @@ export class Interface {
     } finally {
       this.uiManager.hideLoadingModal();
     }
+  }
+
+  // World tab controls show the generator's seed, landmass, size and options
+  private syncWorldControls(W = this.generator.getWidth(), H = this.generator.getHeight()) {
+    const seedInput = document.getElementById("seed") as HTMLInputElement | null;
+    if (seedInput) seedInput.value = this.generator.currentSeed.toString();
+    installSliders();
+    const presetSelect = document.getElementById("preset") as HTMLSelectElement | null;
+    if (presetSelect) presetSelect.value = this.generator.currentPreset;
+    const sizeSelect = document.getElementById("size") as HTMLSelectElement | null;
+    if (sizeSelect) sizeSelect.value = `${W}x${H}`;
+    const powersSelect = document.getElementById("great-powers") as HTMLSelectElement | null;
+    if (powersSelect) powersSelect.value = String(this.generator.greatPowers);
+    for (const o of OPTIONS) {
+      const slider = document.getElementById(`opt-${o.key}`) as HTMLInputElement | null;
+      if (slider && o.kind !== "count") slider.value = String(Math.round(this.generator.settings[o.key] * 100));
+    }
+    this.syncNationsRange(W, H, this.generator.settings.nations || autoNations(W, H));
+    refreshPickers();
+  }
+
+  // --- World links ---
+
+  private recipe(): WorldRecipe {
+    const g = this.generator;
+    return { seed: g.currentSeed, preset: g.currentPreset, width: g.getWidth(), height: g.getHeight(), greatPowers: g.greatPowers, settings: { ...g.settings } };
+  }
+
+  // The address bar always links to the world on screen (worlds shaped from
+  // an image can't be linked: the picture isn't in the URL)
+  private syncWorldLink() {
+    const hash = this.generator.guide ? "" : recipeToHash(this.recipe());
+    if (location.hash !== hash) history.replaceState(null, "", hash ? hash : location.pathname + location.search);
+    const btn = document.getElementById("share-link") as HTMLButtonElement | null;
+    const info = document.getElementById("share-link-info");
+    if (btn) btn.disabled = !hash;
+    if (info)
+      info.textContent = !hash
+        ? "Worlds shaped from an image can't be linked; save a .world file"
+        : this.session?.edited
+          ? "Seed and options only: your edits travel in .world files"
+          : "Anyone with the link gets this exact world";
+  }
+
+  private async shareWorldLink() {
+    if (this.generator.guide) return;
+    const url = location.origin + location.pathname + recipeToHash(this.recipe());
+    // Phones get the system share sheet; elsewhere the link is copied
+    if (navigator.share && matchMedia("(pointer: coarse)").matches) {
+      try {
+        await navigator.share({ title: "A generated world", url });
+        return;
+      } catch (e) {
+        if ((e as Error).name === "AbortError") return;
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      toast("Link copied");
+    } catch {
+      toast(url, { ms: 10000 }); // no clipboard access: show it to copy by hand
+    }
+  }
+
+  // A world link pasted into the address bar of an open tab
+  private openWorldLink() {
+    const r = recipeFromHash(location.hash);
+    if (!r || this.generator.isGenerating || recipeToHash(r) === recipeToHash(this.recipe())) return;
+    this.generator.guide = null;
+    this.syncGuideCard();
+    this.generator.currentSeed = r.seed;
+    this.generator.currentPreset = r.preset;
+    this.generator.greatPowers = r.greatPowers;
+    this.generator.settings = r.settings;
+    // The Generate button reads the controls, so set them and press it
+    this.syncWorldControls(r.width, r.height);
+    (document.getElementById("generate") as HTMLButtonElement | null)?.click();
   }
 
   // World tab: the imported picture in use, which overrides the presets
