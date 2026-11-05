@@ -26,6 +26,9 @@ const ICONS = {
   step: icon(`<path d="M5 4.5v15l10-7.5z" fill="currentColor"/><path d="M18 5v14"/>`),
   edit: icon(`<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13 7 4 4"/>`),
   poster: icon(`<rect x="3" y="4" width="18" height="16" rx="1.5"/><rect x="6" y="7" width="12" height="10" rx="0.5"/><path d="m6 15 3.5-3.5 2.5 2.5 2-2 4 4"/>`),
+  undo: icon(`<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>`),
+  redo: icon(`<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>`),
+  restore: icon(`<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 8v4l2.5 2.5"/>`),
   image: icon(`<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/>`),
 };
 
@@ -419,6 +422,10 @@ export default function renderMainApp() {
               <span><strong>Open world</strong><small>Load a .world file</small></span>
             </button>
             <input type="file" id="open-world-input" accept=".world" style="display:none" />
+            <button id="restore-autosave" class="file-card" style="display:none">
+              ${ICONS.restore}
+              <span><strong>Restore last session</strong><small id="restore-autosave-info">Autosaved in this browser</small></span>
+            </button>
             <div class="group-title">Atlas</div>
             <button id="export-poster" class="file-card">
               ${ICONS.poster}
@@ -431,6 +438,9 @@ export default function renderMainApp() {
       <canvas id="mapCanvas"></canvas>
 
       <div class="map-controls">
+        <button id="undo" class="icon-btn" title="Undo" aria-label="Undo" disabled>${ICONS.undo}</button>
+        <button id="redo" class="icon-btn" title="Redo" aria-label="Redo" disabled>${ICONS.redo}</button>
+        <span class="map-controls-sep" aria-hidden="true"></span>
         <button id="zoom-in" class="icon-btn" title="Zoom in">${ICONS.plus}</button>
         <button id="zoom-out" class="icon-btn" title="Zoom out">${ICONS.minus}</button>
         <button id="zoom-reset" class="icon-btn" title="Show whole world">${ICONS.home}</button>

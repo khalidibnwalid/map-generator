@@ -17,6 +17,7 @@ import { installSteppers } from "./components/NumberInput";
 import { saveWorld, loadWorld } from "../game/WorldFile";
 import { RESOURCE_INFO, WEALTH_TIERS } from "../game/generators/generateEconomy";
 import { cityExports, cityTrade, tradeRole } from "../game/generators/generateTrade";
+import { computeTrade } from "../game/generators/generateTrade";
 import { THEMES, NIGHT_THEMES } from "./themes";
 import { MONTHS, seasonFlood } from "../core/Season";
 import { DEFAULT_SETTINGS } from "../game/generators/types";
@@ -29,6 +30,8 @@ import { familyLabel } from "../game/names";
 import { installSliders, syncSliders } from "./components/Slider";
 import { Simulation, type SimEvent } from "../game/sim/Simulation";
 import { background } from "./components/Toast";
+import { EditSession, type EditSessionHost } from "./EditSession";
+import type { RestoreResult } from "../game/EditHistory";
 import { viewStats, type SnapNation } from "../game/sim/History";
 import { crownRulers, rulerStyle, seededRand } from "../game/sim/Rulers";
 import { BuildTool } from "./BuildTool";
@@ -89,6 +92,15 @@ function hexRgb(hex: string): [number, number, number] {
 export function peoplePerKm2(d: number): number {
   return Math.round(2 + Math.pow(Math.max(0, d), 1.6) * 160);
 }
+
+// Landmass names as the World tab shows them
+const PRESET_NAMES: Record<Preset, string> = {
+  "Heavy Landmass": "Giant Continents",
+  Earthlike: "Medium Continents",
+  "Realistic Continents": "Small Continents",
+  Pangea: "Supercontinent",
+  Landworld: "Landworld",
+};
 
 export class Interface {
   private generator: MapGenerator;
@@ -152,6 +164,9 @@ export class Interface {
   private importDialog: ImportDialog | null = null;
   private guideName = "";
   private factSheet: FactSheet | null = null;
+  private session!: EditSession; // undo, redo and autosave
+  // Set up in setupUI: the nations slider range follows the map size
+  private syncNationsRange: (w: number, h: number, count?: number) => void = () => {};
 
   // Sub-managers
   private tooltipManager!: TooltipManager;
@@ -244,6 +259,8 @@ export class Interface {
         if (!this.inSimStep) this.sim?.markEdited();
       };
 
+      this.session = new EditSession(this.editSessionHost());
+
       console.log("Starting initial generation...");
       this.uiManager.showLoadingModal();
       background(
@@ -251,8 +268,10 @@ export class Interface {
           .generate((pct) => {
             this.uiManager.updateLoadingModal(pct);
           })
-          .then(() => this.onWorldGenerated())
-          .finally(() => this.uiManager.hideLoadingModal()),
+          .then(() => this.onWorldGenerated(false))
+          .finally(() => this.uiManager.hideLoadingModal())
+          // The random first world is not autosaved; the last session can come back
+          .then(() => this.session.offerRestore()),
         "Generating the world",
       );
     } catch (e) {
@@ -271,7 +290,66 @@ export class Interface {
     this.factSheet.open(idx);
   }
 
-  private onWorldGenerated() {
+  // What undo, redo and autosave need from the interface
+  private editSessionHost(): EditSessionHost {
+    return {
+      world: () => this.generator.getWorld(),
+      busy: () => this.generator.isGenerating || !!this.replay || !!this.simTimer || this.jumping || this.exportingGif,
+      canvasEdits: () =>
+        this.nationsManager.isEditingNations ||
+        this.nationsManager.nationPlacementMode ||
+        this.nationsManager.provincePlacementMode !== -1 ||
+        this.nationsManager.cityPlacementMode !== -1 ||
+        !!this.peopleEditor() ||
+        this.activeTab === "build",
+      afterRestore: (r) => this.afterRestore(r),
+      snapshot: () => saveWorld(this.generator, this.sim?.save()),
+      describe: () => {
+        const world = this.generator.getWorld();
+        const preset = this.generator.guide ? "Imported land" : (PRESET_NAMES[this.generator.currentPreset] ?? this.generator.currentPreset);
+        const parts = [preset, `${world.nations.length} realms`, `seed ${this.generator.currentSeed}`];
+        if (world.year) parts.push(`year ${world.year}`);
+        return { seed: this.generator.currentSeed, title: parts.join(" · ") };
+      },
+      open: (blob, name) => this.openWorld(blob, name),
+    };
+  }
+
+  // Textures, caches and panels after undo or redo put back an earlier state
+  private afterRestore(r: RestoreResult) {
+    const world = this.generator.getWorld();
+    const nm = this.nationsManager;
+    if (nm.selectedNationIndex >= world.nations.length) nm.selectedNationIndex = -1;
+    if (nm.hoveredNationIndex >= world.nations.length) nm.hoveredNationIndex = -1;
+    nm.selectedProvinceIndex = -1;
+    nm.nationsStateDirty = true;
+    // Cities and roads came back: wealth follows the trade they carry
+    if (r.changed.has("cities") || r.changed.has("worldRoads")) computeTrade(world);
+    if (r.changed.has("nations") || !r.rows) this.gpuRenderer.updateNationsDataTexture(world);
+    else this.gpuRenderer.updateNationsDataTexture(world, { x: 0, y: r.rows.y0, w: world.width, h: r.rows.y1 - r.rows.y0 + 1 });
+    this.gpuRenderer.updateProvincesDataTexture(world);
+    nm.buildCache();
+    this.sim?.markEdited();
+    if (this.buildTool) {
+      this.buildTool.selected = null;
+      this.buildTool.render();
+    }
+    this.cityRenderer.invalidateAll();
+    this.vectorState = null;
+    this.lightsKey = "";
+    this.thematicFocus = -2;
+    if (this.activeTab === "nations") nm.renderList();
+    if (this.activeTab === "cultures") this.culturesManager.renderList();
+    if (this.activeTab === "races") this.racesManager.renderList();
+    this.renderWarRoom();
+    this.updateLegend();
+    this.updateTooltipBar();
+    this.canvasManager.scheduleRender();
+  }
+
+  // `keep`: the user chose this world (generated, opened or restored), so it is autosaved
+  private onWorldGenerated(keep = true) {
+    this.session?.worldReplaced(keep);
     this.pauseSim();
     this.warAttacker = null;
     this.warPicking = false;
@@ -862,6 +940,7 @@ export class Interface {
       lastAuto = auto;
       syncOptionSliders();
     };
+    this.syncNationsRange = syncNationsRange;
     const sizeEl = document.getElementById("size") as HTMLSelectElement | null;
     sizeEl?.addEventListener("change", () => {
       const [w, h] = sizeEl.value.split("x").map(Number);
@@ -950,38 +1029,7 @@ export class Interface {
       const file = openInput.files?.[0];
       openInput.value = "";
       if (!file) return;
-      this.uiManager.showLoadingModal();
-      try {
-        await loadWorld(file, this.generator, (pct) => this.uiManager.updateLoadingModal(pct));
-        const W = this.generator.getWidth();
-        const H = this.generator.getHeight();
-        const fitScale = window.innerHeight / H;
-        this.canvasManager.scale = fitScale;
-        this.canvasManager.offsetX = (window.innerWidth - W * fitScale) / 2;
-        this.canvasManager.offsetY = 0;
-        seedInput.value = this.generator.currentSeed.toString();
-    installSliders();
-        presetSelect.value = this.generator.currentPreset;
-        const sizeSelect = document.getElementById("size") as HTMLSelectElement | null;
-        if (sizeSelect) sizeSelect.value = `${W}x${H}`;
-        const powersSelect = document.getElementById("great-powers") as HTMLSelectElement | null;
-        if (powersSelect) powersSelect.value = String(this.generator.greatPowers);
-        for (const o of OPTIONS) {
-          const slider = document.getElementById(`opt-${o.key}`) as HTMLInputElement | null;
-          if (slider && o.kind !== "count") slider.value = String(Math.round(this.generator.settings[o.key] * 100));
-        }
-        syncNationsRange(W, H, this.generator.settings.nations || autoNations(W, H));
-        refreshPickers();
-        this.guideName = file.name.replace(/\.world$/i, "");
-        this.syncGuideCard();
-        this.onWorldGenerated();
-        this.nationsManager.renderList();
-      } catch (err) {
-        console.error(err);
-        await this.uiManager.confirm("OPEN WORLD", `Could not open this file: ${(err as Error).message}`);
-      } finally {
-        this.uiManager.hideLoadingModal();
-      }
+      await this.openWorld(file, file.name);
     });
 
     // --- Shape from an image ---
@@ -1075,6 +1123,45 @@ export class Interface {
         this.uiManager.setBtnLoading(false, originalText);
       }
     });
+  }
+
+  // Opens a .world file (File > Open, or the autosave) and syncs the World tab to it
+  private async openWorld(file: Blob, name: string) {
+    if (this.generator.isGenerating) return;
+    this.uiManager.showLoadingModal();
+    try {
+      await loadWorld(file, this.generator, (pct) => this.uiManager.updateLoadingModal(pct));
+      const W = this.generator.getWidth();
+      const H = this.generator.getHeight();
+      const fitScale = window.innerHeight / H;
+      this.canvasManager.scale = fitScale;
+      this.canvasManager.offsetX = (window.innerWidth - W * fitScale) / 2;
+      this.canvasManager.offsetY = 0;
+      const seedInput = document.getElementById("seed") as HTMLInputElement | null;
+      if (seedInput) seedInput.value = this.generator.currentSeed.toString();
+      installSliders();
+      const presetSelect = document.getElementById("preset") as HTMLSelectElement | null;
+      if (presetSelect) presetSelect.value = this.generator.currentPreset;
+      const sizeSelect = document.getElementById("size") as HTMLSelectElement | null;
+      if (sizeSelect) sizeSelect.value = `${W}x${H}`;
+      const powersSelect = document.getElementById("great-powers") as HTMLSelectElement | null;
+      if (powersSelect) powersSelect.value = String(this.generator.greatPowers);
+      for (const o of OPTIONS) {
+        const slider = document.getElementById(`opt-${o.key}`) as HTMLInputElement | null;
+        if (slider && o.kind !== "count") slider.value = String(Math.round(this.generator.settings[o.key] * 100));
+      }
+      this.syncNationsRange(W, H, this.generator.settings.nations || autoNations(W, H));
+      refreshPickers();
+      this.guideName = name.replace(/\.world$/i, "");
+      this.syncGuideCard();
+      this.onWorldGenerated();
+      this.nationsManager.renderList();
+    } catch (err) {
+      console.error(err);
+      await this.uiManager.confirm("OPEN WORLD", `Could not open this file: ${(err as Error).message}`);
+    } finally {
+      this.uiManager.hideLoadingModal();
+    }
   }
 
   // World tab: the imported picture in use, which overrides the presets
@@ -1180,6 +1267,8 @@ export class Interface {
   private applySimChanges(changed: boolean, nationsBefore: number, citiesBefore: number, colorsBefore: string) {
     const world = this.generator.getWorld();
     if (!this.sim) return;
+    // Edits made before this year can't be undone over the simulated changes
+    this.session.historyMoved();
     if (changed) {
       if (this.nationsManager.hoveredNationIndex >= world.nations.length) this.nationsManager.hoveredNationIndex = -1;
       if (world.nations.length !== nationsBefore) this.nationsManager.selectedNationIndex = -1;

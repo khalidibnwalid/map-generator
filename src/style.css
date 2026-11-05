@@ -3412,3 +3412,13 @@ input[type="color"]::-moz-color-swatch {
 .toast button:hover {
   text-decoration: underline;
 }
+
+.map-controls-sep {
+  height: 1px;
+  margin: 3px 6px;
+  background: var(--line-strong);
+}
+.map-controls .icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
