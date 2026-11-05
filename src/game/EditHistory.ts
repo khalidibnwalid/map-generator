@@ -68,7 +68,7 @@ function loadObject(key: CollectionKey, o: Obj, data: unknown) {
   Object.assign(o, key === "worldRoads" ? data : JSON.parse(data as string));
 }
 
-interface Snapshot {
+export interface Snapshot {
   cells: Record<CellField, Int32Array>;
   order: Record<CollectionKey, Obj[]>;
   saved: Record<CollectionKey, Map<Obj, Saved>>;
@@ -100,7 +100,7 @@ export interface RestoreResult {
   changed: Set<string>;
 }
 
-function capture(world: WorldData): Snapshot {
+export function captureWorld(world: WorldData): Snapshot {
   // Flags are generated lazily the first time a nation is drawn; settle them
   // now so a first render never shows up as an edit
   for (let i = 0; i < world.nations.length; i++) flagOf(world, i);
@@ -143,7 +143,10 @@ function capture(world: WorldData): Snapshot {
 
 const sameOrder = (a: Obj[], b: Obj[]) => a.length === b.length && a.every((o, i) => o === b[i]);
 
-function diff(a: Snapshot, b: Snapshot): EditStep | null {
+const capture = captureWorld;
+
+// What changed from snapshot a to b, as a step that can go either way
+export function diffWorld(a: Snapshot, b: Snapshot): EditStep | null {
   const parts = new Set<string>();
 
   // Cells: one pass, then pack the changed indices
@@ -287,7 +290,7 @@ export class EditHistory {
       return null;
     }
     const now = capture(this.world);
-    const step = diff(this.base, now);
+    const step = diffWorld(this.base, now);
     this.base = now;
     if (!step) return null;
     this.undoStack.push(step);
@@ -319,55 +322,108 @@ export class EditHistory {
   }
 
   private apply(step: EditStep, side: "before" | "after"): RestoreResult {
-    const world = this.world;
-    const changed = new Set<string>();
-    let rows: RestoreResult["rows"] = null;
-
-    if (step.cells) {
-      const { idx, fields } = step.cells;
-      const vals = step.cells[side];
-      const W = world.width;
-      let y0 = Infinity;
-      let y1 = -1;
-      for (let k = 0; k < idx.length; k++) {
-        const i = idx[k];
-        const x = i % W;
-        const y = (i - x) / W;
-        if (y < y0) y0 = y;
-        if (y > y1) y1 = y;
-        const c = world.grid[x][y];
-        fields.forEach((f, j) => {
-          const v = vals[k * fields.length + j];
-          c[f] = v >= 0 ? v : f === "nationIndex" || f === "provinceIndex" ? v : undefined;
-        });
-      }
-      for (const f of fields) changed.add(f);
-      if (fields.includes("nationIndex")) {
-        refreshBorders(world, idx);
-        rows = { y0, y1 };
-      }
-    }
-
-    for (const key of COLLECTIONS) {
-      const ch = step.collections[key];
-      if (!ch) continue;
-      for (const [o, c] of ch.content) {
-        const data = c[side];
-        if (data !== undefined) loadObject(key, o, data);
-      }
-      (world as unknown as Record<string, Obj[]>)[key] = ch[side].slice();
-      changed.add(key);
-    }
-    if (step.relations) {
-      world.relations = JSON.parse(step.relations[side]);
-      changed.add("relations");
-    }
-    if (step.languages) world.languages = step.languages[side].slice() as WorldData["languages"];
-    if (step.flags) Object.assign(world, step.flags[side]);
-
+    const res = applyStep(this.world, step, side);
     // The restored state is the new baseline; capture it fresh so later
     // diffs compare against exactly what is on the map
-    this.base = capture(world);
-    return { label: step.label, rows, changed };
+    this.base = capture(this.world);
+    return res;
   }
+}
+
+// Puts a step's before or after state onto the world, objects in place
+export function applyStep(world: WorldData, step: EditStep, side: "before" | "after"): RestoreResult {
+  const changed = new Set<string>();
+  let rows: RestoreResult["rows"] = null;
+
+  if (step.cells) {
+    const { idx, fields } = step.cells;
+    const vals = step.cells[side];
+    const W = world.width;
+    let y0 = Infinity;
+    let y1 = -1;
+    for (let k = 0; k < idx.length; k++) {
+      const i = idx[k];
+      const x = i % W;
+      const y = (i - x) / W;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+      const c = world.grid[x][y];
+      fields.forEach((f, j) => {
+        const v = vals[k * fields.length + j];
+        c[f] = v >= 0 ? v : f === "nationIndex" || f === "provinceIndex" ? v : undefined;
+      });
+    }
+    for (const f of fields) changed.add(f);
+    if (fields.includes("nationIndex")) {
+      refreshBorders(world, idx);
+      rows = { y0, y1 };
+    }
+  }
+
+  for (const key of COLLECTIONS) {
+    const ch = step.collections[key];
+    if (!ch) continue;
+    for (const [o, c] of ch.content) {
+      const data = c[side];
+      if (data !== undefined) loadObject(key, o, data);
+    }
+    (world as unknown as Record<string, Obj[]>)[key] = ch[side].slice();
+    changed.add(key);
+  }
+  if (step.relations) {
+    world.relations = JSON.parse(step.relations[side]);
+    changed.add("relations");
+  }
+  if (step.languages) world.languages = step.languages[side].slice() as WorldData["languages"];
+  if (step.flags) Object.assign(world, step.flags[side]);
+
+  return { label: step.label, rows, changed };
+}
+
+// --- Compact snapshots, for history checkpoints ---
+
+export interface PackedSnapshot extends Omit<Snapshot, "cells"> {
+  cells: Record<CellField, Int32Array>; // run-length [value, count] pairs
+  cellCount: number;
+}
+
+function rle(a: Int32Array): Int32Array {
+  const out: number[] = [];
+  for (let i = 0; i < a.length; ) {
+    const v = a[i];
+    let j = i + 1;
+    while (j < a.length && a[j] === v) j++;
+    out.push(v, j - i);
+    i = j;
+  }
+  return Int32Array.from(out);
+}
+
+function unrle(p: Int32Array, n: number): Int32Array {
+  const out = new Int32Array(n);
+  let o = 0;
+  for (let k = 0; k < p.length; k += 2) {
+    out.fill(p[k], o, o + p[k + 1]);
+    o += p[k + 1];
+  }
+  return out;
+}
+
+export function packSnapshot(s: Snapshot): PackedSnapshot {
+  const cells = {} as PackedSnapshot["cells"];
+  for (const f of CELL_FIELDS) cells[f] = rle(s.cells[f]);
+  return { ...s, cells, cellCount: s.cells.nationIndex.length };
+}
+
+export function unpackSnapshot(p: PackedSnapshot): Snapshot {
+  const cells = {} as Snapshot["cells"];
+  for (const f of CELL_FIELDS) cells[f] = unrle(p.cells[f], p.cellCount);
+  const { cellCount: _n, ...rest } = p;
+  return { ...rest, cells };
+}
+
+// Makes the world match a snapshot taken earlier (objects restored in place)
+export function restoreWorld(world: WorldData, target: Snapshot): RestoreResult | null {
+  const step = diffWorld(captureWorld(world), target);
+  return step ? applyStep(world, step, "after") : null;
 }

@@ -3421,3 +3421,22 @@ input[type="color"]::-moz-color-swatch {
   opacity: 0.35;
   cursor: default;
 }
+
+/* What-if branches (History tab) */
+.sim-branch-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.sim-branch-row .btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  justify-content: center;
+}
+.sim-branch-row svg {
+  width: 15px;
+  height: 15px;
+}

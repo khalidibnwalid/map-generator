@@ -31,6 +31,8 @@ const ICONS = {
   link: icon(`<path d="M10 14a4.5 4.5 0 0 0 6.4 0l3.2-3.2a4.5 4.5 0 0 0-6.4-6.4L12 5.6"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3.2 3.2a4.5 4.5 0 0 0 6.4 6.4L12 18.4"/>`),
   data: icon(`<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/><path d="M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"/>`),
   vector: icon(`<path d="M4 18 12 5l8 13"/><circle cx="12" cy="5" r="2"/><circle cx="4" cy="18" r="2"/><circle cx="20" cy="18" r="2"/>`),
+  branch: icon(`<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M18 10c0 4-6 3-12 7"/>`),
+  swap: icon(`<path d="M7 7h12l-3-3M17 17H5l3 3"/>`),
   restore: icon(`<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 8v4l2.5 2.5"/>`),
   image: icon(`<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/>`),
 };
@@ -373,6 +375,10 @@ export default function renderMainApp() {
                 <button id="sim-present" class="btn-ghost sim-present" disabled>Present</button>
                 <button id="sim-gif" class="btn-ghost sim-gif" disabled><span class="sim-gif-label">Export GIF</span></button>
                 <span id="sim-scrub-to" class="muted">–</span>
+              </div>
+              <div class="sim-branch-row">
+                <button id="sim-branch" class="btn-ghost" disabled title="Scrub to a past year first">${ICONS.branch}<span>Branch from this year</span></button>
+                <button id="sim-other" class="btn-ghost" style="display:none">${ICONS.swap}<span>Other timeline</span></button>
               </div>
             </div>
             <details class="field war-room" id="war-room">

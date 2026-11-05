@@ -831,6 +831,8 @@ export class Interface {
       });
     }
     document.getElementById("sim-present")?.addEventListener("click", () => this.backToPresent());
+    document.getElementById("sim-branch")?.addEventListener("click", () => background(this.branchHere(), "Branching history"));
+    document.getElementById("sim-other")?.addEventListener("click", () => this.switchTimeline());
     document.getElementById("sim-gif")?.addEventListener("click", () => this.exportGif());
 
     // --- Map controls ---
@@ -1564,6 +1566,48 @@ export class Interface {
     this.canvasManager.scheduleRender();
   }
 
+  // --- What-if branches ---
+
+  private async branchHere() {
+    const sim = this.sim;
+    const replay = this.replay;
+    if (!sim || !replay || this.generator.isGenerating || this.jumping || this.exportingGif) return;
+    const f = sim.history.dropped + replay.index;
+    if (!sim.canBranchAt(f)) return;
+    const year = replay.year;
+    const ok = await this.uiManager.confirm(
+      "BRANCH HISTORY",
+      `Go back to year ${year} and let history take another course? The current timeline (year ${sim.year}) is kept, and you can switch back to it.`,
+    );
+    if (!ok || this.sim !== sim) return;
+    this.pauseSim();
+    this.replay = null;
+    this.inSimStep = true;
+    const done = sim.branchAt(f);
+    this.inSimStep = false;
+    this.afterTimelineChange(done ? `History branches from year ${year}` : `Could not go back to year ${year}`);
+  }
+
+  private switchTimeline() {
+    const sim = this.sim;
+    if (!sim?.other || this.jumping || this.exportingGif) return;
+    this.pauseSim();
+    this.replay = null;
+    this.inSimStep = true;
+    sim.switchTimeline();
+    this.inSimStep = false;
+    this.afterTimelineChange(`Switched timelines: year ${sim.year}`);
+  }
+
+  // The world was rewound or swapped wholesale: refresh everything
+  private afterTimelineChange(message: string) {
+    this.session.historyMoved();
+    this.afterRestore({ label: "", rows: null, changed: new Set(["nations", "provinces", "cities", "worldRoads", "pois", "cultures", "races", "relations"]) });
+    if (this.sim) this.sim.dirty = { y0: Infinity, y1: -1, provinces: false };
+    this.renderSimPanel();
+    toast(message);
+  }
+
   private backToPresent() {
     if (!this.replay) return;
     this.replay = null;
@@ -1673,6 +1717,22 @@ export class Interface {
     setText("sim-scrub-year", replay ? `Year ${replay.year} · replay` : sim ? `Year ${sim.year}` : "");
     const present = document.getElementById("sim-present") as HTMLButtonElement | null;
     if (present) present.disabled = !replay;
+    // What-if: rewind to the replayed year and let history go another way
+    const branch = document.getElementById("sim-branch") as HTMLButtonElement | null;
+    if (branch) {
+      const ok = !!(sim && replay && sim.canBranchAt(sim.history.dropped + replay.index)) && !this.jumping && !this.exportingGif;
+      branch.disabled = !ok;
+      branch.title = ok ? `Rewind to year ${replay!.year} and let history take another course` : "Scrub the timeline to a past year first";
+    }
+    const other = document.getElementById("sim-other") as HTMLButtonElement | null;
+    if (other) {
+      other.style.display = sim?.other ? "" : "none";
+      if (sim?.other) {
+        other.querySelector("span")!.textContent = `Other timeline (year ${sim.other.year})`;
+        other.title = `Switch to the timeline that split off in year ${sim.other.branchedAt}`;
+        other.disabled = this.jumping || this.exportingGif;
+      }
+    }
     const gif = document.getElementById("sim-gif") as HTMLButtonElement | null;
     if (gif) {
       gif.disabled = frames < 2 || this.exportingGif;
