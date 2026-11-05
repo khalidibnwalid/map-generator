@@ -143,7 +143,7 @@ export async function generateCities(ctx: GeneratorContext): Promise<void> {
     for (const cell of validCells) {
       if (placed >= maxCitiesPerNation) break;
 
-      let chance = 0;
+      let chance: number;
       if (cell.density >= 0.8) chance = 1.0;
       else if (cell.density >= 0.6) chance = 0.2;
       else if (cell.density >= 0.4) chance = 0.012;

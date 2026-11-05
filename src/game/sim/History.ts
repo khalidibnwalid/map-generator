@@ -29,6 +29,7 @@ interface Frame {
 }
 
 export type SavedFrame = Omit<Frame, "bytes">;
+export type HistoryFrame = Frame;
 
 export interface SavedHistory {
   nextUid: number;
@@ -50,6 +51,7 @@ const MAX_BYTES = 192 * 1024 * 1024;
 
 export class HistoryRecorder {
   public frames: Frame[] = [];
+  public dropped = 0; // frames dropped from the front to bound memory
   private uids = new WeakMap<Nation, number>();
   private nextUid = 0;
   private prev: Int16Array; // uid per cell at the last recorded frame
@@ -163,6 +165,7 @@ export class HistoryRecorder {
     }
     this.bytes -= this.frames[0].bytes;
     this.frames.shift();
+    this.dropped++;
     this.cursor = -1;
   }
 
@@ -233,6 +236,44 @@ export class HistoryRecorder {
       return frame;
     });
     this.cursor = -1;
+    const last = this.frames.length - 1;
+    if (last < 0) {
+      this.prev.fill(-1);
+      return;
+    }
+    this.seekUids(last);
+    this.prev.set(this.cur);
+    for (const n of this.frames[last].nations) this.lastMeta.set(n.uid, n);
+  }
+
+  // Frames recorded so far, counting dropped ones (stable across drops)
+  get total() {
+    return this.dropped + this.frames.length;
+  }
+
+  // Forgets every frame from absolute frame `total` on (a branch rewinds time)
+  public truncate(total: number) {
+    const keep = Math.max(0, total - this.dropped);
+    if (keep >= this.frames.length) return;
+    this.frames.length = keep;
+    this.adopt();
+  }
+
+  // Hands the recorded frames over (for a timeline set aside) or takes them back
+  public takeFrames(): { frames: Frame[]; dropped: number } {
+    return { frames: this.frames.slice(), dropped: this.dropped };
+  }
+  public putFrames(t: { frames: Frame[]; dropped: number }) {
+    this.frames = t.frames.slice();
+    this.dropped = t.dropped;
+    this.adopt();
+  }
+
+  // Rebuilds the running state from the last frame
+  private adopt() {
+    this.bytes = this.frames.reduce((s, f) => s + f.bytes, 0);
+    this.cursor = -1;
+    this.lastMeta.clear();
     const last = this.frames.length - 1;
     if (last < 0) {
       this.prev.fill(-1);

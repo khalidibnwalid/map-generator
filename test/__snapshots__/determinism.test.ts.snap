@@ -1,0 +1,101 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`seeded generation > Earthlike, seed 984358 matches its golden fingerprint 1`] = `
+{
+  "biomes": "2bdcec2a",
+  "cities": "4f8ce0f2",
+  "climate": "99fad90f",
+  "coast": "d9984446",
+  "counts": "13 nations, 167 provinces, 795 cities",
+  "cultures": "880e950d/8741b2b1",
+  "elevation": "08ea3726",
+  "nations": "cba226e9/f9166305",
+  "pois": "589dca41",
+  "population": "61f0ee41",
+  "provinces": "0f85a0e6/cbbda22c",
+  "relations": "c222438c",
+  "rivers": "3d9aa297",
+  "roads": "87883a6f",
+  "seaRoutes": "49c8175a",
+}
+`;
+
+exports[`seeded generation > Heavy Landmass, seed 982332 matches its golden fingerprint 1`] = `
+{
+  "biomes": "f6dbb4c1",
+  "cities": "931d7ec7",
+  "climate": "55616483",
+  "coast": "acb7d415",
+  "counts": "15 nations, 251 provinces, 1110 cities",
+  "cultures": "5628a62e/bc900064",
+  "elevation": "1f16a305",
+  "nations": "90c09910/4c63c265",
+  "pois": "f9568c8e",
+  "population": "d507e1cf",
+  "provinces": "64cf58d4/e11d2b4c",
+  "relations": "f22ef2c5",
+  "rivers": "0c3fe7d7",
+  "roads": "2d851f18",
+  "seaRoutes": "292be663",
+}
+`;
+
+exports[`seeded generation > Landworld, seed 986384 matches its golden fingerprint 1`] = `
+{
+  "biomes": "6ba58739",
+  "cities": "60841c5c",
+  "climate": "3bc527df",
+  "coast": "bf385c0a",
+  "counts": "14 nations, 340 provinces, 1166 cities",
+  "cultures": "89e4351a/e66727a6",
+  "elevation": "6d1efdd4",
+  "nations": "9e005c80/a0211938",
+  "pois": "1313c5c4",
+  "population": "3d5b2afd",
+  "provinces": "d34d1de6/eda4c33a",
+  "relations": "7698e9ca",
+  "rivers": "c4446773",
+  "roads": "cecc4cea",
+  "seaRoutes": "8c533dc9",
+}
+`;
+
+exports[`seeded generation > Pangea, seed 985371 matches its golden fingerprint 1`] = `
+{
+  "biomes": "12dd6bfd",
+  "cities": "bc1cc53a",
+  "climate": "e181c53f",
+  "coast": "f28d0244",
+  "counts": "14 nations, 134 provinces, 413 cities",
+  "cultures": "7b6e9829/58de880d",
+  "elevation": "c4b8b780",
+  "nations": "7ecdccf7/6344273b",
+  "pois": "f6809dab",
+  "population": "e09a822d",
+  "provinces": "83acda43/310c4f87",
+  "relations": "baa0cfe2",
+  "rivers": "eb0a4265",
+  "roads": "fcebb614",
+  "seaRoutes": "ee1261d6",
+}
+`;
+
+exports[`seeded generation > Realistic Continents, seed 983345 matches its golden fingerprint 1`] = `
+{
+  "biomes": "466fccb2",
+  "cities": "abb5531e",
+  "climate": "93f9c38c",
+  "coast": "3d5870dc",
+  "counts": "15 nations, 200 provinces, 839 cities",
+  "cultures": "4c4a4125/a40ab585",
+  "elevation": "8dc1122e",
+  "nations": "2851978d/d1708422",
+  "pois": "238c53b5",
+  "population": "f955b3ef",
+  "provinces": "fddcee25/f6e10b6c",
+  "relations": "75055be5",
+  "rivers": "2eae1747",
+  "roads": "7a05e4cb",
+  "seaRoutes": "98ad2388",
+}
+`;

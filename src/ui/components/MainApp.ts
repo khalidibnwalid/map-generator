@@ -26,6 +26,14 @@ const ICONS = {
   step: icon(`<path d="M5 4.5v15l10-7.5z" fill="currentColor"/><path d="M18 5v14"/>`),
   edit: icon(`<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13 7 4 4"/>`),
   poster: icon(`<rect x="3" y="4" width="18" height="16" rx="1.5"/><rect x="6" y="7" width="12" height="10" rx="0.5"/><path d="m6 15 3.5-3.5 2.5 2.5 2-2 4 4"/>`),
+  undo: icon(`<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>`),
+  redo: icon(`<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>`),
+  link: icon(`<path d="M10 14a4.5 4.5 0 0 0 6.4 0l3.2-3.2a4.5 4.5 0 0 0-6.4-6.4L12 5.6"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3.2 3.2a4.5 4.5 0 0 0 6.4 6.4L12 18.4"/>`),
+  data: icon(`<ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/><path d="M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"/>`),
+  vector: icon(`<path d="M4 18 12 5l8 13"/><circle cx="12" cy="5" r="2"/><circle cx="4" cy="18" r="2"/><circle cx="20" cy="18" r="2"/>`),
+  branch: icon(`<circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 7v10M18 10c0 4-6 3-12 7"/>`),
+  swap: icon(`<path d="M7 7h12l-3-3M17 17H5l3 3"/>`),
+  restore: icon(`<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 8v4l2.5 2.5"/>`),
   image: icon(`<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/>`),
 };
 
@@ -368,6 +376,10 @@ export default function renderMainApp() {
                 <button id="sim-gif" class="btn-ghost sim-gif" disabled><span class="sim-gif-label">Export GIF</span></button>
                 <span id="sim-scrub-to" class="muted">–</span>
               </div>
+              <div class="sim-branch-row">
+                <button id="sim-branch" class="btn-ghost" disabled title="Scrub to a past year first">${ICONS.branch}<span>Branch from this year</span></button>
+                <button id="sim-other" class="btn-ghost" style="display:none">${ICONS.swap}<span>Other timeline</span></button>
+              </div>
             </div>
             <details class="field war-room" id="war-room">
               <summary class="field-label">Command a battle</summary>
@@ -419,6 +431,23 @@ export default function renderMainApp() {
               <span><strong>Open world</strong><small>Load a .world file</small></span>
             </button>
             <input type="file" id="open-world-input" accept=".world" style="display:none" />
+            <button id="share-link" class="file-card">
+              ${ICONS.link}
+              <span><strong>Copy link</strong><small id="share-link-info">Anyone with the link gets this exact world</small></span>
+            </button>
+            <button id="restore-autosave" class="file-card" style="display:none">
+              ${ICONS.restore}
+              <span><strong>Restore last session</strong><small id="restore-autosave-info">Autosaved in this browser</small></span>
+            </button>
+            <div class="group-title">Export</div>
+            <button id="export-data" class="file-card">
+              ${ICONS.data}
+              <span><strong>Export for game engines</strong><small>JSON, 16-bit heightmap and lookup images (.zip)</small></span>
+            </button>
+            <button id="export-svg" class="file-card">
+              ${ICONS.vector}
+              <span><strong>Export SVG</strong><small>Layered vector map for Inkscape or Illustrator</small></span>
+            </button>
             <div class="group-title">Atlas</div>
             <button id="export-poster" class="file-card">
               ${ICONS.poster}
@@ -431,6 +460,9 @@ export default function renderMainApp() {
       <canvas id="mapCanvas"></canvas>
 
       <div class="map-controls">
+        <button id="undo" class="icon-btn" title="Undo" aria-label="Undo" disabled>${ICONS.undo}</button>
+        <button id="redo" class="icon-btn" title="Redo" aria-label="Redo" disabled>${ICONS.redo}</button>
+        <span class="map-controls-sep" aria-hidden="true"></span>
         <button id="zoom-in" class="icon-btn" title="Zoom in">${ICONS.plus}</button>
         <button id="zoom-out" class="icon-btn" title="Zoom out">${ICONS.minus}</button>
         <button id="zoom-reset" class="icon-btn" title="Show whole world">${ICONS.home}</button>

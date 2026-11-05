@@ -25,6 +25,13 @@ const CITY_AT = 60000;
 // the smallest may be razed to ruins; settlers found villages on empty
 // fertile land. Trade flows (~25 ms) are recomputed every decade, or at
 // most every five years while the map of wars keeps changing.
+export interface EconCheckpoint {
+  states: [City, CityState][];
+  lastTrade: number;
+  warKey: string;
+  fertile: Int32Array | null;
+}
+
 export class EconomySim {
   public touched = new Set<City>(); // settlements whose drawing must be rebuilt
   public removed: City[] = []; // settlements gone to ruin
@@ -33,6 +40,23 @@ export class EconomySim {
   private lastTrade = 0;
   private warKey = "";
   private fertile: Int32Array | null = null; // land cells fit for new villages
+
+  // State at a history checkpoint (settlements by object, which survive a rewind)
+  public checkpoint(world: WorldData): EconCheckpoint {
+    const states: [City, CityState][] = [];
+    for (const c of world.cities) {
+      const s = this.state.get(c);
+      if (s) states.push([c, { ...s }]);
+    }
+    return { states, lastTrade: this.lastTrade, warKey: this.warKey, fertile: this.fertile?.slice() ?? null };
+  }
+  public rollback(cp: EconCheckpoint) {
+    this.state = new WeakMap(cp.states.map(([c, s]) => [c, { ...s }]));
+    this.lastTrade = cp.lastTrade;
+    this.warKey = cp.warKey;
+    this.fertile = cp.fertile?.slice() ?? null;
+    this.clearDirty();
+  }
 
   // Called by the UI once it has redrawn
   public clearDirty() {

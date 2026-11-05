@@ -10,8 +10,9 @@ import {
   setRelation,
 } from "../politics";
 import { colorForNewNation, partitionNation, refreshTerritorialWaters } from "../generators";
-import { EconomySim, type EconEventKind } from "./economySim";
-import { HistoryRecorder, type SavedHistory } from "./History";
+import { EconomySim, type EconCheckpoint, type EconEventKind } from "./economySim";
+import { HistoryRecorder, type HistoryFrame, type SavedHistory } from "./History";
+import { captureWorld, packSnapshot, restoreWorld, unpackSnapshot, type PackedSnapshot } from "../EditHistory";
 import { crownRulers, foundHouse, installCadet, reignYear, rulerStyle, succeed, usurp } from "./Rulers";
 
 export interface SavedSim {
@@ -52,6 +53,68 @@ export interface FrontLine {
   a: number;
   b: number;
   chains: Float32Array[];
+}
+
+// --- What-if branches ---
+// Checkpoints let history be rewound to any recorded year: the world and the
+// simulation's own state are saved every CHECKPOINT_EVERY frames (and around
+// anything that can't be replayed: edits, commanded battles), and a branch
+// restores the nearest one, replays the recorded steps up to the chosen year
+// (the simulation is deterministic, so this reproduces it exactly), then
+// nudges the random stream so the future takes another course.
+
+const CHECKPOINT_EVERY = 10;
+const MAX_CHECKPOINTS = 64;
+
+type Op = { kind: "step" | "skip"; frames: number }; // frames recorded once the op ran
+
+interface Checkpoint {
+  frames: number; // history.total when taken
+  ops: number; // ops.length when taken
+  exact: boolean; // nothing was edited since frame (frames - 1) was recorded
+  year: number;
+  worldYear: number;
+  world: PackedSnapshot;
+  random: number;
+  events: SimEvent[];
+  battles: Battle[];
+  offensives: Offensive[];
+  lastBattleLog: number;
+  prongs: { seed: number; dx: number; dy: number; n: number }[];
+  calmUntil: [string, number][];
+  wars: [number, War][];
+  gainedAt: Int32Array; // run-length [value, count]
+  gainedBy: Int32Array;
+  econ: EconCheckpoint;
+}
+
+// A timeline set aside by branching, to switch back to
+export interface Timeline {
+  history: { frames: HistoryFrame[]; dropped: number };
+  ops: Op[];
+  checkpoints: Checkpoint[];
+  present: Checkpoint;
+  year: number;
+  branchedAt: number; // year the other timeline split from this one
+}
+
+function rleNum(a: ArrayLike<number>): Int32Array {
+  const out: number[] = [];
+  for (let i = 0; i < a.length; ) {
+    const v = a[i];
+    let j = i + 1;
+    while (j < a.length && a[j] === v) j++;
+    out.push(v, j - i);
+    i = j;
+  }
+  return Int32Array.from(out);
+}
+function unrleInto(p: Int32Array, out: Int32Array | Int16Array) {
+  let o = 0;
+  for (let k = 0; k < p.length; k += 2) {
+    out.fill(p[k], o, o + p[k + 1]);
+    o += p[k + 1];
+  }
 }
 
 interface War {
@@ -159,6 +222,12 @@ export class Simulation {
   private gainedAt: Int32Array;
   private gainedBy: Int16Array;
   private gainCache: { key: string; lines: FrontLine[] } | null = null;
+  private checkpoints: Checkpoint[] = [];
+  private ops: Op[] = [];
+  private needsCheckpoint = true;
+  private editedSinceRecord = false;
+  public branches = 0; // branches taken, which also varies each new course
+  public other: Timeline | null = null; // the timeline left by the last branch
   private culture: Int16Array;
   private people: Float32Array;
   private owner: Int16Array;
@@ -177,6 +246,160 @@ export class Simulation {
   // The user changed the map: re-read it before the next year
   public markEdited() {
     this.needsSync = true;
+    // Edits can't be replayed: the next year starts from a fresh checkpoint
+    this.needsCheckpoint = true;
+    this.editedSinceRecord = true;
+  }
+
+  // --- Checkpoints and branches ---
+
+  private checkpoint(): Checkpoint {
+    const w = this.world;
+    const cp: Checkpoint = {
+      frames: this.history.total,
+      ops: this.ops.length,
+      exact: !this.editedSinceRecord,
+      year: this.year,
+      worldYear: w.year,
+      world: packSnapshot(captureWorld(w)),
+      random: this.noise.randomState,
+      events: this.events.slice(),
+      battles: this.battles.slice(),
+      offensives: this.offensives.slice(),
+      lastBattleLog: this.lastBattleLog,
+      prongs: this.prongs.map((p) => ({ ...p })),
+      calmUntil: [...this.calmUntil],
+      wars: [...this.wars].map(([k, v]): [number, War] => [k, { ...v }]),
+      gainedAt: rleNum(this.gainedAt),
+      gainedBy: rleNum(this.gainedBy),
+      econ: this.econ.checkpoint(w),
+    };
+    this.checkpoints.push(cp);
+    // Thin out old checkpoints rather than grow without bound
+    if (this.checkpoints.length > MAX_CHECKPOINTS) this.checkpoints = this.checkpoints.filter((_c, i) => i % 2 === 1 || i >= MAX_CHECKPOINTS / 2);
+    this.needsCheckpoint = false;
+    // The first run and any replay both re-read the grid here, so they stay in step
+    this.needsSync = true;
+    return cp;
+  }
+
+  private beforeOp() {
+    const last = this.checkpoints.at(-1);
+    if (this.needsCheckpoint || !last || this.history.total - last.frames >= CHECKPOINT_EVERY) this.checkpoint();
+  }
+
+  private afterOp(kind: Op["kind"]) {
+    this.ops.push({ kind, frames: this.history.total });
+    this.editedSinceRecord = false;
+  }
+
+  private rollback(cp: Checkpoint) {
+    const w = this.world;
+    restoreWorld(w, unpackSnapshot(cp.world));
+    w.year = cp.worldYear;
+    this.year = cp.year;
+    this.noise.randomState = cp.random;
+    this.events = cp.events.slice();
+    this.battles = cp.battles.slice();
+    this.offensives = cp.offensives.slice();
+    this.lastBattleLog = cp.lastBattleLog;
+    this.prongs = cp.prongs.map((p) => ({ ...p }));
+    this.calmUntil = new Map(cp.calmUntil);
+    this.wars = new Map(cp.wars.map(([k, v]): [number, War] => [k, { ...v }]));
+    unrleInto(cp.gainedAt, this.gainedAt);
+    unrleInto(cp.gainedBy, this.gainedBy);
+    this.econ.rollback(cp.econ);
+    this.history.truncate(cp.frames);
+    this.ops.length = cp.ops;
+    this.checkpoints = this.checkpoints.filter((c) => c.frames <= cp.frames && c.ops <= cp.ops);
+    // Scratch state and caches start clean
+    this.stamp.fill(0);
+    this.stampId = 0;
+    this.byProv = null;
+    this.gainCache = null;
+    this.changedCities.clear();
+    this.dirty = { y0: 0, y1: this.H - 1, provinces: true };
+    this.needsSync = true;
+    this.needsCheckpoint = false;
+    this.editedSinceRecord = !cp.exact;
+  }
+
+  // Absolute index of the newest recorded frame
+  get lastFrame() {
+    return this.history.total - 1;
+  }
+
+  // Whether recorded frame f (absolute) can be branched from
+  public canBranchAt(f: number): boolean {
+    return f >= 0 && f < this.lastFrame && this.checkpointFor(f) !== null;
+  }
+
+  private checkpointFor(f: number): Checkpoint | null {
+    for (let i = this.checkpoints.length - 1; i >= 0; i--) {
+      const c = this.checkpoints[i];
+      if (c.frames <= f || (c.exact && c.frames - 1 === f) || (c.frames === 0 && f === 0)) return c;
+    }
+    return null;
+  }
+
+  // Rewinds to recorded frame f and lets history take another course from
+  // there. The timeline left behind is kept in other. Returns false when the
+  // frame can't be reached.
+  public branchAt(f: number, reroll = true): boolean {
+    const cp = this.checkpointFor(f);
+    if (!cp || f >= this.lastFrame) return false;
+    const left = this.timeline(this.year);
+    this.rollback(cp);
+    // Replay the recorded steps: the simulation is deterministic
+    const exactHere = (cp.frames === 0 && f === 0) || (cp.exact && cp.frames - 1 === f);
+    if (!exactHere)
+      for (const op of left.ops.slice(cp.ops)) {
+        if (this.history.total > f) break;
+        if (op.kind === "skip") this.skipYear();
+        else this.step();
+      }
+    if (this.history.total !== f + 1 && !(f === 0 && this.history.total === 0)) {
+      // Could not get there: put the old timeline back
+      this.restoreTimeline(left);
+      return false;
+    }
+    left.branchedAt = this.year;
+    this.other = left;
+    // Another course from here on
+    this.branches++;
+    // (without a reroll the same future would follow: used to test replays)
+    if (reroll) this.noise.randomState = (this.noise.randomState + Math.imul(this.branches, 0x9e3779b1)) >>> 0;
+    this.checkpoint();
+    return true;
+  }
+
+  // Swaps the current timeline with the one set aside by the last branch
+  public switchTimeline(): boolean {
+    const other = this.other;
+    if (!other) return false;
+    const here = this.timeline(other.branchedAt);
+    this.restoreTimeline(other);
+    this.other = here;
+    return true;
+  }
+
+  private restoreTimeline(t: Timeline) {
+    this.history.putFrames(t.history);
+    this.ops = t.ops.slice();
+    this.checkpoints = t.checkpoints.slice();
+    this.rollback(t.present);
+  }
+
+  private timeline(branchedAt: number): Timeline {
+    const present = this.checkpoint();
+    return {
+      history: this.history.takeFrames(),
+      ops: this.ops.slice(),
+      checkpoints: this.checkpoints.slice(),
+      present,
+      year: this.year,
+      branchedAt,
+    };
   }
 
   public save(): SavedSim {
@@ -375,6 +598,7 @@ export class Simulation {
   // Lets a year pass on the calendar without simulating it: borders stay
   // as they are, but the year is recorded so the timeline stays continuous
   public skipYear() {
+    this.beforeOp();
     if (this.needsSync) {
       this.sync();
       this.needsSync = false;
@@ -385,9 +609,17 @@ export class Simulation {
     w.year = this.year;
     this.offensives = [];
     this.history.record(this.year, this.owner, w.nations);
+    this.afterOp("skip");
   }
 
   public step(): boolean {
+    this.beforeOp();
+    const changed = this.stepYear();
+    this.afterOp("step");
+    return changed;
+  }
+
+  private stepYear(): boolean {
     const w = this.world;
     const W = this.W;
     const H = this.H;
@@ -807,6 +1039,9 @@ export class Simulation {
     this.log("battle", `${landing ? "Landing at" : "Battle of"} ${place}: ${A.name} defeats ${D.name}`, bx, by);
     this.settle();
     this.history.record(this.year, this.owner, w.nations);
+    // A commanded battle can't be replayed: keep its outcome as a checkpoint
+    this.editedSinceRecord = false;
+    this.checkpoint();
     return { taken, place };
   }
 

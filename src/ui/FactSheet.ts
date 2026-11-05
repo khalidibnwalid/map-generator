@@ -7,6 +7,7 @@ import type { SimEvent } from "../game/sim/Simulation";
 import type { ThematicMode } from "../core/GPURenderer";
 import { downloadBlob, escapeHtml, fileSlug, frameExtent, nationsExtent, type AtlasHost } from "./AtlasRender";
 import { loadPosterFonts } from "./PosterDecor";
+import { background } from "./components/Toast";
 
 // Fields another feature may add to nations; read defensively
 type NationExtras = Nation & { ruler?: { name?: string; title?: string }; dynasty?: string };
@@ -186,7 +187,7 @@ export class FactSheet {
     this.root.addEventListener("click", (e) => {
       const t = e.target as HTMLElement;
       if (t.closest("#fs-close, #fs-close-2")) this.close();
-      else if (t.closest("#fs-export")) this.exportImage();
+      else if (t.closest("#fs-export")) background(this.exportImage(), "Fact sheet export");
       else if (t.closest("[data-maplayer]")) {
         this.mapLayer = t.closest<HTMLElement>("[data-maplayer]")!.dataset.maplayer as FactSheet["mapLayer"];
         this.root.querySelectorAll<HTMLElement>("[data-maplayer]").forEach((b) => b.classList.toggle("active", b.dataset.maplayer === this.mapLayer));

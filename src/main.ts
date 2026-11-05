@@ -1,6 +1,7 @@
 import "./style.css";
 import { CanvasManager } from "./core/CanvasManager";
 import { MapGenerator } from "./game/MapGenerator";
+import { recipeFromHash } from "./game/WorldLink";
 import { Interface } from "./ui/Interface";
 import renderMainApp from "./ui/components/MainApp";
 
@@ -8,14 +9,22 @@ renderMainApp();
 
 // Initialize
 const canvasManager = new CanvasManager("mapCanvas");
-// Generate an 800x450 map logic cells size (16:9 aspect ratio)
-const random = Math.floor(Math.random() * 1000000);
-const generator = new MapGenerator(800, 450, random);
+// A world link (#seed=…&land=…) opens that world; otherwise a random one
+const recipe = recipeFromHash(location.hash);
+const generator = recipe
+  ? new MapGenerator(recipe.width, recipe.height, recipe.seed)
+  : new MapGenerator(800, 450, Math.floor(Math.random() * 1000000));
+if (recipe) {
+  generator.currentPreset = recipe.preset;
+  generator.greatPowers = recipe.greatPowers;
+  generator.settings = recipe.settings;
+}
 
 // Initial state: fit to screen
-const fitScale = window.innerHeight / 450;
-canvasManager.scale = fitScale;
-canvasManager.offsetX = (window.innerWidth - 800 * canvasManager.scale) / 2;
+const W = generator.getWidth();
+const H = generator.getHeight();
+canvasManager.scale = window.innerHeight / H;
+canvasManager.offsetX = (window.innerWidth - W * canvasManager.scale) / 2;
 canvasManager.offsetY = 0;
 
 // The Interface constructor now triggers the initial generation automatically (async)

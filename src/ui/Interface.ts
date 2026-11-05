@@ -12,11 +12,9 @@ import { UIManager } from "./UIManager";
 import { CityRenderer } from "./CityRenderer";
 import { NetworkRenderer } from "./NetworkRenderer";
 import { PoiRenderer } from "./PoiRenderer";
-import { nearestPoi, POI_LABELS } from "../game/generators/generatePOIs";
 import { installSteppers } from "./components/NumberInput";
-import { saveWorld, loadWorld } from "../game/WorldFile";
-import { RESOURCE_INFO, WEALTH_TIERS } from "../game/generators/generateEconomy";
-import { cityExports, cityTrade, tradeRole } from "../game/generators/generateTrade";
+import { saveWorld } from "../game/WorldFile";
+import { computeTrade } from "../game/generators/generateTrade";
 import { THEMES, NIGHT_THEMES } from "./themes";
 import { MONTHS, seasonFlood } from "../core/Season";
 import { DEFAULT_SETTINGS } from "../game/generators/types";
@@ -28,8 +26,13 @@ import { nationFlagUrl } from "../game/flags";
 import { familyLabel } from "../game/names";
 import { installSliders, syncSliders } from "./components/Slider";
 import { Simulation, type SimEvent } from "../game/sim/Simulation";
+import { background, toast } from "./components/Toast";
+import { describePoint, describeReplayPoint, peoplePerKm2, realmAt, type TooltipContent } from "./MapTooltip";
+import { EditSession, type EditSessionHost } from "./EditSession";
+import { WorldFiles } from "./WorldFiles";
+import type { RestoreResult } from "../game/EditHistory";
 import { viewStats, type SnapNation } from "../game/sim/History";
-import { crownRulers, rulerStyle, seededRand } from "../game/sim/Rulers";
+import { crownRulers, seededRand } from "../game/sim/Rulers";
 import { BuildTool } from "./BuildTool";
 import { createDropdown } from "./components/Dropdown";
 import { dimOutside, layoutContext, yieldToUI, type AtlasHost, type MapView } from "./AtlasRender";
@@ -84,10 +87,16 @@ function hexRgb(hex: string): [number, number, number] {
   return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
 }
 
-// People per km² for a normalized density value (rural + urban mix)
-export function peoplePerKm2(d: number): number {
-  return Math.round(2 + Math.pow(Math.max(0, d), 1.6) * 160);
-}
+export { peoplePerKm2 };
+
+// Landmass names as the World tab shows them
+const PRESET_NAMES: Record<Preset, string> = {
+  "Heavy Landmass": "Giant Continents",
+  Earthlike: "Medium Continents",
+  "Realistic Continents": "Small Continents",
+  Pangea: "Supercontinent",
+  Landworld: "Landworld",
+};
 
 export class Interface {
   private generator: MapGenerator;
@@ -151,6 +160,10 @@ export class Interface {
   private importDialog: ImportDialog | null = null;
   private guideName = "";
   private factSheet: FactSheet | null = null;
+  private session!: EditSession; // undo, redo and autosave
+  private files!: WorldFiles; // File tab, world links and exports
+  // Set up in setupUI: the nations slider range follows the map size
+  private syncNationsRange: (w: number, h: number, count?: number) => void = () => {};
 
   // Sub-managers
   private tooltipManager!: TooltipManager;
@@ -243,21 +256,28 @@ export class Interface {
         if (!this.inSimStep) this.sim?.markEdited();
       };
 
+      this.session = new EditSession(this.editSessionHost());
+
       console.log("Starting initial generation...");
       this.uiManager.showLoadingModal();
-      this.generator
-        .generate((pct) => {
-          this.uiManager.updateLoadingModal(pct);
-        })
-        .then(() => {
-          this.onWorldGenerated();
-          this.uiManager.hideLoadingModal();
-        });
+      background(
+        this.generator
+          .generate((pct) => {
+            this.uiManager.updateLoadingModal(pct);
+          })
+          .then(() => this.onWorldGenerated(false))
+          .finally(() => this.uiManager.hideLoadingModal())
+          // The random first world is not autosaved; the last session can come back
+          .then(() => this.session.offerRestore()),
+        "Generating the world",
+      );
     } catch (e) {
       console.error("Failed to initialize GPURenderer:", e);
     }
 
     this.setupUI();
+    // The first world may come from a link: show its options
+    this.files.syncControls();
     this.canvasManager.onRender = this.renderMap.bind(this);
 
     this.setupEventListeners();
@@ -269,7 +289,67 @@ export class Interface {
     this.factSheet.open(idx);
   }
 
-  private onWorldGenerated() {
+  // What undo, redo and autosave need from the interface
+  private editSessionHost(): EditSessionHost {
+    return {
+      world: () => this.generator.getWorld(),
+      busy: () => this.generator.isGenerating || !!this.replay || !!this.simTimer || this.jumping || this.exportingGif,
+      canvasEdits: () =>
+        this.nationsManager.isEditingNations ||
+        this.nationsManager.nationPlacementMode ||
+        this.nationsManager.provincePlacementMode !== -1 ||
+        this.nationsManager.cityPlacementMode !== -1 ||
+        !!this.peopleEditor() ||
+        this.activeTab === "build",
+      afterRestore: (r) => this.afterRestore(r),
+      snapshot: () => saveWorld(this.generator, this.sim?.save()),
+      describe: () => {
+        const world = this.generator.getWorld();
+        const preset = this.generator.guide ? "Imported land" : (PRESET_NAMES[this.generator.currentPreset] ?? this.generator.currentPreset);
+        const parts = [preset, `${world.nations.length} realms`, `seed ${this.generator.currentSeed}`];
+        if (world.year) parts.push(`year ${world.year}`);
+        return { seed: this.generator.currentSeed, title: parts.join(" · ") };
+      },
+      open: (blob, name) => this.files.open(blob, name),
+    };
+  }
+
+  // Textures, caches and panels after undo or redo put back an earlier state
+  private afterRestore(r: RestoreResult) {
+    const world = this.generator.getWorld();
+    const nm = this.nationsManager;
+    if (nm.selectedNationIndex >= world.nations.length) nm.selectedNationIndex = -1;
+    if (nm.hoveredNationIndex >= world.nations.length) nm.hoveredNationIndex = -1;
+    nm.selectedProvinceIndex = -1;
+    nm.nationsStateDirty = true;
+    // Cities and roads came back: wealth follows the trade they carry
+    if (r.changed.has("cities") || r.changed.has("worldRoads")) computeTrade(world);
+    if (r.changed.has("nations") || !r.rows) this.gpuRenderer.updateNationsDataTexture(world);
+    else this.gpuRenderer.updateNationsDataTexture(world, { x: 0, y: r.rows.y0, w: world.width, h: r.rows.y1 - r.rows.y0 + 1 });
+    this.gpuRenderer.updateProvincesDataTexture(world);
+    nm.buildCache();
+    this.sim?.markEdited();
+    if (this.buildTool) {
+      this.buildTool.selected = null;
+      this.buildTool.render();
+    }
+    this.cityRenderer.invalidateAll();
+    this.vectorState = null;
+    this.lightsKey = "";
+    this.thematicFocus = -2;
+    if (this.activeTab === "nations") nm.renderList();
+    if (this.activeTab === "cultures") this.culturesManager.renderList();
+    if (this.activeTab === "races") this.racesManager.renderList();
+    this.renderWarRoom();
+    this.updateLegend();
+    this.updateTooltipBar();
+    this.canvasManager.scheduleRender();
+  }
+
+  // `keep`: the user chose this world (generated, opened or restored), so it is autosaved
+  private onWorldGenerated(keep = true) {
+    this.session?.worldReplaced(keep);
+    this.files?.syncLink();
     this.pauseSim();
     this.warAttacker = null;
     this.warPicking = false;
@@ -317,9 +397,54 @@ export class Interface {
     let isAttemptingPaint = false;
 
     const canvas = this.canvasManager.canvas;
-    canvas.addEventListener("mousemove", (e) => {
+    const stopAllPainting = () => {
+      isAttemptingPaint = false;
+      this.nationsManager.stopPainting();
+      this.culturesManager.stopPainting();
+      this.racesManager.stopPainting();
+    };
+    // Touch: a long press is the finger's Alt+click (fact sheet), or its
+    // right-click while building (remove)
+    let pressTimer = 0;
+    const cancelPress = () => {
+      clearTimeout(pressTimer);
+      pressTimer = 0;
+    };
+    const longPress = (clientX: number, clientY: number) => {
+      pressTimer = 0;
+      if (this.canvasManager.isPinching) return;
+      const cm = this.canvasManager;
+      const rect = cm.canvas.getBoundingClientRect();
+      const world = this.generator.getWorld();
+      const fx = (clientX - rect.left - cm.offsetX) / cm.scale;
+      const fy = (clientY - rect.top - cm.offsetY) / cm.scale;
+      const x = ((fx % world.width) + world.width) % world.width;
+      const wy = Math.floor(fy);
+      if (wy < 0 || wy >= world.height) return;
+      stopAllPainting();
+      if (this.activeTab === "build") {
+        this.buildTool.remove(this.buildTool.pick(x, fy, cm.scale));
+        return;
+      }
+      const n = world.sampler.isWater(fx, fy) ? -1 : (world.grid[Math.floor(x)][wy].nationIndex ?? -1);
+      if (n >= 0) {
+        this.tooltipManager.hide();
+        this.showFacts(n);
+        navigator.vibrate?.(15);
+      }
+    };
+
+    canvas.addEventListener("pointermove", (e) => {
+      if (pressTimer && Math.hypot(e.clientX - this.pointerDown.x, e.clientY - this.pointerDown.y) > 8) cancelPress();
+      // Two fingers move the view; nothing under them is edited
+      if (this.canvasManager.isPinching) {
+        cancelPress();
+        stopAllPainting();
+        return;
+      }
       this.lastMouseX = e.clientX;
       this.lastMouseY = e.clientY;
+      const touch = e.pointerType !== "mouse";
 
       if (
         this.nationsManager.cityPlacementMode !== -1 ||
@@ -335,7 +460,8 @@ export class Interface {
         if (pm.isPainting) pm.handlePainting(e.clientX, e.clientY);
         this.canvasManager.scheduleRender(); // brush overlay
       } else if (!this.nationsManager.isEditingNations) {
-        this.updateHover(e.clientX, e.clientY);
+        // A dragging finger pans; a tap shows the tooltip instead (pointerup)
+        if (!touch) this.updateHover(e.clientX, e.clientY);
       } else if (this.activeTab === "nations" && this.nationsManager.isEditingNations) {
         if (isAttemptingPaint && !this.nationsManager.isPainting) {
           const dist = Math.hypot(e.clientX - mousedownX, e.clientY - mousedownY);
@@ -400,24 +526,24 @@ export class Interface {
         this.canvasManager.scheduleRender();
       } else if (this.nationsManager.nationPlacementMode) {
         if (wy >= 0 && wy < world.height) {
-          (async () => {
-            await this.nationsManager.addNation(Math.floor(x), wy);
-            this.updateTooltipBar();
-          })();
+          background(
+            this.nationsManager.addNation(Math.floor(x), wy).then(() => this.updateTooltipBar()),
+            "Founding the nation",
+          );
         }
       } else if (this.nationsManager.provincePlacementMode !== -1) {
         if (wy >= 0 && wy < world.height) {
-          (async () => {
-            await this.nationsManager.addProvince(this.nationsManager.provincePlacementMode, x, fy);
-            this.updateTooltipBar();
-          })();
+          background(
+            this.nationsManager.addProvince(this.nationsManager.provincePlacementMode, x, fy).then(() => this.updateTooltipBar()),
+            "Adding the province",
+          );
         }
       } else if (this.nationsManager.cityPlacementMode !== -1) {
         if (wy >= 0 && wy < world.height) {
-          (async () => {
-            await this.nationsManager.addCity(this.nationsManager.cityPlacementMode, x, fy);
-            this.updateTooltipBar();
-          })();
+          background(
+            this.nationsManager.addCity(this.nationsManager.cityPlacementMode, x, fy).then(() => this.updateTooltipBar()),
+            "Adding the city",
+          );
         }
       } else if (this.thematic === "diplomacy" && wy >= 0 && wy < world.height) {
         // Click to pin the diplomacy focus
@@ -441,8 +567,18 @@ export class Interface {
       }
     });
 
-    canvas.addEventListener("mousedown", (e) => {
+    canvas.addEventListener("pointerdown", (e) => {
+      if (this.canvasManager.isPinching) {
+        cancelPress();
+        stopAllPainting();
+        return;
+      }
       this.pointerDown = { x: e.clientX, y: e.clientY };
+      cancelPress();
+      if (e.pointerType === "touch") {
+        const { clientX, clientY } = e;
+        pressTimer = window.setTimeout(() => longPress(clientX, clientY), 550);
+      }
       const pm = this.peopleEditor();
       if (pm && e.button === 0 && !e.shiftKey) {
         pm.startPainting();
@@ -495,14 +631,22 @@ export class Interface {
       }
     });
 
-    window.addEventListener("mouseup", () => {
-      isAttemptingPaint = false;
-      this.nationsManager.stopPainting();
-      this.culturesManager.stopPainting();
-      this.racesManager.stopPainting();
+    window.addEventListener("pointerup", (e) => {
+      cancelPress();
+      stopAllPainting();
+      // A tap shows what is under the finger
+      if (e.pointerType !== "mouse" && e.target === canvas && !this.canvasManager.isPinching) {
+        const moved = Math.hypot(e.clientX - this.pointerDown.x, e.clientY - this.pointerDown.y) > 8;
+        if (!moved && !this.nationsManager.isEditingNations && !this.peopleEditor()) this.updateHover(e.clientX, e.clientY);
+      }
+    });
+    window.addEventListener("pointercancel", () => {
+      cancelPress();
+      stopAllPainting();
     });
 
-    canvas.addEventListener("mouseleave", () => {
+    canvas.addEventListener("pointerleave", (e) => {
+      if (e.pointerType !== "mouse") return; // lifting a finger "leaves" too
       this.nationsManager.hoveredNationIndex = -1;
       this.tooltipManager.hide();
       this.canvasManager.scheduleRender();
@@ -512,6 +656,7 @@ export class Interface {
     canvas.addEventListener("contextmenu", (e) => {
       if (this.activeTab !== "build") return;
       e.preventDefault();
+      if ((e as PointerEvent).pointerType === "touch") return; // the long press handles it
       const cm = this.canvasManager;
       const rect = cm.canvas.getBoundingClientRect();
       const world = this.generator.getWorld();
@@ -566,6 +711,11 @@ export class Interface {
 
     if (toggleBtn && uiPanel) {
       toggleBtn.addEventListener("click", () => uiPanel.classList.add("collapsed"));
+      // On a phone the open panel would hide the map: start with it closed
+      if (window.matchMedia("(max-width: 640px)").matches) {
+        uiPanel.classList.add("collapsed");
+        document.getElementById("tab-generate")?.classList.remove("active");
+      }
     }
 
     // --- Rail tabs: one panel at a time; clicking the open one closes it ---
@@ -676,6 +826,8 @@ export class Interface {
       });
     }
     document.getElementById("sim-present")?.addEventListener("click", () => this.backToPresent());
+    document.getElementById("sim-branch")?.addEventListener("click", () => background(this.branchHere(), "Branching history"));
+    document.getElementById("sim-other")?.addEventListener("click", () => this.switchTimeline());
     document.getElementById("sim-gif")?.addEventListener("click", () => this.exportGif());
 
     // --- Map controls ---
@@ -860,6 +1012,7 @@ export class Interface {
       lastAuto = auto;
       syncOptionSliders();
     };
+    this.syncNationsRange = syncNationsRange;
     const sizeEl = document.getElementById("size") as HTMLSelectElement | null;
     sizeEl?.addEventListener("change", () => {
       const [w, h] = sizeEl.value.split("x").map(Number);
@@ -925,61 +1078,26 @@ export class Interface {
       });
     }
 
-    // --- Save / open ---
-    const saveBtn = document.getElementById("save-world") as HTMLButtonElement | null;
-    const openBtn = document.getElementById("open-world") as HTMLButtonElement | null;
-    const openInput = document.getElementById("open-world-input") as HTMLInputElement | null;
-    saveBtn?.addEventListener("click", async () => {
-      const blob = await saveWorld(this.generator, this.sim?.save());
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `world-${this.generator.currentSeed}.world`;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    // --- File tab: save, open, links and exports ---
+    this.files = new WorldFiles({
+      generator: this.generator,
+      canvasManager: this.canvasManager,
+      uiManager: this.uiManager,
+      simSave: () => this.sim?.save(),
+      edited: () => this.session?.edited ?? false,
+      title: () => this.editSessionHost().describe().title,
+      syncNationsRange: (w, h, count) => this.syncNationsRange(w, h, count),
+      setGuideName: (name) => (this.guideName = name),
+      syncGuideCard: () => this.syncGuideCard(),
+      worldOpened: () => {
+        this.onWorldGenerated();
+        this.nationsManager.renderList();
+      },
     });
-    openBtn?.addEventListener("click", () => openInput?.click());
     document.getElementById("export-poster")?.addEventListener("click", () => {
       if (this.generator.isGenerating) return; // textures and statistics are not ready
       this.posterDialog ??= new PosterDialog(this.atlasHost());
       this.posterDialog.open(this.nationsManager.selectedNationIndex);
-    });
-    openInput?.addEventListener("change", async () => {
-      const file = openInput.files?.[0];
-      openInput.value = "";
-      if (!file) return;
-      this.uiManager.showLoadingModal();
-      try {
-        await loadWorld(file, this.generator, (pct) => this.uiManager.updateLoadingModal(pct));
-        const W = this.generator.getWidth();
-        const H = this.generator.getHeight();
-        const fitScale = window.innerHeight / H;
-        this.canvasManager.scale = fitScale;
-        this.canvasManager.offsetX = (window.innerWidth - W * fitScale) / 2;
-        this.canvasManager.offsetY = 0;
-        seedInput.value = this.generator.currentSeed.toString();
-    installSliders();
-        presetSelect.value = this.generator.currentPreset;
-        const sizeSelect = document.getElementById("size") as HTMLSelectElement | null;
-        if (sizeSelect) sizeSelect.value = `${W}x${H}`;
-        const powersSelect = document.getElementById("great-powers") as HTMLSelectElement | null;
-        if (powersSelect) powersSelect.value = String(this.generator.greatPowers);
-        for (const o of OPTIONS) {
-          const slider = document.getElementById(`opt-${o.key}`) as HTMLInputElement | null;
-          if (slider && o.kind !== "count") slider.value = String(Math.round(this.generator.settings[o.key] * 100));
-        }
-        syncNationsRange(W, H, this.generator.settings.nations || autoNations(W, H));
-        refreshPickers();
-        this.guideName = file.name.replace(/\.world$/i, "");
-        this.syncGuideCard();
-        this.onWorldGenerated();
-        this.nationsManager.renderList();
-      } catch (err) {
-        console.error(err);
-        await this.uiManager.confirm("OPEN WORLD", `Could not open this file: ${(err as Error).message}`);
-      } finally {
-        this.uiManager.hideLoadingModal();
-      }
     });
 
     // --- Shape from an image ---
@@ -1178,6 +1296,8 @@ export class Interface {
   private applySimChanges(changed: boolean, nationsBefore: number, citiesBefore: number, colorsBefore: string) {
     const world = this.generator.getWorld();
     if (!this.sim) return;
+    // Edits made before this year can't be undone over the simulated changes
+    this.session.historyMoved();
     if (changed) {
       if (this.nationsManager.hoveredNationIndex >= world.nations.length) this.nationsManager.hoveredNationIndex = -1;
       if (world.nations.length !== nationsBefore) this.nationsManager.selectedNationIndex = -1;
@@ -1320,6 +1440,48 @@ export class Interface {
     this.canvasManager.scheduleRender();
   }
 
+  // --- What-if branches ---
+
+  private async branchHere() {
+    const sim = this.sim;
+    const replay = this.replay;
+    if (!sim || !replay || this.generator.isGenerating || this.jumping || this.exportingGif) return;
+    const f = sim.history.dropped + replay.index;
+    if (!sim.canBranchAt(f)) return;
+    const year = replay.year;
+    const ok = await this.uiManager.confirm(
+      "BRANCH HISTORY",
+      `Go back to year ${year} and let history take another course? The current timeline (year ${sim.year}) is kept, and you can switch back to it.`,
+    );
+    if (!ok || this.sim !== sim) return;
+    this.pauseSim();
+    this.replay = null;
+    this.inSimStep = true;
+    const done = sim.branchAt(f);
+    this.inSimStep = false;
+    this.afterTimelineChange(done ? `History branches from year ${year}` : `Could not go back to year ${year}`);
+  }
+
+  private switchTimeline() {
+    const sim = this.sim;
+    if (!sim?.other || this.jumping || this.exportingGif) return;
+    this.pauseSim();
+    this.replay = null;
+    this.inSimStep = true;
+    sim.switchTimeline();
+    this.inSimStep = false;
+    this.afterTimelineChange(`Switched timelines: year ${sim.year}`);
+  }
+
+  // The world was rewound or swapped wholesale: refresh everything
+  private afterTimelineChange(message: string) {
+    this.session.historyMoved();
+    this.afterRestore({ label: "", rows: null, changed: new Set(["nations", "provinces", "cities", "worldRoads", "pois", "cultures", "races", "relations"]) });
+    if (this.sim) this.sim.dirty = { y0: Infinity, y1: -1, provinces: false };
+    this.renderSimPanel();
+    toast(message);
+  }
+
   private backToPresent() {
     if (!this.replay) return;
     this.replay = null;
@@ -1429,6 +1591,22 @@ export class Interface {
     setText("sim-scrub-year", replay ? `Year ${replay.year} · replay` : sim ? `Year ${sim.year}` : "");
     const present = document.getElementById("sim-present") as HTMLButtonElement | null;
     if (present) present.disabled = !replay;
+    // What-if: rewind to the replayed year and let history go another way
+    const branch = document.getElementById("sim-branch") as HTMLButtonElement | null;
+    if (branch) {
+      const ok = !!(sim && replay && sim.canBranchAt(sim.history.dropped + replay.index)) && !this.jumping && !this.exportingGif;
+      branch.disabled = !ok;
+      branch.title = ok ? `Rewind to year ${replay!.year} and let history take another course` : "Scrub the timeline to a past year first";
+    }
+    const other = document.getElementById("sim-other") as HTMLButtonElement | null;
+    if (other) {
+      other.style.display = sim?.other ? "" : "none";
+      if (sim?.other) {
+        other.querySelector("span")!.textContent = `Other timeline (year ${sim.other.year})`;
+        other.title = `Switch to the timeline that split off in year ${sim.other.branchedAt}`;
+        other.disabled = this.jumping || this.exportingGif;
+      }
+    }
     const gif = document.getElementById("sim-gif") as HTMLButtonElement | null;
     if (gif) {
       gif.disabled = frames < 2 || this.exportingGif;
@@ -2228,156 +2406,31 @@ export class Interface {
     const world = this.generator.getWorld();
     const cm = this.canvasManager;
     const rect = cm.canvas.getBoundingClientRect();
-    const sx = clientX - rect.left;
-    const sy = clientY - rect.top;
-    const fx = (sx - cm.offsetX) / cm.scale;
-    const fy = (sy - cm.offsetY) / cm.scale;
-    const wy = Math.floor(fy);
-    const x = ((Math.floor(fx) % world.width) + world.width) % world.width;
+    const fx = (clientX - rect.left - cm.offsetX) / cm.scale;
+    const fy = (clientY - rect.top - cm.offsetY) / cm.scale;
+    const show = (c: TooltipContent | null) => (c ? this.tooltipManager.show(clientX, clientY, c.title, c.text, c.icon) : this.tooltipManager.hide());
     // Replay: name the realm that held this ground in the shown year
-    const replay = this.replay;
-    if (replay) {
+    if (this.replay) {
       this.nationsManager.hoveredNationIndex = -1;
-      const k = wy >= 0 && wy < world.height && !world.sampler.isWater(fx, fy) ? replay.owner[wy * world.width + x] : -1;
-      const s = replay.nations[k];
-      if (!s) {
-        this.tooltipManager.hide();
-        return;
-      }
-      const over = replay.nations.find((o) => o.uid === s.overlord);
-      const lines = [`In the year ${replay.year}`];
-      if (s.ruler) lines.push(`Ruled by ${s.ruler}`);
-      if (over) lines.push(`Vassal of ${over.name}`);
-      this.tooltipManager.show(clientX, clientY, s.name, lines.join("\n"), nationFlagUrl(replay.world, k, 24, 16));
+      show(describeReplayPoint(world, this.replay, fx, fy));
       return;
     }
-    let newHovered = -1;
-    let cell = null;
-    const onLand = wy >= 0 && wy < world.height && !world.sampler.isWater(fx, fy);
-    if (wy >= 0 && wy < world.height) {
-      cell = world.grid[x][wy];
-      if (onLand && cell.nationIndex !== undefined && cell.nationIndex >= 0) newHovered = cell.nationIndex;
-    }
-
-    if (newHovered !== this.nationsManager.hoveredNationIndex) {
-      this.nationsManager.hoveredNationIndex = newHovered;
+    const hovered = realmAt(world, fx, fy);
+    if (hovered !== this.nationsManager.hoveredNationIndex) {
+      this.nationsManager.hoveredNationIndex = hovered;
       this.nationsManager.hoverSource = "map";
       if ((this.thematic === "diplomacy" || this.thematic2 === "diplomacy") && this.nationsManager.selectedNationIndex < 0) this.updateLegend();
       this.canvasManager.scheduleRender();
-
       document.querySelectorAll(".nation-item").forEach((el) => el.classList.remove("hovered"));
-      if (newHovered !== -1) {
-        const item = document.querySelector(`.nation-item[data-index="${newHovered}"]`);
-        item?.classList.add("hovered");
-      }
+      if (hovered !== -1) document.querySelector(`.nation-item[data-index="${hovered}"]`)?.classList.add("hovered");
     }
-
-    if (!cell) {
-      this.tooltipManager.hide();
-      return;
-    }
-
-    // Nearby city takes priority
-    let nearestCity = null;
-    let nearestDist = Infinity;
-    for (const city of world.cities) {
-      let dx = Math.abs(fx - city.x);
-      if (dx > world.width / 2) dx = world.width - dx;
-      const dist = Math.hypot(dx, fy - city.y);
-      if (dist < nearestDist) {
-        nearestDist = dist;
-        nearestCity = city;
-      }
-    }
-    const nation = newHovered >= 0 ? world.nations[newHovered] : null;
-    const lines: string[] = [];
-    if (this.activeLayers.resources && cm.scale > 2.8) {
-      let best = null;
-      let bd = 8 / cm.scale;
-      for (const r of world.resources) {
-        let dx = Math.abs(r.x - fx);
-        if (dx > world.width / 2) dx = world.width - dx;
-        const d = Math.hypot(dx, r.y - fy);
-        if (d < bd) {
-          bd = d;
-          best = r;
-        }
-      }
-      if (best) {
-        const info = RESOURCE_INFO[best.kind];
-        const grade = best.richness > 1.2 ? "Rich" : best.richness > 0.85 ? "Good" : "Modest";
-        this.tooltipManager.show(clientX, clientY, info.label, grade + " deposit · trade value " + info.value + "/12");
-        return;
-      }
-    }
-    if (this.activeLayers.pois && cm.scale > 2.6) {
-      const poi = nearestPoi(world, fx, fy, 9 / cm.scale);
-      if (poi) {
-        const owner = world.nations[poi.nationIndex];
-        this.tooltipManager.show(clientX, clientY, poi.name, `${POI_LABELS[poi.kind]}${owner ? ` · ${owner.name}` : ""}`);
-        return;
-      }
-    }
-    if (nearestCity && nearestDist < Math.max(10 / cm.scale, (nearestCity.radiusM / 5000) * 1.1)) {
-      const owner = world.nations[nearestCity.nationIndex];
-      const kind = nearestCity.isCapital ? "♦ Capital" : nearestCity.size === 2 ? "● City" : nearestCity.size === 1 ? "● Town" : "· Village";
-      lines.push(`${kind}${owner ? ` of ${owner.name}` : ""}`);
-      lines.push(`Population ${nearestCity.population.toLocaleString()}`);
-      lines.push(`Area ~${(Math.PI * (nearestCity.radiusM / 1000) ** 2).toFixed(1)} km²${nearestCity.isPort ? " · Port" : ""}`);
-      lines.push("Wealth: " + WEALTH_TIERS[nearestCity.wealthTier ?? 2]);
-      // e.g. "Trade hub · 3 caravan routes · 1 sea lane", then exports
-      const trade = cityTrade(nearestCity);
-      const plural = (k: number, one: string) => `${k} ${one}${k === 1 ? "" : "s"}`;
-      const tradeBits = [tradeRole(trade, !!nearestCity.isPort)];
-      if (trade?.caravans) tradeBits.push(plural(trade.caravans, "caravan route"));
-      if (trade?.lanes) tradeBits.push(plural(trade.lanes, "sea lane"));
-      lines.push(tradeBits.join(" · "));
-      if (trade?.cut) lines.push(`War has cut ${plural(trade.cut, "trade route")}`);
-      const exports = cityExports(nearestCity);
-      if (exports.length) lines.push((trade && trade.volume > 0 ? "Exports " : "Produces ") + exports.join(", "));
-      const prov = world.provinces[nearestCity.provinceIndex ?? -1];
-      if (prov) lines.push(`Province: ${prov.name}`);
-      this.tooltipManager.show(clientX, clientY, nearestCity.name, lines.join("\n"));
-      return;
-    }
-
-    if (!onLand) {
-      const owner = world.nations[cell.nationIndex ?? -1];
-      const lake = world.waterType[wy * world.width + x] === 2;
-      lines.push(owner ? `${lake ? "Internal waters" : "Territorial waters"} of ${owner.name}` : "International waters");
-      lines.push(`Depth ~${Math.abs(WorldData.elevationMeters(Math.min(cell.elevation, 0.449))).toLocaleString()} m`);
-      this.tooltipManager.show(clientX, clientY, lake ? "Lake" : cell.elevation < 0.3 ? "Open Ocean" : "Sea", lines.join("\n"));
-      return;
-    }
-
-    if (nation) {
-      lines.push(`${nation.government ?? "Realm"} of ${nation.name}`);
-      const r = nation.ruler;
-      if (r) {
-        const reign = world.year - r.since;
-        lines.push(`${rulerStyle(nation)}${nation.dynasty ? ` · House of ${nation.dynasty}` : ""}`);
-        lines.push(`Age ${world.year - r.born} · ${reign < 1 ? "newly crowned" : `${reign} year${reign === 1 ? "" : "s"} on the throne`}`);
-      }
-      const prov = world.provinces[cell.provinceIndex ?? -1];
-      if (prov) lines.push(`Province: ${prov.name}${prov.area ? ` (${prov.area.toLocaleString()} km²)` : ""}`);
-      if (this.thematic === "diplomacy") {
-        const focus = this.nationsManager.selectedNationIndex;
-        if (focus >= 0 && focus !== newHovered) {
-          lines.push(`Relation with ${world.nations[focus]?.name}: ${world.relations[focus]?.[newHovered] ?? "Neutral"}`);
-        }
-      }
-    }
-    const culture = world.cultures[cell.cultureIndex ?? -1];
-    if (culture) lines.push(`Culture: ${culture.name}`);
-    lines.push(`${cell.biome} · ${WorldData.elevationMeters(cell.elevation).toLocaleString()} m · ${WorldData.temperatureC(cell.temperature)}°C`);
-    lines.push(`Density ~${peoplePerKm2(cell.populationDensity)} /km²${cell.hasRiver ? " · River" : ""}`);
-    if (nation) lines.push("Alt+click for the fact sheet");
-    this.tooltipManager.show(
-      clientX,
-      clientY,
-      nation ? nation.name : "Unclaimed Land",
-      lines.join("\n"),
-      nation ? nationFlagUrl(world, newHovered, 24, 16) : "",
+    show(
+      describePoint(world, fx, fy, {
+        scale: cm.scale,
+        resources: this.activeLayers.resources,
+        pois: this.activeLayers.pois,
+        diplomacyFocus: this.thematic === "diplomacy" ? this.nationsManager.selectedNationIndex : -1,
+      }),
     );
   }
 

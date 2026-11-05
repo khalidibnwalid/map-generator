@@ -12,6 +12,7 @@ import {
   type AtlasHost,
 } from "./AtlasRender";
 import { loadPosterFonts, paintBackground, paintDecorations, posterLayout, posterView, type PosterSpec } from "./PosterDecor";
+import { background } from "./components/Toast";
 
 type Scope = "world" | "nations";
 type Format = "png" | "jpeg";
@@ -421,7 +422,7 @@ export class PosterDialog {
       this.previewRunning = false;
       if (this.previewPending) {
         this.previewPending = false;
-        this.runPreview();
+        background(this.runPreview(), "Poster preview");
       }
     }
   }

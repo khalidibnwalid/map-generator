@@ -248,6 +248,12 @@ float inHover(vec4 c) {
   return 0.0;
 }
 
+// 1 for the hovered realm, a third for the realms bound to it, 0 otherwise
+float hoverWeight(vec4 c) {
+  if (abs(decodeIdx(c) - u_hoverNationIndex) < 0.5) return 1.0;
+  return inHover(c) * 0.35;
+}
+
 float decodeIdx(vec4 color) {
   return floor(color.r * 255.0 + 0.5) + floor(color.g * 255.0 + 0.5) * 256.0 + floor(color.b * 255.0 + 0.5) * 65536.0;
 }
@@ -1177,7 +1183,9 @@ void main() {
     vec4 nationColor = fetchW(u_nationsTexture, ownerTexel);
     vec4 ownerIdx = fetchW(u_nationIdxTex, ownerTexel);
     if (nationColor.a > 0.1) {
-      bool hovered = u_hoverNationIndex >= 0.0 && inHover(ownerIdx) > 0.5;
+      // The hovered realm itself, and the realms bound to it (overlord, vassals)
+      bool hovered = u_hoverNationIndex >= 0.0 && abs(decodeIdx(ownerIdx) - u_hoverNationIndex) < 0.5;
+      bool inBloc = !hovered && u_hoverNationIndex >= 0.0 && inHover(ownerIdx) > 0.5;
       vec3 nc = nationColor.rgb;
       // Province patchwork: tiny brightness shift per province
       if (u_showProvinces) {
@@ -1203,20 +1211,24 @@ void main() {
         float rib = getBorderStrength(c00, c10, c01, c11, noisy_fxy, 4.0 * field_per_pixel, aa * 3.0);
         alpha += rib * 0.4 * landMask;
       }
+      // Full highlight for the hovered realm; its bloc is lifted only a little,
+      // so a hovered vassal stands out from its overlord
       if (hovered) color = mix(color, nc + vec3(0.2), min(1.0, alpha * 1.6));
+      else if (inBloc) color = mix(color, nc + vec3(0.07), min(1.0, alpha * 1.2));
       else color = mix(color, nc, alpha);
     }
     // Sea claims stay plain water; hovering a nation reveals its waters, with
     // ownership blended smoothly between texels (no cell squares)
     if (u_hoverNationIndex >= 0.0) {
+      // Weight 1 for the hovered realm's waters, faint for the rest of its bloc
       vec4 hv = vec4(
-        inHover(c00) * c00.a,
-        inHover(c10) * c10.a,
-        inHover(c01) * c01.a,
-        inHover(c11) * c11.a);
+        hoverWeight(c00) * c00.a,
+        hoverWeight(c10) * c10.a,
+        hoverWeight(c01) * c01.a,
+        hoverWeight(c11) * c11.a);
       vec2 hs = smoothstep(0.0, 1.0, noisy_fxy);
       float hw = mix(mix(hv.x, hv.y, hs.x), mix(hv.z, hv.w, hs.x), hs.y);
-      float seaA = 0.18 * smoothstep(0.35, 0.65, hw) * (1.0 - max(landMask, isletMask)) * politicalFade;
+      float seaA = 0.18 * smoothstep(0.0, 1.0, hw) * (1.0 - max(landMask, isletMask)) * politicalFade;
       color = mix(color, u_hoverNationColor, seaA);
     }
   }
@@ -1239,7 +1251,7 @@ void main() {
         float hatch = step(0.5, fract((sc.x + sc.y + u_frame.x + u_frame.y) / (7.0 * u_pixelRatio)));
         // Stripes in the overlord's color, lightened so they read on any terrain
         vec3 stripe = mix(u_hoverBlocColor, vec3(1.0), 0.4);
-        color = mix(color, stripe, hl * (0.14 + 0.42 * hatch));
+        color = mix(color, stripe, hl * (0.07 + 0.2 * hatch));
       }
     }
   }

@@ -1,0 +1,26 @@
+# Type-check, lint and test every push and pull request.
+# The determinism tests fail when a change alters the worlds existing seeds
+# produce; see test/determinism.test.ts before updating their snapshots.
+name: CI
+
+on:
+  push:
+    branches-ignore: ['main'] # main is checked by the deploy workflow
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
