@@ -62,6 +62,7 @@ uniform sampler2D u_lightsTex;  // R city glow, G road threads, B harbor lights
 uniform vec3 u_lightMask;       // city, road and harbor light switches
 uniform bool u_weather;
 uniform float u_time;           // seconds; drifts the clouds
+uniform bool u_sat;             // Satellite style: photographic shading of the realistic theme
 // Exports: device pixels per layout pixel (line widths and glyph spacing
 // scale with it) and where this tile sits in the whole image.
 uniform float u_pixelRatio;
@@ -451,6 +452,254 @@ vec3 waterRealistic(float elevation, float coast, float lakeF, ivec2 ci, vec2 l)
   return c;
 }
 
+// ===================== SATELLITE =====================
+// Orbital imagery: true-color surfaces lit by a low sun from the north-west,
+// sky light, terrain shadows and an optical model of the sea, graded with a
+// filmic curve. Lighting runs in linear light; results come back display-ready.
+const float SAT_KZ = 28.0; // relief: cells of height per unit of elevation
+const vec3 SUN = vec3(-0.5044, -0.6345, 0.5857); // toward the sun, ~36 deg up
+const vec3 SUN_COL = vec3(1.0, 0.94, 0.84) * 1.15;
+const vec3 SKY_COL = vec3(0.50, 0.64, 0.95) * 0.45;
+vec3 gN = vec3(0.0, 0.0, 1.0); // terrain normal
+float gShadow = 1.0;           // sun visibility
+float gAO = 1.0;               // sky visibility
+float gCurv = 0.0;             // > 0 hollows, < 0 ridges
+float gElevS = 0.5;            // smooth elevation
+vec2 gWaveG = vec2(0.0);       // sea surface slope
+
+vec3 toLin(vec3 c) { return pow(max(c, 0.0), vec3(2.2)); }
+vec3 toDisp(vec3 c) { return pow(max(c, 0.0), vec3(1.0 / 2.2)); }
+vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
+
+// True-color ground cover as seen from orbit (display space)
+vec3 satBiome(int b) {
+  if (b == 15 || b == 36) return vec3(0.10, 0.20, 0.09); // rainforest, cloud forest
+  if (b == 12) return vec3(0.12, 0.22, 0.11);            // temperate rainforest
+  if (b == 29) return vec3(0.14, 0.22, 0.12);            // mangrove
+  if (b == 11) return vec3(0.18, 0.27, 0.12);            // deciduous
+  if (b == 14) return vec3(0.24, 0.31, 0.13);            // tropical seasonal
+  if (b == 19) return vec3(0.12, 0.18, 0.11);            // taiga
+  if (b == 27) return vec3(0.14, 0.21, 0.12);            // montane forest
+  if (b == 10) return vec3(0.36, 0.40, 0.19);            // grassland
+  if (b == 35) return vec3(0.44, 0.44, 0.24);            // prairie
+  if (b == 30) return vec3(0.27, 0.35, 0.15);            // floodplain
+  if (b == 21) return vec3(0.20, 0.26, 0.17);            // marsh
+  if (b == 31) return vec3(0.27, 0.28, 0.20);            // bog
+  if (b == 22) return vec3(0.55, 0.49, 0.30);            // savanna
+  if (b == 23) return vec3(0.55, 0.51, 0.35);            // steppe
+  if (b == 9) return vec3(0.40, 0.40, 0.26);             // shrubland
+  if (b == 28) return vec3(0.47, 0.44, 0.30);            // mediterranean scrub
+  if (b == 24) return vec3(0.38, 0.40, 0.24);            // alpine meadow
+  if (b == 8) return vec3(0.70, 0.60, 0.44);             // temperate desert
+  if (b == 13) return vec3(0.80, 0.65, 0.44);            // subtropical desert
+  if (b == 37) return vec3(0.87, 0.72, 0.48);            // dunes
+  if (b == 34) return vec3(0.60, 0.55, 0.45);            // cold desert
+  if (b == 32) return vec3(0.90, 0.88, 0.84);            // salt flat
+  if (b == 33) return vec3(0.58, 0.44, 0.32);            // badlands
+  if (b == 25) return vec3(0.45, 0.42, 0.38);            // rock & scree
+  if (b == 5) return vec3(0.50, 0.47, 0.42);             // bare
+  if (b == 4) return vec3(0.30, 0.28, 0.26);             // scorched
+  if (b == 6) return vec3(0.44, 0.42, 0.34);             // tundra
+  if (b == 7 || b == 26) return vec3(0.93, 0.95, 0.98);  // snow, glacier
+  return vec3(0.40, 0.40, 0.30);
+}
+
+// Cubic B-spline weights, and their first and second derivatives
+vec4 bsW(float f) {
+  float f2 = f * f;
+  float f3 = f2 * f;
+  return vec4((1.0 - f) * (1.0 - f) * (1.0 - f), 3.0 * f3 - 6.0 * f2 + 4.0, -3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0, f3) / 6.0;
+}
+vec4 bsD(float f) { return vec4(-0.5 * (1.0 - f) * (1.0 - f), 1.5 * f * f - 2.0 * f, -1.5 * f * f + f + 0.5, 0.5 * f * f); }
+vec4 bsDD(float f) { return vec4(1.0 - f, 3.0 * f - 2.0, 1.0 - 3.0 * f, f); }
+
+// Smooth elevation with its exact gradient and Laplacian (per cell), from the
+// 4x4 texels around the point. No faceting, and full precision when zoomed in.
+float elevBS(ivec2 ci, vec2 l, out vec2 g, out float lap) {
+  vec2 t = l - 0.5;
+  vec2 tf = floor(t);
+  vec2 f = t - tf;
+  ivec2 b = ci + ivec2(tf);
+  vec4 wx = bsW(f.x);
+  vec4 wy = bsW(f.y);
+  vec4 dx = bsD(f.x);
+  vec4 dy = bsD(f.y);
+  vec4 ddx = bsDD(f.x);
+  vec4 ddy = bsDD(f.y);
+  float h = 0.0;
+  g = vec2(0.0);
+  lap = 0.0;
+  for (int j = 0; j < 4; j++) {
+    for (int i = 0; i < 4; i++) {
+      // The sea surface is flat: seabed depths must not tilt the shore
+      float v = max(fetchW(u_mapTexture, b + ivec2(i - 1, j - 1)).r, 0.48);
+      h += wx[i] * wy[j] * v;
+      g += vec2(dx[i] * wy[j], wx[i] * dy[j]) * v;
+      lap += (ddx[i] * wy[j] + wx[i] * ddy[j]) * v;
+    }
+  }
+  return h;
+}
+
+float elevTap(vec2 p) {
+  return texture(u_mapTexture, vec2(fract(p.x / u_worldSize.x), clamp(p.y / u_worldSize.y, 0.0, 1.0))).r;
+}
+// The same cubic B-spline surface as elevBS from four bilinear taps, so
+// shadows match the shaded relief and have no texel-shaped edges
+float elevAt(vec2 w) {
+  vec2 t = w - 0.5;
+  vec2 i = floor(t);
+  vec2 f = t - i;
+  vec2 f2 = f * f;
+  vec2 f3 = f2 * f;
+  vec2 w0 = (-f3 + 3.0 * f2 - 3.0 * f + 1.0) / 6.0;
+  vec2 w1 = (3.0 * f3 - 6.0 * f2 + 4.0) / 6.0;
+  vec2 w2 = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) / 6.0;
+  vec2 w3 = f3 / 6.0;
+  vec2 g0 = w0 + w1;
+  vec2 g1 = w2 + w3;
+  vec2 h0 = i - 0.5 + w1 / g0;
+  vec2 h1 = i + 1.5 + w3 / g1;
+  return g0.y * (g0.x * elevTap(h0) + g1.x * elevTap(vec2(h1.x, h0.y)))
+       + g1.y * (g0.x * elevTap(vec2(h0.x, h1.y)) + g1.x * elevTap(h1));
+}
+
+// Fractal sub-cell relief in elevation units: sharp ridged crests in the
+// mountains, gentle swells in the lowlands. Octaves fade in once their
+// lattice spans a few pixels. ridge: 0 gully .. 1 crest.
+float reliefDetail(ivec2 ci, vec2 l, float rug, out float ridge) {
+  float h = 0.0;
+  float rAcc = 0.0;
+  float wAcc = 0.0;
+  float amp = 0.0045;
+  for (int k = 0; k < 11; k++) {
+    int f = 1 << k;
+    // Octaves come in only once their lattice spans several pixels, before
+    // that their lighting would show the noise grid
+    float vis = smoothstep(4.0, 12.0, u_scale / float(f));
+    if (vis <= 0.0) break;
+    if (u_fast && k > 5) break;
+    float n = valueNoise(ci, l, f, u_worldSizeI.x * f, u_seed ^ (0x51ed27u + uint(k) * 0x9e3779b9u));
+    float r = 1.0 - abs(n);
+    r *= r;
+    h += amp * vis * mix(n * 0.5, r - 0.45, rug);
+    rAcc += r * vis * amp;
+    wAcc += vis * amp;
+    amp *= 0.5;
+  }
+  ridge = wAcc > 0.0 ? rAcc / wAcc : 0.5;
+  return h * (0.15 + rug);
+}
+
+// Soft sun shadow: march toward the sun over the terrain, keeping the
+// narrowest clearance angle (penumbra widens with distance)
+float sunShadow(vec2 w, float h0) {
+  vec2 dir = normalize(SUN.xy);
+  float tanEl = SUN.z / length(SUN.xy);
+  float t0 = max(0.75 / u_scale, 0.02);
+  const float tMax = 40.0;
+  int steps = u_fast ? 10 : 24;
+  float ratio = pow(tMax / t0, 1.0 / float(steps - 1));
+  float t = t0;
+  float res = 1.0;
+  float base = h0 * SAT_KZ + 0.04;
+  for (int i = 0; i < 24; i++) {
+    if (i >= steps) break;
+    float hT = max(elevAt(w + dir * t), 0.48) * SAT_KZ;
+    float clear = (base + t * tanEl - hT) / t;
+    res = min(res, smoothstep(-0.04, 0.10, clear));
+    if (res <= 0.001) break;
+    t *= ratio;
+  }
+  return res;
+}
+
+// Thin atmosphere and the film curve. Lowlands sit under more air, and the
+// veil thickens as the view pulls back toward orbit.
+vec3 satPost(vec3 lin) {
+  float orbit = 1.0 - smoothstep(4.0, 60.0, u_scale);
+  float air = 1.0 - 0.6 * smoothstep(0.55, 0.9, gElevS);
+  lin = mix(lin, vec3(0.30, 0.42, 0.62) * 0.35, (0.04 + 0.07 * orbit) * air);
+  vec3 c = aces(lin * 1.1);
+  float lum = dot(c, vec3(0.2126, 0.7152, 0.0722));
+  c = mix(vec3(lum), c, 1.08);
+  return toDisp(c);
+}
+
+vec3 satLight() {
+  float ndl = max(dot(gN, SUN), 0.0);
+  return SUN_COL * ndl * gShadow * mix(1.0, gAO, 0.5) + SKY_COL * (0.55 + 0.45 * gN.z) * gAO;
+}
+
+// Lit ground from a display-space albedo
+vec3 satLand(vec3 albedo) {
+  return satPost(toLin(albedo) * satLight());
+}
+
+// The sea and lakes as optical water: sunlight reaches the bottom and comes
+// back, red absorbed first (turquoise shallows, navy deeps); the surface
+// mirrors the sky and glints where waves face the sun; surf breaks on shore.
+vec3 satWater(float elevation, float coast, float lakeF, ivec2 ci, vec2 l, vec2 w, float temp) {
+  float dc = max(0.0, -coast); // cells offshore
+  float n1 = fbm(w * 0.5);
+  float n2 = fbm(w * 3.0);
+  // Depth (m): bathymetry from elevation, plus a shelf shoaling to the beach;
+  // noise raises sand banks and cuts channels
+  float se = clamp((0.45 - min(elevation, 0.449) - (n1 - 0.5) * 0.03) / 0.45, 0.0, 1.0);
+  float dElev = 4.0 + 4200.0 * pow(se, 1.5);
+  float dCoast = 0.6 + dc * (14.0 + 60.0 * n2) + dc * dc * 90.0;
+  float depth = min(dElev, dCoast);
+  depth = mix(depth, min(1.0 + dc * 30.0 + dc * dc * 60.0, 80.0), lakeF);
+  if (u_scale > 60.0 && !u_fast) depth *= 0.85 + 0.3 * (detailNoise(ci, l, 64, 0x3311u) * 0.5 + 0.5);
+
+  vec3 sigma = mix(vec3(0.42, 0.07, 0.035), vec3(0.55, 0.16, 0.20), lakeF);
+  vec3 T = exp(-sigma * depth * 2.0);
+  vec3 bottom = toLin(mix(vec3(0.80, 0.74, 0.57), vec3(0.42, 0.38, 0.26), lakeF));
+  // Seagrass and reef patches darken the floor here and there
+  bottom *= mix(1.0, 0.45, smoothstep(0.55, 0.7, fbm(w * 7.0 + 31.0)) * (1.0 - lakeF));
+  vec3 deep = mix(vec3(0.006, 0.020, 0.040), vec3(0.002, 0.018, 0.065), smoothstep(0.3, 0.8, temp));
+  deep = mix(deep, vec3(0.010, 0.025, 0.028), lakeF);
+  // Terrain shadows fall only faintly on open water: islets are too coarse
+  // in the height field to cast clean shapes
+  float wsh = mix(1.0, gShadow, 0.35);
+  vec3 Lw = SUN_COL * SUN.z * wsh + SKY_COL;
+  vec3 body = (bottom * T + deep * (1.0 - T)) * Lw;
+  // Plankton, sediment and swell fields vary the open water's tone
+  body *= 0.88 + 0.24 * fbm(w * 0.25 + 50.0);
+
+  // Caustics dance on shallow sand at close range
+  if (u_scale > 800.0 && !u_fast) {
+    float cn = detailNoise(ci, l + vec2(u_time * 0.0004, u_time * 0.0002), 1024, 0xca05u);
+    float caus = pow(1.0 - abs(cn), 8.0) * smoothstep(800.0, 3000.0, u_scale);
+    body += bottom * T * SUN_COL * wsh * caus * 0.5;
+  }
+
+  vec3 Nw = normalize(vec3(-gWaveG, 1.0));
+  float F = 0.02 + 0.98 * pow(1.0 - Nw.z, 5.0);
+  vec3 c = mix(body, vec3(0.35, 0.48, 0.70) * 0.6, F);
+  float ndh = max(dot(Nw, normalize(SUN + vec3(0.0, 0.0, 1.0))), 0.0);
+  // Sharp glitter where a wave faces the sun, over a soft sheen
+  float glitter = smoothstep(300.0, 1500.0, u_scale);
+  c += SUN_COL * wsh * (exp(-(1.0 - ndh) * 500.0) * 2.0 * glitter + exp(-(1.0 - ndh) * 60.0) * 0.06);
+
+  // Surf: a foam line at the shore and broken bands rolling in
+  float fw = max(0.003, 2.0 / u_scale);
+  float foamN = 0.55 + 0.45 * n2;
+  if (u_scale > 30.0 && !u_fast) foamN = mix(foamN, detailNoise(ci, l, 256, 0x7a1u) * 0.5 + 0.5, 0.6);
+  float rolling = 0.5 + 0.5 * sin(dc / fw * 2.2 - u_time * 1.4 + n1 * 12.0);
+  float foam = (1.0 - smoothstep(0.0, fw, dc)) * foamN
+             + (1.0 - smoothstep(fw, fw * 4.0, dc)) * smoothstep(0.75, 0.95, rolling * foamN) * 0.5;
+  foam *= (1.0 - 0.7 * lakeF) * smoothstep(6.0, 30.0, u_scale);
+  c = mix(c, vec3(0.80, 0.84, 0.88) * Lw, clamp(foam, 0.0, 1.0) * 0.8);
+  return satPost(c);
+}
+
+// Cloud density in drifting cloud space: domain-warped for swirls
+float cloudD(vec2 p) {
+  vec2 q = p + vec2(fbm(p * 1.3 + 4.0), fbm(p * 1.3 - 7.0)) * 0.6;
+  return fbm(q) * 0.65 + fbm(q * 3.1 + u_time * 0.01) * 0.25 + noise(q * 9.0) * 0.10;
+}
+
 void main() {
   vec2 sc = gl_FragCoord.xy;
   sc.y = u_resolution.y - sc.y;
@@ -517,6 +766,46 @@ void main() {
   vec3 va = normalize(vec3(2.0 * eps, 0.0, hR - hL));
   vec3 vb = normalize(vec3(0.0, 2.0 * eps, hU - hD));
   float shade = 0.8 + 0.4 * dot(cross(va, vb), lightDir);
+  float shadeA = shade; // shading baked into realistic albedos (none for satellite)
+
+  if (u_sat) {
+    vec2 gM;
+    float lap;
+    float hM = elevBS(ci, l, gM, lap);
+    float rug = 0.12 + 0.88 * smoothstep(0.55, 0.8, hM);
+    float ridge;
+    float hD = reliefDetail(ci, l, rug, ridge);
+    // Screen derivatives of the detail (screen y runs against world y)
+    vec2 gD = vec2(dFdx(hD), -dFdy(hD)) * u_scale;
+    gN = normalize(vec3(-(gM + gD) * SAT_KZ, 1.0));
+    gElevS = hM;
+    // Where land meets the flat sea the surface bends upward, which is not a
+    // hollow: fade the curvature terms out along the shore
+    float shoreFade = smoothstep(0.05, 0.8, coast);
+    gCurv = clamp(lap * SAT_KZ * 2.0, -1.0, 1.0) * shoreFade;
+    gAO = clamp(1.0 - max(0.0, lap) * SAT_KZ * 0.8 * shoreFade - (0.5 - ridge) * 0.35 * rug, 0.55, 1.05);
+    gShadow = sunShadow(wxwy, max(max(hM, elevAt(wxwy)), 0.48));
+    // Wind waves: a few octaves around 3-60 px, drifting with time
+    float wh = 0.0;
+    if (!u_fast) {
+      for (int k = 0; k < 11; k++) {
+        int f = 1 << k;
+        float sp = u_scale / float(f);
+        float vis = smoothstep(2.5, 6.0, sp) * (1.0 - smoothstep(60.0, 200.0, sp));
+        if (vis <= 0.0) continue;
+        vec2 drift = vec2(0.3, 0.12) * u_time / float(f);
+        wh += vis * (0.12 / float(f)) * valueNoise(ci, l + drift, f, u_worldSizeI.x * f, u_seed ^ (0xa5a5u + uint(k)));
+      }
+    }
+    gWaveG = vec2(dFdx(wh), -dFdy(wh)) * u_scale;
+    vec3 Lt = satLight();
+    shade = dot(Lt, vec3(0.3, 0.55, 0.15)) / 0.9;
+    shadeA = 1.0;
+    // Color land from the smooth surface too, so snow lines and rock bands
+    // follow the relief instead of stair-stepping along texels (the sea
+    // keeps its bathymetry)
+    if (hM > 0.481) elevation = hM;
+  }
 
   float blendFactor = smoothstep(3.0, 8.0, u_scale);
   float e_noise = (fbm(wxwy * 1.5) - 0.5) * 0.05 * blendFactor;
@@ -621,7 +910,22 @@ void main() {
   } else {
     // ---- Realistic ----
     if (isLand) {
-      color = mix(u_biomeColors[bIdx], u_biomeColors[bIdx2], 0.5);
+      if (u_sat) {
+        // Ground cover grades across wide, ragged ecotones rather than
+        // meeting at a line: average biomes over jittered climates
+        vec3 acc = satBiome(bIdx) + satBiome(bIdx2);
+        int nj = u_fast ? 1 : 4;
+        for (int s = 0; s < 4; s++) {
+          if (s >= nj) break;
+          vec2 o = vec2(float(s) * 17.3, float(s) * 9.1);
+          float jt = (noise(wxwy * 0.9 + o) * 0.7 + noise(wxwy * 2.7 + o) * 0.3 - 0.5) * 0.2;
+          float jm = (noise(wxwy * 0.9 + o + 40.0) * 0.7 + noise(wxwy * 2.7 + o + 40.0) * 0.3 - 0.5) * 0.2;
+          acc += satBiome(classify(qe, qt + jt, qm + jm, slope, qw + jt * 4.0, coast));
+        }
+        color = acc / float(2 + nj);
+      } else {
+        color = mix(u_biomeColors[bIdx], u_biomeColors[bIdx2], 0.5);
+      }
       color *= (0.85 + 0.3 * fbm(wxwy * 2.0));
 
       // Surface patterns for open landscapes
@@ -653,7 +957,9 @@ void main() {
         color = mix(color, vec3(0.4, 0.35, 0.3), (detail - 0.5) * 0.5);
         if (elevation > 0.85) {
           // Peak snow shrinks a little in summer when seasons are on (ss = 0 otherwise)
-          float snowBlend = smoothstep(0.85, 0.9, elevation + (detail - 0.5) * 0.2 - max(0.0, -ss.x) * ss.w * 0.03);
+          // Satellite: snow holds on flatter and north-facing ground
+          float hold = u_sat ? (gN.z - 0.85) * 0.12 - gN.y * 0.04 : 0.0;
+          float snowBlend = smoothstep(0.85, 0.9, elevation + hold + (detail - 0.5) * 0.2 - max(0.0, -ss.x) * ss.w * 0.03);
           color = mix(color, vec3(0.9, 0.9, 0.95), snowBlend);
         }
       } else {
@@ -669,13 +975,31 @@ void main() {
         color *= 1.0 + g * 0.12;
       }
 
-      color *= shade;
+      if (u_sat) {
+        // Bare rock on steep slopes
+        float steep = 1.0 - gN.z;
+        float rockAmt = smoothstep(0.18, 0.42, steep + (detail - 0.5) * 0.15) * smoothstep(0.52, 0.6, elevation);
+        vec3 rock = mix(vec3(0.40, 0.37, 0.33), vec3(0.52, 0.48, 0.42), fbm(wxwy * 5.0));
+        color = mix(color, rock, rockAmt * 0.85);
+        // Water gathers in hollows: greener, darker valley floors; pale, dry ridges
+        color = mix(color, color * vec3(0.82, 0.95, 0.80), max(0.0, gCurv) * 0.6);
+        color = mix(color, color * vec3(1.08, 1.05, 0.98), max(0.0, -gCurv) * 0.4);
+        // Settled lowlands: the patchwork of cleared farmland seen from orbit
+        if (isArable(bIdx)) {
+          float farm = smoothstep(0.25, 0.7, populationDensity) * smoothstep(0.35, 0.6, fbm(wxwy * 3.0 + 5.0));
+          vec3 crop = mix(vec3(0.52, 0.50, 0.32), vec3(0.36, 0.42, 0.20), fbm(wxwy * 9.0));
+          color = mix(color, crop, farm * 0.45);
+        }
+      }
+
+      color *= shadeA;
 
       // Beaches on low coasts, rocky shores on high ones
       float beachW = max(0.035, 1.2 * px);
       float sand = 1.0 - smoothstep(0.0, beachW, coast);
-      if (elevation < 0.56) color = mix(color, vec3(0.86, 0.80, 0.62) * shade, sand * 0.85);
-      else color = mix(color, vec3(0.62, 0.58, 0.52) * shade, sand * 0.35);
+      vec3 sandCol = u_sat ? vec3(0.80, 0.74, 0.58) : vec3(0.86, 0.80, 0.62);
+      if (elevation < 0.56) color = mix(color, sandCol * shadeA, sand * 0.85);
+      else color = mix(color, vec3(0.62, 0.58, 0.52) * shadeA, sand * 0.35);
 
       // Individual trees at high zoom
       if (ppm > 0.06 && !u_fast) {
@@ -683,7 +1007,7 @@ void main() {
         if (density > 0.0) {
           vec4 t = trees(ci, l, density);
           float fade = smoothstep(0.06, 0.2, ppm);
-          vec3 leaf = leafColor(bIdx);
+          vec3 leaf = leafColor(bIdx) * (u_sat ? 0.75 : 1.0);
           if (u_seasonOn) leaf = seasonFoliage(leaf, bIdx, ss, latS, sVary);
           vec3 canopy = mix(leaf * 0.7, leaf * 1.45 + 0.03, t.y);
           canopy *= 1.0 + 0.08 * t.w * smoothstep(0.4, 1.5, ppm);
@@ -691,21 +1015,25 @@ void main() {
           color = mix(color, canopy, t.x * fade);
         }
       }
+      if (u_sat) color = satLand(color);
     } else {
-      color = waterRealistic(elevation, coast, lakeF, ci, l);
+      color = u_sat ? satWater(elevation, coast, lakeF, ci, l, wxwy, temperature) : waterRealistic(elevation, coast, lakeF, ci, l);
       // Offshore shoals and islets: the noisy shallows of the original look,
       // restricted to the sea side of the coast so they never form inland lakes.
       if (lakeF < 0.01 && coast > -1.2) {
         float shoalN = (fbm(wxwy * 0.5) - 0.5) * 0.06 + (fbm(wxwy * 3.0) - 0.5) * 0.03 * clamp(u_scale * 0.1, 0.0, 1.0);
         float shoal = smoothstep(0.43, 0.452, elevation + shoalN) * smoothstep(-1.2, -0.3, coast);
-        color = mix(color, vec3(0.20, 0.55, 0.62), shoal * 0.6);
+        if (!u_sat) color = mix(color, vec3(0.20, 0.55, 0.62), shoal * 0.6);
         // Islets only offshore, never as a fringe glued to the shoreline
         float islet = smoothstep(0.449, 0.455, elevation + shoalN * 1.4) * smoothstep(-0.9, -0.5, coast) * (1.0 - smoothstep(-0.3, -0.12, coast));
-        color = mix(color, mix(vec3(0.83, 0.79, 0.62), u_biomeColors[bIdx] * shade, 0.45), islet);
+        vec3 isletCol = u_sat
+          ? satLand(mix(vec3(0.80, 0.74, 0.58), satBiome(bIdx), 0.45))
+          : mix(vec3(0.83, 0.79, 0.62), u_biomeColors[bIdx] * shade, 0.45);
+        color = mix(color, isletCol, islet);
         isletMask = islet;
       }
       float surf = 1.0 - smoothstep(0.0, max(0.006, 1.5 * px), -coast);
-      color = mix(color, vec3(0.85, 0.92, 0.95), surf * 0.25 * smoothstep(20.0, 80.0, u_scale));
+      if (!u_sat) color = mix(color, vec3(0.85, 0.92, 0.95), surf * 0.25 * smoothstep(20.0, 80.0, u_scale));
     }
   }
 
@@ -718,6 +1046,8 @@ void main() {
       other = mix(other, vec3(0.30, 0.22, 0.15), 0.9); // ink line on the coast
     } else if (u_theme == 2) {
       other = isLand ? vec3(0.66, 0.80, 0.91) : vec3(0.94, 0.93, 0.89);
+    } else if (u_sat) {
+      other = isLand ? satWater(elevation, coast, lakeF, ci, l, wxwy, temperature) : satLand(vec3(0.80, 0.74, 0.58));
     } else {
       other = isLand ? waterRealistic(elevation, coast, lakeF, ci, l) : vec3(0.86, 0.80, 0.62) * shade;
     }
@@ -744,6 +1074,8 @@ void main() {
     // with low-frequency noise only, so it reads as a smooth ice margin.
     float lat = abs(wxwy.y / u_worldSize.y - 0.5) * 2.0;
     float wob = (fbm(vec2(wxwy.x * 0.012, lat * 3.0)) - 0.5) * 0.07 + (fbm(wxwy * 0.05) - 0.5) * 0.025;
+    // Satellite: a ragged margin with lobes and bays, as real ice edges have
+    if (u_sat) wob += (fbm(wxwy * 0.09 + 9.0) - 0.5) * 0.10 + (fbm(wxwy * 0.4) - 0.5) * 0.03;
     // Seasons: pack ice spreads toward the equator in winter, retreats in summer
     float iceShift = ss.x * ss.w;
     float seaEdge = 0.875 + wob - 0.05 * iceShift;
@@ -968,11 +1300,29 @@ void main() {
     vec2 cp = (wxwy + vec2(0.45, 0.1) * u_time) * 0.04;
     float wisp = fbm(cp * 2.7 + vec2(u_time * 0.02, -u_time * 0.006));
     float zf = 1.0 - smoothstep(30.0, 160.0, u_scale);
-    cloud = smoothstep(0.56, 0.74, fbm(cp) * 0.75 + wisp * 0.25) * zf;
-    // Shadows fall south-east of each cloud
-    float shadow = smoothstep(0.54, 0.72, fbm(cp - vec2(0.1)) * 0.75 + wisp * 0.25) * zf;
-    color *= 1.0 - 0.3 * shadow * (1.0 - cloud);
-    color = mix(color, vec3(0.96, 0.97, 0.99), cloud * 0.6);
+    if (u_sat) {
+      // Cover follows the circulation: rainy equator and storm tracks, clear subtropics
+      float la = abs(latS);
+      float bias = 0.07 * (1.0 - smoothstep(0.0, 0.15, la))
+                 - 0.07 * exp(-pow((la - 0.32) / 0.1, 2.0))
+                 + 0.05 * exp(-pow((la - 0.62) / 0.12, 2.0));
+      float d = cloudD(cp);
+      cloud = smoothstep(0.47 - bias, 0.74 - bias, d) * zf;
+      // Self-shadowing: thicker cloud toward the sun darkens the far side
+      float dS = cloudD(cp + SUN.xy * 0.05);
+      float lit = clamp(1.0 - (dS - d) * 4.0, 0.0, 1.0);
+      vec3 cc = mix(vec3(0.58, 0.62, 0.70), vec3(1.0, 0.99, 0.97), lit) * mix(0.9, 1.0, smoothstep(0.6, 0.85, d));
+      // Ground shadow: the cloud standing between this point and the sun
+      float sh = smoothstep(0.47 - bias, 0.70 - bias, cloudD(cp + SUN.xy * 0.035)) * zf;
+      color *= 1.0 - 0.45 * sh * (1.0 - cloud);
+      color = mix(color, cc, cloud * 0.95);
+    } else {
+      cloud = smoothstep(0.56, 0.74, fbm(cp) * 0.75 + wisp * 0.25) * zf;
+      // Shadows fall south-east of each cloud
+      float shadow = smoothstep(0.54, 0.72, fbm(cp - vec2(0.1)) * 0.75 + wisp * 0.25) * zf;
+      color *= 1.0 - 0.3 * shadow * (1.0 - cloud);
+      color = mix(color, vec3(0.96, 0.97, 0.99), cloud * 0.6);
+    }
   }
 
   // ===================== NIGHT =====================
@@ -1011,6 +1361,9 @@ void main() {
     vec2 uv = (sc + u_frame.xy) / u_frame.zw - 0.5;
     color *= 1.0 - 0.35 * smoothstep(0.35, 0.75, length(uv));
   }
+
+  // Dither away banding in the smooth satellite gradients
+  if (u_sat && !u_showElevation) color += (rand(sc + u_frame.xy) - 0.5) / 255.0;
 
   fragColor = vec4(color, 1.0);
 }

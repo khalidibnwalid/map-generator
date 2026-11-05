@@ -59,6 +59,7 @@ export class GPURenderer {
   public hoverBlocColor: [number, number, number] = [1, 1, 1]; // the overlord's color, for the bloc's stripes
   public season = 0; // 0..1 through the year (0 = mid-January), when layers.season
   public time = 0; // seconds, when layers.weather
+  public satellite = false; // photographic terrain for the Realistic theme
   private lightsTexture: WebGLTexture | null = null;
   // Export rendering: device pixels per layout pixel, and the tile's place in
   // the whole image (null = the frame is the whole image)
@@ -546,6 +547,7 @@ export class GPURenderer {
     gl.uniform3f(this.u("u_lightMask"), cityLights, layers.roads === false ? 0 : 1, cityLights);
     gl.uniform1i(this.u("u_weather"), layers.weather ? 1 : 0);
     gl.uniform1f(this.u("u_time"), this.time);
+    gl.uniform1i(this.u("u_sat"), this.satellite && theme === "Realistic" ? 1 : 0);
     gl.uniform1f(this.u("u_pixelRatio"), this.pixelRatio);
     const f = this.frame ?? { x: 0, y: 0, w: width, h: height };
     gl.uniform4f(this.u("u_frame"), f.x, f.y, f.w, f.h);

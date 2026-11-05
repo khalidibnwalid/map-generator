@@ -714,7 +714,11 @@ export class Interface {
     // --- Theme & thematic maps ---
     const themeSelect = document.getElementById("theme") as HTMLSelectElement | null;
     themeSelect?.addEventListener("change", () => {
-      this.theme = themeSelect.value as MapTheme;
+      // Satellite is the Realistic style (labels, cities, posters) with the
+      // terrain drawn by the photographic shader
+      const v = themeSelect.value;
+      this.gpuRenderer.satellite = v === "Satellite";
+      this.theme = (v === "Satellite" ? "Realistic" : v) as MapTheme;
       this.canvasManager.scheduleRender();
     });
     const thematicSelect = document.getElementById("thematic") as HTMLSelectElement | null;

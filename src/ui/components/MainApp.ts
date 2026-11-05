@@ -210,8 +210,9 @@ export default function renderMainApp() {
               <div class="field-label">Map style</div>
               ${picker(
                 "theme",
-                "grid-3 cards",
+                "grid-2 cards",
                 [
+                  { value: "Satellite", label: "Satellite", swatch: "radial-gradient(circle at 72% 28%,rgba(255,255,255,.85) 0 10%,transparent 26%),linear-gradient(135deg,#0b2236 0 40%,#1f8a9a 40% 45%,#3e5a2c 45% 72%,#8a7a5c 72%)" },
                   { value: "Realistic", label: "Realistic", swatch: "linear-gradient(135deg,#1e4f75 0 45%,#5f8f45 45% 75%,#c9b47b 75%)" },
                   { value: "Historical", label: "Historical", swatch: "linear-gradient(135deg,#a9bcb6 0 45%,#e8d9b2 45% 80%,#8a6a45 80%)" },
                   { value: "Atlas", label: "Atlas", swatch: "linear-gradient(135deg,#a9cde8 0 45%,#f0c8b0 45% 70%,#c8e0b0 70%)" },
@@ -277,7 +278,7 @@ export default function renderMainApp() {
                 <span id="season-month-label" class="season-month">January</span>
               </div>
               ${toggle("layer-night", "Night", false, "moonlight & city lights")}
-              ${toggle("layer-weather", "Weather", false, "drifting clouds")}
+              ${toggle("layer-weather", "Clouds", false, "drifting weather systems")}
             </div>
             <div class="group">
               <div class="group-title">Data overlays</div>
