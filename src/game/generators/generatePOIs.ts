@@ -3,6 +3,8 @@ import type { WorldData } from "../WorldData";
 import { roadBridges } from "./generateRoads";
 import { sampleCurve } from "../util/curves";
 import { yieldFrame } from "../util/grid";
+import { APP_VERSION, atLeast } from "../version";
+import { cultureNear } from "../peoples";
 
 export type PoiKind =
   | "castle"
@@ -13,7 +15,7 @@ export type PoiKind =
   | "bridge"
   | "dam"
   | "mine"
-  | "monastery"
+  | "monastery" // 0.1 worlds only
   | "port"
   | "volcano";
 
@@ -35,7 +37,7 @@ export const POI_LABELS: Record<PoiKind, string> = {
   bridge: "Bridge",
   dam: "Dam",
   mine: "Mine",
-  monastery: "Zawiya (Sufi lodge)",
+  monastery: "Mosque",
   port: "Port",
   volcano: "Volcano",
 };
@@ -49,8 +51,7 @@ export async function generatePOIs(ctx: GeneratorContext): Promise<void> {
   const rand = noise.random;
 
   const nameFor = (x: number, y: number) => {
-    const cell = world.getCell(x, y);
-    const lang = world.languages[cell?.cultureIndex ?? 0];
+    const lang = world.languages[cultureNear(world, x, y) ?? 0];
     return lang ? lang.word() : "Old";
   };
   const nationAt = (x: number, y: number) => world.getCell(x, y)?.nationIndex ?? -1;
@@ -159,7 +160,7 @@ export async function generatePOIs(ctx: GeneratorContext): Promise<void> {
     add("dam", q.x, q.y, Math.atan2(q.y - s.y, q.x - s.x) + Math.PI / 2, `${nameFor(q.x, q.y)} Dam`);
   }
 
-  // --- Terrain features: castles, watchtowers, mines, monasteries, ruins ---
+  // --- Terrain features: castles, watchtowers, mines, mosques, ruins ---
   const nNations = world.nations.length;
   const tries = Math.round(W * H * 0.02);
   const counts = { castle: 0, watchtower: 0, mine: 0, monastery: 0, ruins: 0 };
@@ -188,7 +189,8 @@ export async function generatePOIs(ctx: GeneratorContext): Promise<void> {
       add("mine", x, y, rand() * Math.PI, `${nameFor(x, y)} Mine`);
     } else if (forest && e > 0.55 && counts.monastery < quota.monastery && clearOf(x, y, 6 * resScale, 10 * resScale)) {
       counts.monastery++;
-      add("monastery", x, y, rand() * Math.PI, `Zawiya of ${nameFor(x, y)}`);
+      // 0.1 worlds keep their old names; from 0.2 they are mosques
+      add("monastery", x, y, rand() * Math.PI, `${atLeast(ctx.version ?? APP_VERSION, "0.2") ? "Mosque" : "Zawiya"} of ${nameFor(x, y)}`);
     } else if (counts.ruins < quota.ruins && rand() < 0.15 && clearOf(x, y, 5 * resScale, 8 * resScale)) {
       counts.ruins++;
       add("ruins", x, y, rand() * Math.PI, `Ruins of ${nameFor(x, y)}`);

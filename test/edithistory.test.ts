@@ -8,6 +8,7 @@ let world: WorldData;
 beforeAll(async () => {
   const g = new MapGenerator(400, 225, 2468);
   g.currentPreset = "Earthlike";
+  g.pin("0.1"); // the world these edits were written against
   world = await g.generate();
 });
 

@@ -15,6 +15,7 @@ test("a world moved from the worker matches one generated in place", async () =>
 
   const b = new MapGenerator(400, 225, seed);
   b.currentPreset = "Realistic Continents";
+  b.pin(a.version, a.politicsSeed); // same realms as the first one
   const remote = await b.generate();
   const { packed, transfer } = packWorld(remote, b.getNoise(), seed);
   const { world, noise } = unpackWorld(structuredClone(packed, { transfer }));

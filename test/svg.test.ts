@@ -7,6 +7,7 @@ let world: WorldData;
 beforeAll(async () => {
   const g = new MapGenerator(400, 225, 1357);
   g.currentPreset = "Earthlike";
+  g.pin("0.2", 4242); // a 0.2 world, same every run
   world = await g.generate();
 });
 

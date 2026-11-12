@@ -1,5 +1,5 @@
 import type { MapGenerator, Preset } from "./MapGenerator";
-import type { City, Culture, Nation, Province, Race, RelationType, Road, WorldData } from "./WorldData";
+import type { City, Culture, Nation, Province, Race, RelationType, Road, Coalition, WorldData } from "./WorldData";
 import { Language, familyIndexOf } from "./names";
 import { seededRand } from "./sim/Rulers";
 import type { Poi } from "./generators/generatePOIs";
@@ -7,6 +7,7 @@ import { DEFAULT_SETTINGS, type WorldSettings } from "./generators/types";
 import { computeTrade } from "./generators/generateTrade";
 import type { TerrainGuide } from "./ImageGuide";
 import type { SavedSim } from "./sim/Simulation";
+import { atLeast, normalizeVersion } from "./version";
 
 // A .world file = gzip(JSON). Terrain is regenerated from seed/preset/size
 // (and the imported picture's guide, when there is one); everything the user
@@ -15,8 +16,10 @@ import type { SavedSim } from "./sim/Simulation";
 
 const FORMAT = "mapgen-world";
 // Version 2 adds the image guide and generation settings; worlds using
-// neither are still written as 1 so older builds keep opening them
-const VERSION = 2;
+// neither are still written as 1 so older builds keep opening them.
+// Version 3 marks worlds of app version 0.2 or later (see version.ts), whose
+// realms come from their own politics seed: builds before it can't rebuild them
+const VERSION = 3;
 
 interface SavedGuide {
   w: number;
@@ -49,6 +52,8 @@ interface SavedSimData {
 interface WorldFileData {
   format: typeof FORMAT;
   version: number;
+  appVersion?: string; // app version the world was made with; absent = 0.1
+  politicsSeed?: number; // 0.2+: seeds realms and provinces
   seed: number;
   preset: Preset;
   greatPowers?: number; // absent in files from before the setting (none)
@@ -59,6 +64,7 @@ interface WorldFileData {
   provinces: Province[];
   cities: City[];
   relations: string; // relation codes, row-major n×n
+  coalitions?: Coalition[]; // members carry the coalition ids (Nation.coalitions)
   nationGrid: string; // RLE + base64 of per-cell nation index
   provinceGrid: string;
   roads?: string; // only when edits changed the road network
@@ -68,6 +74,8 @@ interface WorldFileData {
   cultureGrid?: string; // RLE + base64 of per-cell culture index (-1 none)
   races?: Race[];
   raceGrid?: string; // same encoding, per-cell race index
+  culture2Grid?: string; // same encoding: the second culture of mixed cells
+  race2Grid?: string; // same encoding: the second race of mixed cells
   guide?: SavedGuide; // imported picture the terrain was shaped from
   sim?: SavedSimData; // year-by-year history, battles and chronicle
 }
@@ -265,18 +273,30 @@ export async function saveWorld(generator: MapGenerator, sim?: SavedSim | null):
   const customSettings = (Object.keys(DEFAULT_SETTINGS) as (keyof WorldSettings)[]).some((k) => generator.settings[k] !== DEFAULT_SETTINGS[k]);
   let cultureGrid: Int32Array | undefined;
   let raceGrid: Int32Array | undefined;
+  let culture2Grid: Int32Array | undefined;
+  let race2Grid: Int32Array | undefined;
   if (world.culturesEdited) {
     cultureGrid = new Int32Array(N);
     raceGrid = new Int32Array(N);
+    culture2Grid = new Int32Array(N);
+    race2Grid = new Int32Array(N);
+    let mixed = false;
     for (let x = 0; x < W; x++)
       for (let y = 0; y < world.height; y++) {
-        cultureGrid[y * W + x] = world.grid[x][y].cultureIndex ?? -1;
-        raceGrid[y * W + x] = world.grid[x][y].raceIndex ?? -1;
+        const c = world.grid[x][y];
+        cultureGrid[y * W + x] = c.cultureIndex ?? -1;
+        raceGrid[y * W + x] = c.raceIndex ?? -1;
+        culture2Grid[y * W + x] = c.culture2Index ?? -1;
+        race2Grid[y * W + x] = c.race2Index ?? -1;
+        if (c.culture2Index !== undefined || c.race2Index !== undefined) mixed = true;
       }
+    if (!mixed) culture2Grid = race2Grid = undefined;
   }
   const data: WorldFileData = {
     format: FORMAT,
-    version: generator.guide || customSettings || world.culturesEdited ? VERSION : 1,
+    version: atLeast(generator.version, "0.2") ? VERSION : generator.guide || customSettings || world.culturesEdited ? 2 : 1,
+    appVersion: generator.version,
+    politicsSeed: atLeast(generator.version, "0.2") ? generator.politicsSeed : undefined,
     seed: generator.currentSeed,
     preset: generator.currentPreset,
     greatPowers: generator.greatPowers,
@@ -287,6 +307,7 @@ export async function saveWorld(generator: MapGenerator, sim?: SavedSim | null):
     provinces: world.provinces,
     cities: world.cities,
     relations: rel,
+    coalitions: world.coalitions.length ? world.coalitions : undefined,
     nationGrid: rleEncode(nationGrid),
     provinceGrid: rleEncode(provinceGrid),
     roads: world.roadsEdited ? encodeRoads(world.worldRoads) : undefined,
@@ -296,6 +317,8 @@ export async function saveWorld(generator: MapGenerator, sim?: SavedSim | null):
     cultureGrid: cultureGrid ? rleEncode(cultureGrid) : undefined,
     races: raceGrid ? world.races : undefined,
     raceGrid: raceGrid ? rleEncode(raceGrid) : undefined,
+    culture2Grid: culture2Grid ? rleEncode(culture2Grid) : undefined,
+    race2Grid: race2Grid ? rleEncode(race2Grid) : undefined,
     guide: generator.guide ? await encodeGuide(generator.guide) : undefined,
     sim: sim && sim.history.frames.length ? encodeSim(sim) : undefined,
   };
@@ -319,6 +342,7 @@ export async function loadWorld(
   generator.settings = { ...DEFAULT_SETTINGS, ...data.settings };
   generator.guide = data.guide ? await decodeGuide(data.guide) : null;
   generator.setSize(data.width, data.height);
+  generator.pin(normalizeVersion(data.appVersion), data.politicsSeed);
   await generator.generate(onProgress);
   const world = generator.getWorld();
 
@@ -327,6 +351,7 @@ export async function loadWorld(
   world.cities = data.cities;
   world.year = data.year ?? 0;
   world.savedSim = data.sim ? decodeSim(data.sim) : undefined;
+  world.coalitions = data.coalitions ?? [];
   const n = world.nations.length;
   world.relations = Array.from({ length: n }, (_, a) =>
     Array.from({ length: n }, (_, b) => RELATION_CODES[Number(data.relations[a * n + b] ?? 0)] ?? "Neutral"),
@@ -354,20 +379,27 @@ export async function loadWorld(
   // Edited cultures replace the generated ones; each gets its language back from its race
   if (data.cultures && data.cultureGrid) {
     const grid = rleDecode(data.cultureGrid, N);
+    // Mixed cells: absent in files without any (or from before they existed)
+    const grid2 = data.culture2Grid ? rleDecode(data.culture2Grid, N) : null;
     world.cultures = data.cultures.map(({ family: _family, ...c }) => c);
     world.languages = data.cultures.map((c, i) => new Language(seededRand(world.seed ^ (i * 7919) ^ (familyIndexOf(c.family) * 104729)), familyIndexOf(c.family)));
     for (let x = 0; x < W; x++)
       for (let y = 0; y < world.height; y++) {
         const v = grid[y * W + x];
         world.grid[x][y].cultureIndex = v >= 0 ? v : undefined;
+        const v2 = grid2 ? grid2[y * W + x] : -1;
+        world.grid[x][y].culture2Index = v2 >= 0 ? v2 : undefined;
       }
     if (data.races && data.raceGrid) {
       world.races = data.races;
       const rg = rleDecode(data.raceGrid, N);
+      const rg2 = data.race2Grid ? rleDecode(data.race2Grid, N) : null;
       for (let x = 0; x < W; x++)
         for (let y = 0; y < world.height; y++) {
           const v = rg[y * W + x];
           world.grid[x][y].raceIndex = v >= 0 ? v : undefined;
+          const v2 = rg2 ? rg2[y * W + x] : -1;
+          world.grid[x][y].race2Index = v2 >= 0 ? v2 : undefined;
         }
     }
     world.culturesEdited = true;

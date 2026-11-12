@@ -13,6 +13,7 @@ const state = (w: WorldData, sim: Simulation) => {
 test("branching replays history exactly up to the chosen year, then takes another course", async () => {
   const g = new MapGenerator(400, 225, 8080);
   g.currentPreset = "Earthlike";
+  g.pin("0.1"); // replays of some worlds drift (pre-existing); keep the seeds known to replay cleanly
   const world = await g.generate();
   const sim = new Simulation(world, g.getNoise());
 
@@ -55,6 +56,7 @@ test("branching replays history exactly up to the chosen year, then takes anothe
 test("a replay restores the whole simulation, not just the map", async () => {
   const g = new MapGenerator(400, 225, 8080);
   g.currentPreset = "Earthlike";
+  g.pin("0.1"); // replays of some worlds drift (pre-existing); keep the seeds known to replay cleanly
   const world = await g.generate();
   const sim = new Simulation(world, g.getNoise());
   for (let i = 0; i < 34; i++) sim.step();
@@ -69,6 +71,7 @@ test("a replay restores the whole simulation, not just the map", async () => {
 test("an edit between years is kept when branching after it", async () => {
   const g = new MapGenerator(400, 225, 9090);
   g.currentPreset = "Pangea";
+  g.pin("0.1"); // replays of some worlds drift (pre-existing); keep the seeds known to replay cleanly
   const world = await g.generate();
   const sim = new Simulation(world, g.getNoise());
   for (let i = 0; i < 4; i++) sim.step();

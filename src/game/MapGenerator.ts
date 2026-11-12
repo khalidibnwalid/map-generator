@@ -4,6 +4,7 @@ import { yieldFrame } from "./util/grid";
 import { sampleGuide, type TerrainGuide } from "./ImageGuide";
 import { unpackWorld } from "./WorldTransfer";
 import type { WorkerMessage } from "./generate.worker";
+import { APP_VERSION, atLeast } from "./version";
 import {
   generateElevation,
   generateCoast,
@@ -18,6 +19,8 @@ import {
   generatePopulationDensity,
   generateCultures,
   generateDiplomacy,
+  generateCoalitions,
+  generateProvinceTypes,
   generatePOIs,
   generateSeaRoutes,
   generateCurrents,
@@ -44,6 +47,8 @@ export interface GenerateRequest {
   greatPowers: number;
   settings: WorldSettings;
   guide: TerrainGuide | null;
+  version: string; // rules to generate under (see version.ts)
+  politicsSeed: number; // 0.2+: seeds realms, provinces and what follows them
 }
 
 // The worker could not start at all (blocked, unsupported): generate here instead
@@ -65,6 +70,11 @@ export class MapGenerator {
   // Generate in a Web Worker when the platform has one (browsers); tests and
   // the worker itself run the stages in place
   public useWorker = typeof Worker !== "undefined" && typeof window !== "undefined";
+  // Version and politics seed the last generation used (see version.ts)
+  public version = APP_VERSION;
+  public politicsSeed = 0;
+  // Set by pin() for the next generation only: a link or file reproducing a world
+  private pinned: { version: string; politicsSeed?: number } | null = null;
 
   constructor(width: number, height: number, seed: number) {
     this.width = width;
@@ -88,7 +98,19 @@ export class MapGenerator {
     return this.noise;
   }
 
+  // The next generate() reproduces a world of this version (and politics seed,
+  // when given) instead of making a new one with fresh politics
+  public pin(version: string, politicsSeed?: number) {
+    this.pinned = { version, politicsSeed };
+  }
+
   public async generate(onProgress?: (pct: number) => void) {
+    // A new world uses the current rules and rolls its own politics; a pinned
+    // one (link, file) brings back what it was made with
+    const pin = this.pinned;
+    this.pinned = null;
+    this.version = pin?.version ?? APP_VERSION;
+    this.politicsSeed = pin?.politicsSeed ?? Math.floor(Math.random() * 0x7fffffff) + 1;
     this.isGenerating = true;
     try {
       if (this.useWorker) {
@@ -115,6 +137,8 @@ export class MapGenerator {
       greatPowers: this.greatPowers,
       settings: { ...this.settings },
       guide: this.guide,
+      version: this.version,
+      politicsSeed: this.politicsSeed,
     };
     return new Promise<WorldData>((resolve, reject) => {
       const worker = new Worker(new URL("./generate.worker.ts", import.meta.url), { type: "module", name: "world-generation" });
@@ -158,6 +182,8 @@ export class MapGenerator {
     this.noise = new NoiseEngine(this.currentSeed);
     this.world = new WorldData(this.width, this.height);
     this.world.seed = this.currentSeed >>> 0;
+    this.world.version = this.version;
+    this.world.politicsSeed = this.politicsSeed;
 
     const ctx: GeneratorContext = {
       world: this.world,
@@ -168,6 +194,7 @@ export class MapGenerator {
       greatPowers: this.greatPowers,
       settings: this.settings,
       guide: this.guide ? sampleGuide(this.guide, this.width, this.height, this.currentSeed) : undefined,
+      version: this.version,
     };
 
     // Helper to report sub-ranges smoothly
@@ -197,11 +224,16 @@ export class MapGenerator {
       [generateSeaRoutes, 96],
       [generatePOIs, 98],
       [generateDiplomacy, 99],
+      [generateCoalitions, 99], // 0.2+: realms on good terms band together
+      [generateProvinceTypes, 99], // 0.2+: capital districts, marches facing rivals, autonomous regions...
       [generateTrade, 100], // last: wars (from diplomacy) close trade links
     ];
     let start = 0;
     const timings: string[] = [];
     for (const [stage, end] of stages) {
+      // From 0.2 the seed fixes the land only: realms, and everything that
+      // follows from them, draw from the world's own politics seed
+      if (stage === generateNations && atLeast(this.version, "0.2")) this.noise.randomState = this.politicsSeed >>> 0;
       ctx.onProgress = report(start, end);
       const t0 = performance.now();
       await stage(ctx);

@@ -1,24 +1,7 @@
 import type { WorldData } from "../game/WorldData";
 import { syncSliders } from "./components/Slider";
-import { FLAG_BADGES, FLAG_CHARGES, contrastCharge, type FlagSpec } from "../game/flags";
+import { CHARGE_NAMES, FLAG_BADGES, FLAG_CHARGES, contrastCharge, normalizeCharge, type FlagSpec } from "../game/flags";
 import { emblemSpec, logoFromFile, renderEmblem } from "../game/emblem";
-
-const CHARGE_NAMES: Record<string, string> = {
-  "crescent-star": "Crescent & star",
-  crescent: "Crescent",
-  star: "Star",
-  star8: "Eight-point star",
-  sun: "Sun",
-  disc: "Disc",
-  ring: "Ring",
-  "stars-row": "Three stars",
-  "stars-ring": "Ring of stars",
-  lozenge: "Lozenge",
-  swords: "Crossed swords",
-  mountain: "Mountain",
-  crown: "Crown",
-  wheel: "Wheel",
-};
 
 const SIGILS = FLAG_CHARGES.filter((c) => c !== "none");
 
@@ -92,13 +75,13 @@ export class LogoEditor {
     $("le-random").addEventListener("click", () => {
       const c = this.world.cultures[this.idx];
       this.image = undefined;
-      this.spec = emblemSpec({ ...c, logoSpec: undefined, logoSeed: 1 + Math.floor(Math.random() * 1e6) }, this.family());
+      this.spec = emblemSpec({ ...c, logoSpec: undefined, logoSeed: 1 + Math.floor(Math.random() * 1e6) }, this.family(), this.world.version);
       this.refresh();
     });
     $("le-reset").addEventListener("click", () => {
       const c = this.world.cultures[this.idx];
       this.image = undefined;
-      this.spec = emblemSpec({ ...c, logoSpec: undefined, logoSeed: undefined }, this.family());
+      this.spec = emblemSpec({ ...c, logoSpec: undefined, logoSeed: undefined }, this.family(), this.world.version);
       this.refresh();
     });
     $("le-upload").addEventListener("click", () => $<HTMLInputElement>("le-file").click());
@@ -143,8 +126,8 @@ export class LogoEditor {
     this.world = world;
     this.idx = idx;
     this.onSave = onSave;
-    const spec = emblemSpec(culture, world.languages[idx]?.family.key ?? "Latin");
-    this.spec = { ...spec, colors: [...spec.colors] };
+    const spec = emblemSpec(culture, world.languages[idx]?.family.key ?? "Latin", world.version);
+    this.spec = { ...spec, charge: normalizeCharge(spec.charge), colors: [...spec.colors] };
     this.image = culture.logo;
     this.root.querySelector("#le-title")!.textContent = `Logo of ${culture.name}`;
     this.root.style.display = "flex";

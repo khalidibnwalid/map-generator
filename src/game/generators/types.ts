@@ -23,5 +23,6 @@ export interface GeneratorContext {
     settings?: WorldSettings;
     greatPowers?: number; // realms grown far larger than the rest (0-3)
     guide?: GuideField; // imported picture that decides land and sea
+    version?: string; // app version whose rules apply (see version.ts); absent = current
     onProgress?: (pct: number) => void;
 }

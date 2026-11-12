@@ -1,16 +1,18 @@
 import "./style.css";
 import { CanvasManager } from "./core/CanvasManager";
 import { MapGenerator } from "./game/MapGenerator";
-import { recipeFromHash } from "./game/WorldLink";
+import { recipeFromLocation } from "./game/WorldLink";
 import { Interface } from "./ui/Interface";
+import { versionWarning } from "./game/version";
+import { toast } from "./ui/components/Toast";
 import renderMainApp from "./ui/components/MainApp";
 
 renderMainApp();
 
 // Initialize
 const canvasManager = new CanvasManager("mapCanvas");
-// A world link (#seed=…&land=…) opens that world; otherwise a random one
-const recipe = recipeFromHash(location.hash);
+// A world link (?seed=…&land=…, or an older #seed=…) opens that world; otherwise a random one
+const recipe = recipeFromLocation(location.search, location.hash);
 const generator = recipe
   ? new MapGenerator(recipe.width, recipe.height, recipe.seed)
   : new MapGenerator(800, 450, Math.floor(Math.random() * 1000000));
@@ -18,6 +20,9 @@ if (recipe) {
   generator.currentPreset = recipe.preset;
   generator.greatPowers = recipe.greatPowers;
   generator.settings = recipe.settings;
+  generator.pin(recipe.version, recipe.politicsSeed);
+  const warn = versionWarning(recipe.version);
+  if (warn) setTimeout(() => toast(warn, { ms: 12000 }), 1500);
 }
 
 // Initial state: fit to screen

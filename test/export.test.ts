@@ -31,6 +31,7 @@ test("zip lists every entry in its central directory", () => {
 test("the game export describes the world consistently", async () => {
   const g = new MapGenerator(400, 225, 4242);
   g.currentPreset = "Earthlike";
+  g.pin("0.1"); // a 0.1 world links without a version or politics seed
   const world = await g.generate();
   const ex = buildGameExport(g);
   const data = JSON.parse(ex.json);
@@ -48,7 +49,7 @@ test("the game export describes the world consistently", async () => {
     expect(cityIds.has(r.to)).toBe(true);
   }
   for (const p of data.provinces) if (p.capitalCity !== null) expect(cityIds.has(p.capitalCity)).toBe(true);
-  expect(data.generator.link).toBe("#seed=4242&land=medium&size=400x225");
+  expect(data.generator.link).toBe("?seed=4242&land=medium&size=400x225");
 
   expect(ex.heightmap16.length).toBe(400 * 225 * 2);
   for (const im of ex.images) expect(im.rgba.length).toBe(im.width * im.height * 4);

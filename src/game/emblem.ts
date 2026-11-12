@@ -1,4 +1,5 @@
-import { FLAG_CHARGES, contrastCharge, renderFlag, type FlagCharge, type FlagSpec } from "./flags";
+import { FLAG_CHARGES, LEGACY_CHARGES, contrastCharge, renderFlag, type FlagCharge, type FlagSpec } from "./flags";
+import { APP_VERSION, atLeast } from "./version";
 import type { Culture, WorldData } from "./WorldData";
 
 // Logos for cultures: a round emblem built from the flag charges (a sigil on a
@@ -23,10 +24,11 @@ function shade(hex: string, f: number): string {
   return `#${[(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => ch(v).toString(16).padStart(2, "0")).join("")}`;
 }
 
-export function emblemSpec(c: Culture, family: string): FlagSpec {
+// `version` is the world's: 0.1 worlds keep the sigils they had then
+export function emblemSpec(c: Culture, family: string, version = APP_VERSION): FlagSpec {
   if (c.logoSpec) return c.logoSpec;
   const h = hash(`${c.name}|${family}|${c.logoSeed ?? 0}`);
-  const charges = FLAG_CHARGES.filter((x) => x !== "none");
+  const charges = (atLeast(version, "0.2") ? FLAG_CHARGES : LEGACY_CHARGES).filter((x) => x !== "none");
   const field = shade(c.color, 0.5);
   const spec: FlagSpec = {
     layout: "plain",
@@ -47,7 +49,7 @@ export function emblemSpec(c: Culture, family: string): FlagSpec {
 export function cultureHint(world: WorldData, cultureId: number): { color: string; charge: FlagCharge } | undefined {
   const c = world.cultures[cultureId];
   if (!c) return undefined;
-  return { color: c.color, charge: emblemSpec(c, world.languages[cultureId]?.family.key ?? "Latin").charge };
+  return { color: c.color, charge: emblemSpec(c, world.languages[cultureId]?.family.key ?? "Latin", world.version).charge };
 }
 
 // A round emblem: the design clipped to a circle with a gold ring
@@ -74,12 +76,12 @@ export function renderEmblem(spec: FlagSpec, px: number): HTMLCanvasElement {
 const urls = new Map<string, string>();
 
 // Data URL for an <img>: the custom logo when there is one, else the emblem design
-export function emblemUrl(c: Culture, family: string, size = 24): string {
+export function emblemUrl(c: Culture, family: string, size = 24, version = APP_VERSION): string {
   if (c.logo) return c.logo;
-  const key = `${c.name}|${c.color}|${family}|${c.logoSeed ?? 0}|${JSON.stringify(c.logoSpec ?? null)}|${size}`;
+  const key = `${c.name}|${c.color}|${family}|${version}|${c.logoSeed ?? 0}|${JSON.stringify(c.logoSpec ?? null)}|${size}`;
   const hit = urls.get(key);
   if (hit) return hit;
-  const url = renderEmblem(emblemSpec(c, family), size * 2).toDataURL(); // 2x: sharp on dense screens
+  const url = renderEmblem(emblemSpec(c, family, version), size * 2).toDataURL(); // 2x: sharp on dense screens
   if (urls.size > 400) urls.clear();
   urls.set(key, url);
   return url;

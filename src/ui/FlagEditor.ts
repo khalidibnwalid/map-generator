@@ -1,12 +1,14 @@
 import type { WorldData } from "../game/WorldData";
 import { syncSliders } from "./components/Slider";
 import {
+  CHARGE_NAMES,
   FLAG_BADGES,
   FLAG_CHARGES,
   FLAG_LAYOUTS,
   contrastCharge,
   defaultFlagFor,
   flagOf,
+  normalizeCharge,
   randomFlagFor,
   renderFlag,
   type ChargePos,
@@ -36,37 +38,27 @@ const LAYOUT_NAMES: Record<string, string> = {
   "tribar-hoist": "Hoist bar",
 };
 
-const CHARGE_NAMES: Record<string, string> = {
-  none: "None",
-  "crescent-star": "Crescent & star",
-  crescent: "Crescent",
-  star: "Star",
-  star8: "Eight-point star",
-  sun: "Sun",
-  disc: "Disc",
-  ring: "Ring",
-  "stars-row": "Three stars",
-  "stars-ring": "Ring of stars",
-  lozenge: "Lozenge",
-  swords: "Crossed swords",
-  mountain: "Mountain",
-  crown: "Crown",
-  wheel: "Wheel",
-};
-
 const POSITIONS: { value: ChargePos; label: string }[] = [
   { value: "center", label: "Center" },
   { value: "hoist", label: "Hoist" },
   { value: "canton", label: "Canton" },
 ];
 
-// Modal flag designer. Edits a copy; Save writes it to the nation.
+// Whose flag is being edited: a nation's, or anything else that carries one (coalitions)
+export interface FlagTarget {
+  title: string;
+  spec: FlagSpec;
+  canton?: FlagSpec | null; // the overlord's flag, drawn in the canton
+  random: () => FlagSpec;
+  reset: () => FlagSpec; // the generated flag
+  save: (spec: FlagSpec) => void;
+}
+
+// Modal flag designer. Edits a copy; Save hands it to the target.
 export class FlagEditor {
   private root: HTMLDivElement;
   private spec!: FlagSpec;
-  private world!: WorldData;
-  private idx = -1;
-  private onSave: (() => void) | null = null;
+  private target: FlagTarget | null = null;
 
   constructor() {
     this.root = document.createElement("div");
@@ -99,7 +91,7 @@ export class FlagEditor {
           <label class="fe-inline"><span>Badge</span><input type="color" id="fe-badge-color" /></label>
         </div>
         <div class="modal-actions fe-actions">
-          <button class="btn-cancel" id="fe-random" title="Generate a new design in this nation's style">Randomize</button>
+          <button class="btn-cancel" id="fe-random" title="Generate a new design">Randomize</button>
           <button class="btn-cancel" id="fe-reset" title="Back to the generated flag">Reset</button>
           <span class="fe-spacer"></span>
           <button class="btn-cancel" id="fe-cancel">Cancel</button>
@@ -115,17 +107,16 @@ export class FlagEditor {
       if (e.target === this.root) this.close();
     });
     $("fe-save").addEventListener("click", () => {
-      const n = this.world.nations[this.idx];
-      if (n) n.flag = { ...this.spec, colors: [...this.spec.colors] };
+      const target = this.target;
       this.close();
-      this.onSave?.();
+      target?.save({ ...this.spec, colors: [...this.spec.colors] });
     });
     $("fe-random").addEventListener("click", () => {
-      this.spec = randomFlagFor(this.world, this.idx);
+      if (this.target) this.spec = this.target.random();
       this.refresh();
     });
     $("fe-reset").addEventListener("click", () => {
-      this.spec = defaultFlagFor(this.world, this.idx);
+      if (this.target) this.spec = this.target.reset();
       this.refresh();
     });
     this.root.querySelectorAll<HTMLInputElement>("input[data-color]").forEach((inp) =>
@@ -162,12 +153,26 @@ export class FlagEditor {
 
   public open(world: WorldData, idx: number, onSave: () => void) {
     const spec = flagOf(world, idx);
-    if (!spec) return;
-    this.world = world;
-    this.idx = idx;
-    this.onSave = onSave;
-    this.spec = { ...spec, colors: [...spec.colors] };
-    this.root.querySelector("#fe-title")!.textContent = `Flag of ${world.nations[idx].name}`;
+    const n = world.nations[idx];
+    if (!spec || !n) return;
+    this.edit({
+      title: `Flag of ${n.name}`,
+      spec,
+      canton: n.overlord !== undefined ? flagOf(world, n.overlord) : null,
+      random: () => randomFlagFor(world, idx),
+      reset: () => defaultFlagFor(world, idx),
+      save: (f) => {
+        n.flag = f;
+        onSave();
+      },
+    });
+  }
+
+  public edit(target: FlagTarget) {
+    this.target = target;
+    const spec = target.spec;
+    this.spec = { ...spec, charge: normalizeCharge(spec.charge), colors: [...spec.colors] };
+    this.root.querySelector("#fe-title")!.textContent = target.title;
     this.root.style.display = "flex";
     this.refresh();
   }
@@ -179,8 +184,7 @@ export class FlagEditor {
   // Redraws the preview; `galleries` also rebuilds the layout/emblem pickers
   private refresh(galleries = true) {
     const sp = this.spec;
-    const n = this.world.nations[this.idx];
-    const overlord = n?.overlord !== undefined ? flagOf(this.world, n.overlord) : null;
+    const overlord = this.target?.canton ?? null;
     const canvas = this.root.querySelector<HTMLCanvasElement>("#fe-canvas")!;
     const ctx = canvas.getContext("2d")!;
     ctx.clearRect(0, 0, canvas.width, canvas.height);

@@ -1,10 +1,12 @@
 import { TerrainSampler } from "../core/TerrainSampler";
+import { APP_VERSION } from "./version";
 import type { FlagSpec } from "./flags";
 import type { SavedSim } from "./sim/Simulation";
 import type { Language } from "./names";
 import type { Poi } from "./generators/generatePOIs";
 import type { SeaRoute } from "./generators/generateSeaRoutes";
 import type { CurrentField } from "./generators/generateCurrents";
+import type { ProvinceType } from "./provinceTypes";
 import type { Resource } from "./generators/generateEconomy";
 
 export const BiomeType = {
@@ -155,6 +157,15 @@ export interface Nation {
   dynasty?: string; // ruling house (see sim/Rulers.ts)
   ruler?: Ruler;
   regnal?: Record<string, number>; // how many rulers of this realm bore each name
+  coalitions?: number[]; // ids of the coalitions it belongs to (see coalitions.ts)
+}
+
+// Independent realms bound together (see coalitions.ts); members carry its id
+export interface Coalition {
+  id: number;
+  name: string;
+  color: string;
+  flag?: FlagSpec; // set when founded; absent = generated from name and color
 }
 
 export interface Ruler {
@@ -177,6 +188,7 @@ export interface Province {
   centroidY?: number;
   area?: number; // km² of land
   population?: number;
+  type?: ProvinceType; // capital district, autonomous region... (see provinceTypes.ts); absent = ordinary
 }
 
 export interface Point {
@@ -271,8 +283,12 @@ export interface CellData {
   nationIndex?: number;
   provinceIndex?: number;
   isNationBorder?: boolean;
+  // Absent on land = uninhabited (0.2+: deserts, peaks, ice). The *2 fields
+  // are a second group sharing the cell (a mixed zone); absent = none.
   cultureIndex?: number;
   raceIndex?: number;
+  culture2Index?: number;
+  race2Index?: number;
   religionIndex?: number;
 }
 
@@ -282,6 +298,8 @@ export class WorldData {
   public width: number;
   public height: number;
   public seed: number = 0;
+  public version = APP_VERSION; // rules the world was generated under (see version.ts)
+  public politicsSeed = 0; // 0.2+: seeds realms and provinces apart from the land
   public year = 0; // simulated calendar year (History tab)
   public savedSim?: SavedSim; // recorded history read from a file, taken over by the simulation
   public grid: CellData[][];
@@ -303,6 +321,7 @@ export class WorldData {
   public poisEdited = false; // landmarks were placed, renamed or removed
   // relations[a][b], symmetric except Vassal/Overlord pairs
   public relations: RelationType[][] = [];
+  public coalitions: Coalition[] = []; // user-made, none when generated
 
   // Flat per-cell arrays (index y * width + x)
   public coastSdf: Uint16Array; // quantized signed distance to coast, see FieldNoise

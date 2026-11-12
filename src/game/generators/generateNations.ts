@@ -3,6 +3,8 @@ import type { WorldData } from "../WorldData";
 import { hslHex } from "../names";
 import { growRegions, fillUnreached, warpOwnerArray } from "../util/regionGrow";
 import { distanceTransform, labelComponents, yieldFrame } from "../util/grid";
+import { APP_VERSION, atLeast } from "../version";
+import { cultureNear } from "../peoples";
 
 // Nation palette: lively but balanced (between neon and muted atlas tones).
 // Hues are spread around the wheel except the blue/cyan band, so land never
@@ -58,11 +60,11 @@ export function assignNationColors(world: WorldData) {
 }
 
 // A palette color for a nation founded in the editor, avoiding its neighbors
-export function colorForNewNation(world: WorldData, neighbors: number[]): string {
+export function colorForNewNation(world: WorldData, neighbors: number[], rand: () => number = Math.random): string {
   const used = new Set(neighbors.map((j) => world.nations[j]?.color));
   const free = NATION_PALETTE.filter((c) => !used.has(c));
   const pool = free.length ? free : NATION_PALETTE;
-  return pool[Math.floor(Math.random() * pool.length)];
+  return pool[Math.floor(rand() * pool.length)];
 }
 
 // Coast geometry for sea claims never changes, so it is computed once per
@@ -245,6 +247,7 @@ export async function generateNations(ctx: GeneratorContext): Promise<void> {
     return false;
   };
 
+  const peopled = atLeast(ctx.version ?? APP_VERSION, "0.2"); // land can be uninhabited
   let capitalAttempts = 0;
   while (world.nations.length < numNations && capitalAttempts < 4000) {
     capitalAttempts++;
@@ -252,12 +255,14 @@ export async function generateNations(ctx: GeneratorContext): Promise<void> {
     const y = Math.floor(noise.random() * height);
     const cell = world.grid[x][y];
     if (cell.isWater || cell.elevation >= 0.7) continue;
+    // 0.2+: nobody founds a realm in an empty desert
+    if (peopled && cell.cultureIndex === undefined) continue;
     // Prefer habitable land for capitals
     if (noise.random() > 0.25 + cell.populationDensity) continue;
     if (tooClose(x, y)) continue;
 
     const id = world.nations.length;
-    const cultureId = cell.cultureIndex ?? 0;
+    const cultureId = cultureNear(world, x, y) ?? 0;
     const lang = world.languages[cultureId];
     world.nations.push({
       id,

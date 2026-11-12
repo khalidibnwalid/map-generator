@@ -6,6 +6,7 @@ import { fingerprint } from "./fingerprint";
 test("a saved world reopens to the same world, edits included", async () => {
   const g = new MapGenerator(400, 225, 13579);
   g.currentPreset = "Earthlike";
+  g.pin("0.2", 4242); // a 0.2 world, same every run
   const world = await g.generate();
 
   // A few edits of the kinds a .world file has to carry

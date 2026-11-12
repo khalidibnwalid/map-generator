@@ -1,6 +1,9 @@
+import { normalizeCharge } from "../flags";
 import { BIOME_COLORS, BIOME_INDEX, CELL_KM, type Point } from "../WorldData";
 import type { MapGenerator } from "../MapGenerator";
-import { recipeToHash } from "../WorldLink";
+import { recipeToQuery } from "../WorldLink";
+import { membersOf } from "../coalitions";
+import { PROVINCE_TYPES, provinceType } from "../provinceTypes";
 
 // "Export for game engines": the world as data other tools can read. A JSON
 // file with every realm, settlement, route and landmark; a 16-bit heightmap
@@ -76,10 +79,15 @@ export function buildGameExport(generator: MapGenerator): GameExport {
       if (a !== b && t && t !== "Neutral" && (a < b || t === "Vassal" || t === "Overlord")) relations.push({ a, b, type: t });
     }
 
+  // 0.2+: cells where a second people lives alongside the first
+  let mixedCultures = false;
+  for (let x = 0; x < W && !mixedCultures; x++) for (const c of world.grid[x]) if (c.culture2Index !== undefined) mixedCultures = true;
   const data = {
     format: EXPORT_FORMAT,
     version: EXPORT_VERSION,
+    appVersion: generator.version, // app version the world was made with (see version.ts)
     generator: {
+      politicsSeed: generator.politicsSeed,
       seed: generator.currentSeed,
       preset: generator.currentPreset,
       greatPowers: generator.greatPowers,
@@ -87,7 +95,7 @@ export function buildGameExport(generator: MapGenerator): GameExport {
       shapedFromImage: !!generator.guide,
       link: generator.guide
         ? null
-        : recipeToHash({ seed: generator.currentSeed, preset: generator.currentPreset, width: W, height: H, greatPowers: generator.greatPowers, settings: generator.settings }),
+        : recipeToQuery({ seed: generator.currentSeed, preset: generator.currentPreset, width: W, height: H, greatPowers: generator.greatPowers, settings: generator.settings, version: generator.version, politicsSeed: generator.politicsSeed }),
     },
     grid: {
       width: W,
@@ -98,6 +106,7 @@ export function buildGameExport(generator: MapGenerator): GameExport {
       note: "Coordinates are grid cells: x east, y south, origin at the top-left corner of cell (0,0). Polylines may run past x = width where they cross the seam.",
     },
     year: world.year,
+    provinceTypes: PROVINCE_TYPES.map((t) => ({ id: t.id, label: t.label, description: t.description })),
     biomes: Object.entries(BIOME_INDEX).map(([name, id]) => ({ id, name, color: BIOME_COLORS[name as keyof typeof BIOME_COLORS] ?? null })),
     nations: world.nations.map((nt, i) => ({
       id: i,
@@ -106,10 +115,11 @@ export function buildGameExport(generator: MapGenerator): GameExport {
       capital: { x: r2(nt.capitalX), y: r2(nt.capitalY) },
       government: nt.government ?? null,
       overlord: nt.overlord ?? null,
+      coalitions: nt.coalitions ?? [],
       culture: nt.cultureId ?? null,
       dynasty: nt.dynasty ?? null,
       ruler: nt.ruler ?? null,
-      flag: nt.flag ?? null,
+      flag: nt.flag ? { ...nt.flag, charge: normalizeCharge(nt.flag.charge) } : null,
     })),
     provinces: world.provinces.map((p, i) => ({
       id: i,
@@ -120,6 +130,7 @@ export function buildGameExport(generator: MapGenerator): GameExport {
       seat: p.seatX !== undefined && p.seatY !== undefined ? { x: r2(p.seatX), y: r2(p.seatY) } : null,
       areaKm2: p.area ?? null,
       population: p.population ?? null,
+      type: provinceType(p), // see provinceTypes
     })),
     cities: world.cities.map((c) => ({
       id: c.id,
@@ -138,6 +149,7 @@ export function buildGameExport(generator: MapGenerator): GameExport {
     cultures: world.cultures.map((c, i) => ({ id: i, name: c.name, color: c.color, race: c.raceId ?? null, language: world.languages[i]?.family.key ?? null })),
     races: world.races.map((r, i) => ({ id: i, name: r.name, color: r.color, language: r.family })),
     relations,
+    coalitions: world.coalitions.map((u) => ({ id: u.id, name: u.name, color: u.color, members: membersOf(world, u.id) })),
     rivers: world.rivers.map((r) => ({ id: r.id, name: r.name, flowsInto: r.parent >= 0 ? r.parent : null, points: pts(r.points), widthsM: r.widths.map(Math.round) })),
     roads: world.worldRoads.map((r) => ({ from: r.a, to: r.b, tier: ROAD_TIERS[r.tier] ?? "track", points: pts(r.points) })),
     seaRoutes: world.seaRoutes.map((r) => ({ from: r.a, to: r.b, tier: r.tier, points: pts(r.points) })),
@@ -151,7 +163,8 @@ export function buildGameExport(generator: MapGenerator): GameExport {
       "index/biomes.png": "Red = biome id (see biomes).",
       "index/nations.png": "Nation id + 1 = red + 256 * green; black is no nation.",
       "index/provinces.png": "Province id + 1, encoded the same way.",
-      "index/cultures.png": "Culture id + 1, encoded the same way.",
+      "index/cultures.png": "Culture id + 1, encoded the same way; black on land is uninhabited.",
+      ...(mixedCultures ? { "index/cultures2.png": "Second culture id + 1 where two peoples live mixed, encoded the same way; black is none." } : {}),
       "index/water.png": "Red: 0 land, 1 ocean, 2 lake.",
     },
   };
@@ -180,6 +193,7 @@ export function buildGameExport(generator: MapGenerator): GameExport {
     image("index/nations.png", W, H, (x, y) => idColor(cell(x, y).nationIndex)),
     image("index/provinces.png", W, H, (x, y) => idColor(cell(x, y).provinceIndex)),
     image("index/cultures.png", W, H, (x, y) => idColor(cell(x, y).cultureIndex)),
+    ...(mixedCultures ? [image("index/cultures2.png", W, H, (x, y) => idColor(cell(x, y).culture2Index))] : []),
     image("index/water.png", W, H, (x, y) => [world.waterType[y * W + x], 0, 0]),
   ];
 
@@ -190,7 +204,9 @@ export function buildGameExport(generator: MapGenerator): GameExport {
     `Seed ${generator.currentSeed}, ${W} x ${H} cells of ${CELL_KM} km${world.year ? `, year ${world.year}` : ""}.`,
     "",
     "world.json      Realms, provinces, settlements, rivers, roads, sea routes,",
-    "                landmarks, resources, cultures, races and diplomacy.",
+    "                landmarks, resources, cultures, races, diplomacy and coalitions.",
+    "                Each province has a type: province, capital, autonomous,",
+    "                march, territory or colony (see provinceTypes).",
     `                Format "${EXPORT_FORMAT}", version ${EXPORT_VERSION}.`,
     `heightmap.r16   16-bit RAW heightmap (little-endian), ${W} x ${H}. Unity:`,
     "                Terrain > Import Raw, Depth 16 bit, Byte Order Windows.",

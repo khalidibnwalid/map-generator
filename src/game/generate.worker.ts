@@ -20,6 +20,7 @@ self.onmessage = async (e: MessageEvent<GenerateRequest>) => {
     g.settings = r.settings;
     g.guide = r.guide;
     g.useWorker = false;
+    g.pin(r.version, r.politicsSeed);
     const world = await g.generate((pct) => post({ type: "progress", pct }));
     const { packed, transfer } = packWorld(world, g.getNoise(), r.seed);
     post({ type: "done", packed }, transfer);

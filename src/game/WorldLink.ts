@@ -1,10 +1,14 @@
 import type { Preset } from "./MapGenerator";
 import { DEFAULT_SETTINGS, type WorldSettings } from "./generators/types";
+import { LEGACY_VERSION, atLeast, normalizeVersion } from "./version";
 
-// A world's recipe as a URL hash: the seed and every generation option, so a
+// A world's recipe as a URL query: the seed and every generation option, so a
 // link reproduces the same world anywhere. Edits are not part of it (they
 // travel as .world files). Only non-default options are written, to keep
-// links short: #seed=982332&land=medium&size=800x450
+// links short: ?seed=982332&land=medium&size=800x450
+// Links used to carry the recipe in the hash (#seed=…); those still open.
+// Since 0.2 a link also names its app version (v) and the politics seed (pol)
+// its realms came from; a link without v is a 0.1 world.
 
 export interface WorldRecipe {
   seed: number;
@@ -13,6 +17,8 @@ export interface WorldRecipe {
   height: number;
   greatPowers: number;
   settings: WorldSettings;
+  version: string;
+  politicsSeed?: number; // 0.2+
 }
 
 const LANDS: Record<string, Preset> = {
@@ -38,9 +44,11 @@ const OPTS: { key: keyof WorldSettings; param: string; scale: number }[] = [
   { key: "nations", param: "realms", scale: 1 },
 ];
 
-export function recipeToHash(r: WorldRecipe): string {
+export function recipeToQuery(r: WorldRecipe): string {
   const p = new URLSearchParams();
+  if (r.version !== LEGACY_VERSION) p.set("v", r.version);
   p.set("seed", String(r.seed));
+  if (atLeast(r.version, "0.2") && r.politicsSeed) p.set("pol", String(r.politicsSeed >>> 0));
   p.set("land", LAND_OF[r.preset] ?? "giant");
   const size = `${r.width}x${r.height}`;
   if (size !== DEFAULT_SIZE) p.set("size", size);
@@ -49,12 +57,12 @@ export function recipeToHash(r: WorldRecipe): string {
     const v = r.settings[o.key];
     if (v !== DEFAULT_SETTINGS[o.key]) p.set(o.param, String(Math.round(v * o.scale * 1000) / 1000));
   }
-  return "#" + p.toString();
+  return "?" + p.toString();
 }
 
-// Null when the hash is not a world link (or is broken)
-export function recipeFromHash(hash: string): WorldRecipe | null {
-  const p = new URLSearchParams(hash.replace(/^#/, ""));
+// Null when the query (or a legacy #hash) is not a world link, or is broken
+export function recipeFromQuery(query: string): WorldRecipe | null {
+  const p = new URLSearchParams(query.replace(/^[?#]/, ""));
   const seed = Number(p.get("seed"));
   if (!p.has("seed") || !Number.isInteger(seed) || seed < 0 || seed > 0xffffffff) return null;
   const preset = LANDS[p.get("land") ?? "giant"];
@@ -69,7 +77,11 @@ export function recipeFromHash(hash: string): WorldRecipe | null {
     const v = Number(p.get(o.param));
     if (Number.isFinite(v)) settings[o.key] = v / o.scale;
   }
+  const version = p.has("v") ? normalizeVersion(p.get("v")) : LEGACY_VERSION;
+  const pol = Number(p.get("pol"));
   return {
+    version,
+    politicsSeed: p.has("pol") && Number.isInteger(pol) && pol > 0 && pol <= 0xffffffff ? pol : undefined,
     seed,
     preset,
     width,
@@ -77,4 +89,9 @@ export function recipeFromHash(hash: string): WorldRecipe | null {
     greatPowers: Number.isInteger(powers) ? Math.max(0, Math.min(3, powers)) : DEFAULT_POWERS,
     settings,
   };
+}
+
+// The world link in a page address: the query, else a link from before (#hash)
+export function recipeFromLocation(search: string, hash: string): WorldRecipe | null {
+  return recipeFromQuery(search) ?? recipeFromQuery(hash);
 }

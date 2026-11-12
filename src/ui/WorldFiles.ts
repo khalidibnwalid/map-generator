@@ -1,12 +1,13 @@
 import type { CanvasManager } from "../core/CanvasManager";
 import type { MapGenerator } from "../game/MapGenerator";
 import { loadWorld, saveWorld } from "../game/WorldFile";
-import { recipeFromHash, recipeToHash, type WorldRecipe } from "../game/WorldLink";
+import { recipeFromQuery, recipeToQuery, type WorldRecipe } from "../game/WorldLink";
 import type { SavedSim } from "../game/sim/Simulation";
 import { autoNations, OPTIONS, refreshPickers } from "./components/MainApp";
 import { installSliders } from "./components/Slider";
 import { background, toast } from "./components/Toast";
 import { downloadBlob } from "./AtlasRender";
+import { versionWarning } from "../game/version";
 import type { UIManager } from "./UIManager";
 
 // The File tab and the address bar: saving and opening .world files, world
@@ -42,6 +43,7 @@ export class WorldFiles {
     });
     document.getElementById("share-link")?.addEventListener("click", () => background(this.shareLink(), "Sharing the link"));
     document.getElementById("tab-file")?.addEventListener("click", () => this.syncLink());
+    // Older links kept the recipe in the hash, which can change without a reload
     window.addEventListener("hashchange", () => this.openLink());
 
     // Exports load their code on first use
@@ -68,6 +70,8 @@ export class WorldFiles {
     ui.showLoadingModal();
     try {
       await loadWorld(file, g, (pct) => ui.updateLoadingModal(pct));
+      const warn = versionWarning(g.version);
+      if (warn) toast(warn, { ms: 12000 });
       const W = g.getWidth();
       const H = g.getHeight();
       cm.scale = window.innerHeight / H;
@@ -106,14 +110,15 @@ export class WorldFiles {
 
   private recipe(): WorldRecipe {
     const g = this.host.generator;
-    return { seed: g.currentSeed, preset: g.currentPreset, width: g.getWidth(), height: g.getHeight(), greatPowers: g.greatPowers, settings: { ...g.settings } };
+    return { seed: g.currentSeed, preset: g.currentPreset, width: g.getWidth(), height: g.getHeight(), greatPowers: g.greatPowers, settings: { ...g.settings }, version: g.version, politicsSeed: g.politicsSeed };
   }
 
   // The address bar always links to the world on screen (worlds shaped from
   // an image can't be linked: the picture isn't in the URL)
   public syncLink() {
-    const hash = this.host.generator.guide ? "" : recipeToHash(this.recipe());
-    if (location.hash !== hash) history.replaceState(null, "", hash ? hash : location.pathname + location.search);
+    // The query holds the recipe; any older #hash link is replaced by it
+    const hash = this.host.generator.guide ? "" : recipeToQuery(this.recipe());
+    if (location.search !== hash || location.hash) history.replaceState(null, "", location.pathname + hash);
     const btn = document.getElementById("share-link") as HTMLButtonElement | null;
     const info = document.getElementById("share-link-info");
     if (btn) btn.disabled = !hash;
@@ -127,7 +132,7 @@ export class WorldFiles {
 
   private async shareLink() {
     if (this.host.generator.guide) return;
-    const url = location.origin + location.pathname + recipeToHash(this.recipe());
+    const url = location.origin + location.pathname + recipeToQuery(this.recipe());
     // Phones get the system share sheet; elsewhere the link is copied
     if (navigator.share && matchMedia("(pointer: coarse)").matches) {
       try {
@@ -148,14 +153,17 @@ export class WorldFiles {
   // A world link pasted into the address bar of an open tab
   private openLink() {
     const g = this.host.generator;
-    const r = recipeFromHash(location.hash);
-    if (!r || g.isGenerating || recipeToHash(r) === recipeToHash(this.recipe())) return;
+    const r = recipeFromQuery(location.hash);
+    if (!r || g.isGenerating || recipeToQuery(r) === recipeToQuery(this.recipe())) return;
     g.guide = null;
     this.host.syncGuideCard();
     g.currentSeed = r.seed;
     g.currentPreset = r.preset;
     g.greatPowers = r.greatPowers;
     g.settings = r.settings;
+    g.pin(r.version, r.politicsSeed);
+    const warn = versionWarning(r.version);
+    if (warn) toast(warn, { ms: 12000 });
     // The Generate button reads the controls, so set them and press it
     this.syncControls(r.width, r.height);
     (document.getElementById("generate") as HTMLButtonElement | null)?.click();

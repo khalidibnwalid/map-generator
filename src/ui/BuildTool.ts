@@ -6,6 +6,8 @@ import { cityNameFor, connectCity, finalizeCity, setCityPopulation } from "../ga
 import { nationFlagUrl } from "../game/flags";
 import type { NationsManager } from "./NationsManager";
 import { installSteppers } from "./components/NumberInput";
+import { cultureNear } from "../game/peoples";
+import { refreshProvinceTypes } from "../game/provinceTypes";
 
 type SettlementTool = "village" | "town" | "city";
 export type BuildToolKind = SettlementTool | PoiKind;
@@ -32,6 +34,7 @@ const GLYPH: Record<string, string> = {
   bridge: `<path d="M3 15h18M5 15v4M19 15v4M5 15c2-4 12-4 14 0" fill="none" stroke="currentColor" stroke-width="2"/>`,
   dam: `<path d="M4 7h16l-3 12H7z" fill="currentColor"/><path d="M2 21c3-1.5 5-1.5 8 0s5 1.5 8 0" stroke="currentColor" fill="none" stroke-width="1.6"/>`,
   mine: `<path d="M5 19l9-9M14 5l5 5-2 2-5-5zM6 14l4 4" fill="none" stroke="currentColor" stroke-width="2"/>`,
+  // Domed landmark: mosques (zawiyas in 0.1 worlds)
   monastery: `<path d="M6 20v-7a6 6 0 0 1 12 0v7zM12 3v3" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="3" r="1.2" fill="currentColor"/>`,
   port: `<path d="M12 4v15M7 13c0 4 2.5 6 5 6s5-2 5-6M9 7h6" fill="none" stroke="currentColor" stroke-width="2"/>`,
   volcano: `<path d="M3 20l6-10h6l6 10zM10 6l1 3M14 6l-1 3M12 3v4" fill="none" stroke="currentColor" stroke-width="1.8"/>`,
@@ -115,14 +118,14 @@ export class BuildTool {
       this.selected = { type: "city", city };
     } else {
       const kind = t as PoiKind;
-      const lang = world.languages[cell.cultureIndex ?? 0];
+      const lang = world.languages[cultureNear(world, x, y) ?? 0];
       const word = lang ? lang.word() : "Old";
       const names: Partial<Record<PoiKind, string>> = {
         fort: `${word} Gate`,
         inn: `${word} Inn`,
         watchtower: `${word} Watch`,
-        monastery: `Zawiya of ${word}`,
         ruins: `Ruins of ${word}`,
+        monastery: `Mosque of ${word}`,
         volcano: `Mount ${word}`,
         port: `Port of ${word}`,
       };
@@ -196,7 +199,7 @@ export class BuildTool {
       <div class="field-label">Settlements</div>
       <div class="build-grid">${SETTLEMENTS.map((s) => btn(s.kind, s.label)).join("")}</div>
       <div class="field-label">Landmarks</div>
-      <div class="build-grid">${LANDMARKS.map((k) => btn(k, POI_LABELS[k].replace(" (Sufi lodge)", ""))).join("")}</div>`;
+      <div class="build-grid">${LANDMARKS.map((k) => btn(k, POI_LABELS[k])).join("")}</div>`;
 
     const s = this.selected;
     if (s) {
@@ -256,6 +259,7 @@ export class BuildTool {
         nation.capitalX = c.x;
         nation.capitalY = c.y;
       } else c.isCapital = false;
+      refreshProvinceTypes(world); // the capital district follows
       this.changed();
     });
   }

@@ -108,7 +108,7 @@ Zoom from a whole continent down to individual streets. Cities get procedural pl
 - Nation fact sheets
 - Save and open `.world` files
 - Undo and redo for every editor (Ctrl+Z / Ctrl+Shift+Z), and an autosave that brings your last session back
-- World links: the address bar always reproduces the world on screen (`#seed=982332&land=medium`)
+- World links: the address bar always reproduces the world on screen (`?seed=982332&land=medium`; older `#seed=…` links still open)
 - Export for game engines: world.json, a 16-bit RAW heightmap and lookup images in one zip
 - Layered SVG export for Inkscape or Illustrator
 
