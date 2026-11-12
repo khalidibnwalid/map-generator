@@ -1,11 +1,14 @@
 import type { MapTheme, ThematicMode } from "../core/GPURenderer";
-import type { SimEvent } from "../game/sim/Simulation";
+import type { SimEvent, Simulation } from "../game/sim/Simulation";
 import type { WorldData } from "../game/WorldData";
 
 // Off-screen map rendering shared by the poster export and the nation fact
 // sheet. Everything is laid out in "layout pixels" (what the live view would
 // show) and drawn at `pixelRatio` device pixels each, so a 2K and an 8K poster
 // have the same composition, only sharper.
+
+// A map style of its own instead of the live layers (see ProvincePoster)
+export type MapStyle = "flags" | "provinces";
 
 export interface MapView {
   x: number; // target rectangle in the context, device pixels
@@ -17,8 +20,16 @@ export interface MapView {
   offsetY: number;
   pixelRatio: number;
   keep?: Set<number> | null; // nations drawn vividly; other land is dimmed
-  thematic?: ThematicMode; // layer to draw instead of the live map's (with thematic2 striped over it)
+  thematic?: ThematicMode; // layer to draw instead of the live map's (with the overlay thematic2 dotted over it)
   thematic2?: ThematicMode;
+  style?: MapStyle;
+  // Colors of the region layer per cell ([r, g, b, a] or null), drawn as the
+  // `thematic` fill layer instead of its own (see ExpansionPoster)
+  paint?: {
+    fill: (x: number, y: number) => [number, number, number, number] | null;
+    stripes?: (x: number, y: number) => [number, number, number, number] | null; // diagonal stripes over the fill
+    strength?: number; // how strongly the fill covers the terrain (0.55 by default)
+  };
   waitForCities?: boolean; // wait (bounded) for detailed city plans in view
   onProgress?: (fraction: number, label: string) => void;
   canceled?: () => boolean;
@@ -29,8 +40,10 @@ export interface AtlasHost {
   getWorld(): WorldData;
   mapTheme(): MapTheme;
   thematicMode(): ThematicMode;
+  thematicOverlay(): ThematicMode; // the overlay drawn over it ("none" when off)
   simYear(): number; // 0 when history has not run
   simEvents(): SimEvent[];
+  simulation?(): Simulation | null; // the recorded history, if it has run
   landArea(): number[]; // land cells per nation
   renderMapTo(ctx: CanvasRenderingContext2D, view: MapView): Promise<void>;
 }

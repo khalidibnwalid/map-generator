@@ -13,6 +13,9 @@ import {
 } from "./AtlasRender";
 import { loadPosterFonts, paintBackground, paintDecorations, posterLayout, posterView, type PosterSpec } from "./PosterDecor";
 import { background } from "./components/Toast";
+import { MAP_STYLES, type PosterStyle } from "./ProvincePoster";
+import { EXPANSION_STYLE, expansionDefaultsFor, expansionSpecFor, historyStamp, isExpansionSpec, paintExpansionPoster, syncExpansionControls, type ExpansionChoice } from "./ExpansionPoster";
+import { installSteppers } from "./components/NumberInput";
 
 type Scope = "world" | "nations";
 type Format = "png" | "jpeg";
@@ -55,6 +58,11 @@ export class PosterDialog {
   private picked = new Set<number>();
   private vassals = true;
   private layers: "live" | "cultures" | "races" | "both" = "live";
+  private style: PosterStyle | "expansion" = "live"; // provinces or nations as flags instead of the live layers, or a realm's expansion
+  private expansion: ExpansionChoice = { nation: -1, endYear: 0, periods: 5 };
+  private tabSelection = -1; // the nation selected in the Nations tab
+  private historyWatch = 0;
+  private historySeen = "";
   private size = 4096;
   private format: Format = "png";
   private decor: Record<DecorKey, boolean> = { title: true, compass: true, scaleBar: true, legend: true, frame: true, flags: false };
@@ -95,6 +103,19 @@ export class PosterDialog {
               ${switchRow("pd-vassals", "Include vassals", true)}
             </div>
             <div class="field">
+              <div class="field-label">Map style</div>
+              ${seg("style", [...MAP_STYLES, EXPANSION_STYLE])}
+              <small class="pd-hint" id="pd-exp-hint"></small>
+            </div>
+            <div class="field" id="pd-expansion">
+              <div class="field-label">Realm</div>
+              <div id="pd-exp-nation"></div>
+              <div class="field-label">Up to year</div>
+              <input type="number" id="pd-exp-end" step="1" data-stepper />
+              <div class="field-label">Periods of conquest</div>
+              ${seg("periods", [3, 4, 5, 6].map((n) => ({ value: n, label: `${n}` })))}
+            </div>
+            <div class="field" id="pd-layers-field">
               <div class="field-label">Map layers</div>
               ${seg("layers", [
                 { value: "live", label: "As shown" },
@@ -163,6 +184,12 @@ export class PosterDialog {
         const key = el.dataset.key;
         if (key === "scope") this.scope = v as Scope;
         else if (key === "layers") this.layers = v as typeof this.layers;
+        else if (key === "style") {
+          // Expansion starts from the realm selected so far
+          if (v === "expansion" && this.style !== "expansion") this.expansion.nation = -1;
+          this.style = v as PosterStyle | "expansion";
+        }
+        else if (key === "periods") this.expansion.periods = Number(v);
         else if (key === "size") this.size = Number(v);
         else if (key === "format") this.format = v as Format;
         this.sync();
@@ -170,6 +197,12 @@ export class PosterDialog {
       }),
     );
     $("pd-filter").addEventListener("input", () => this.renderNationList());
+    $("pd-exp-end").addEventListener("change", () => {
+      this.expansion.endYear = Number($<HTMLInputElement>("pd-exp-end").value) || 0;
+      this.sync();
+      this.schedulePreview();
+    });
+    installSteppers(this.root);
     $("pd-nation-list").addEventListener("change", (e) => {
       const cb = e.target as HTMLInputElement;
       const idx = Number(cb.dataset.idx);
@@ -219,6 +252,19 @@ export class PosterDialog {
     }
     for (const i of [...this.picked]) if (!world.nations[i]) this.picked.delete(i);
     if (!this.picked.size && world.nations[selected]) this.picked.add(selected);
+    this.tabSelection = selected;
+    this.expansion.nation = -1; // follows the selection (see sync)
+    this.expansion.endYear = 0; // today's map, unless picked again
+    // Keeps the expansion controls and preview current while history runs
+    clearInterval(this.historyWatch);
+    this.historyWatch = window.setInterval(() => {
+      const stamp = historyStamp(this.host.simulation?.() ?? null);
+      if (stamp === this.historySeen) return;
+      this.historySeen = stamp;
+      this.sync();
+      if (this.style === "expansion" && !this.expansion.endYear) this.schedulePreview();
+    }, 1000);
+    this.historySeen = historyStamp(this.host.simulation?.() ?? null);
     (this.root.querySelector("#pd-filter") as HTMLInputElement).value = "";
     this.root.style.display = "flex";
     this.setProgress(null);
@@ -230,6 +276,7 @@ export class PosterDialog {
   private close() {
     this.root.style.display = "none";
     clearTimeout(this.previewTimer);
+    clearInterval(this.historyWatch);
   }
 
   private visibleNations(): number[] {
@@ -272,9 +319,23 @@ export class PosterDialog {
         .forEach((b) => b.classList.toggle("active", b.dataset.value === value));
     mark("scope", this.scope);
     mark("layers", this.layers);
+    const sim = this.host.simulation?.() ?? null;
+    // The realm comes from the dialog's selection, else the Nations tab's; picking one selects it here too
+    const pick = (n: number) => {
+      this.expansion.nation = n;
+      this.picked.clear();
+      this.picked.add(n);
+      this.renderNationList();
+      this.sync();
+      this.schedulePreview();
+    };
+    const ok = syncExpansionControls(this.root, this.host.getWorld(), sim, this.expansion, this.style === "expansion", this.host.landArea(), [...this.picked, this.tabSelection], pick);
+    if (!ok && this.style === "expansion") this.style = "live";
+    mark("style", this.style);
+    $("pd-layers-field").style.display = this.style === "live" ? "" : "none";
     mark("size", String(this.size));
     mark("format", this.format);
-    $("pd-nations").style.display = this.scope === "nations" ? "flex" : "none";
+    $("pd-nations").style.display = this.scope === "nations" && this.style !== "expansion" ? "flex" : "none";
     $("pd-title-fields").style.display = this.decor.title ? "grid" : "none";
     const world = this.host.getWorld();
     const keep = scopeNations(world, this.picked, this.vassals);
@@ -295,6 +356,8 @@ export class PosterDialog {
 
   private defaults(): { title: string; subtitle: string } {
     const world = this.host.getWorld();
+    const exp = this.style === "expansion" ? expansionDefaultsFor(world, this.host.simulation?.() ?? null, this.expansion) : null;
+    if (exp) return exp;
     const year = this.host.simYear();
     const yearText = year > 0 ? `Year ${year}` : "";
     if (this.scope === "world" || !this.picked.size) {
@@ -318,6 +381,11 @@ export class PosterDialog {
 
   private spec(longEdge: number): PosterSpec | null {
     const world = this.host.getWorld();
+    if (this.style === "expansion") {
+      const t = (this.root.querySelector("#pd-title-text") as HTMLInputElement).value.trim();
+      const s = (this.root.querySelector("#pd-subtitle-text") as HTMLInputElement).value.trim();
+      return expansionSpecFor(world, this.host.simulation?.() ?? null, this.expansion, longEdge, this.decor, this.host.mapTheme(), t, s);
+    }
     const area = this.host.landArea();
     let keep: Set<number> | null = null;
     let extent;
@@ -334,7 +402,7 @@ export class PosterDialog {
     const t = (this.root.querySelector("#pd-title-text") as HTMLInputElement).value.trim();
     const s = (this.root.querySelector("#pd-subtitle-text") as HTMLInputElement).value.trim();
     const year = this.host.simYear();
-    return {
+    const spec: PosterSpec = {
       extent,
       longEdge,
       keep,
@@ -348,12 +416,16 @@ export class PosterDialog {
       flags: this.decor.flags,
       theme: this.host.mapTheme(),
       thematic: this.layers === "cultures" || this.layers === "both" ? "cultures" : this.layers === "races" ? "races" : this.host.thematicMode(),
+      // The overlay gets its own legend section
+      thematic2: this.layers === "both" ? "races" : this.layers === "live" ? this.host.thematicOverlay() : undefined,
       layers:
         this.layers === "live"
           ? undefined
           : { thematic: this.layers === "races" ? "races" : "cultures", thematic2: this.layers === "both" ? "races" : undefined },
       imprint: `Seed ${world.seed} · ${world.width} × ${world.height} cells of 5 km${year > 0 ? ` · Year ${year}` : ""}`,
     };
+    // A map style draws the political map its own way, without the live layers
+    return this.style === "live" ? spec : { ...spec, style: this.style, thematic: "none", thematic2: undefined, layers: { thematic: "none", thematic2: "none" } };
   }
 
   private async paint(
@@ -362,6 +434,7 @@ export class PosterDialog {
     onProgress?: (f: number, label: string) => void,
     canceled?: () => boolean,
   ): Promise<HTMLCanvasElement> {
+    if (isExpansionSpec(spec)) return paintExpansionPoster(this.host, spec, waitForCities, onProgress, canceled);
     await loadPosterFonts();
     const L = posterLayout(spec);
     const canvas = document.createElement("canvas");
@@ -392,7 +465,7 @@ export class PosterDialog {
     const probe = this.spec(1000);
     if (!probe) {
       view.style.visibility = "hidden";
-      msg.textContent = "Pick at least one nation with land.";
+      msg.textContent = this.style === "expansion" ? "This realm has no recorded history." : "Pick at least one nation with land.";
       return;
     }
     const L0 = posterLayout(probe);

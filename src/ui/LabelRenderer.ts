@@ -35,11 +35,13 @@ export class LabelRenderer {
     showProvinces: boolean,
     nationLandArea: number[] = [],
     showFlags = true,
+    // nations: false leaves realm names to the caller, which reserved its labels' rectangles
+    opts: { nations?: boolean; reserved?: { x: number; y: number; w: number; h: number }[] } = {},
   ) {
     const mapPixelWidth = world.width * scale;
     const startCopy = Math.floor(-offsetX / mapPixelWidth);
     const endCopy = Math.ceil((width - offsetX) / mapPixelWidth);
-    this.occupiedRects = [];
+    this.occupiedRects = [...(opts.reserved ?? [])];
 
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -47,7 +49,7 @@ export class LabelRenderer {
     ctx.textBaseline = "middle";
 
     // Nation labels
-    if (scale > 0.3 && scale < 60) {
+    if (opts.nations !== false && scale > 0.3 && scale < 60) {
       const nationAlpha = Math.min(1.0, (scale - 0.25) * 4) * (1 - Math.max(0, (scale - 30) / 30));
       const sortedNations = [...world.nations].sort(
         (a, b) => (nationSizes[b.id] || 0) - (nationSizes[a.id] || 0),

@@ -2,7 +2,9 @@ import type { MapTheme, ThematicMode } from "../core/GPURenderer";
 import { CELL_KM, CELL_KM2, type WorldData } from "../game/WorldData";
 import { nationFlag } from "../game/flags";
 import { RELATION_COLORS } from "../game/generators/generateDiplomacy";
-import { compact, type Extent, type MapView } from "./AtlasRender";
+import { membersOf } from "../game/coalitions";
+import { compact, type Extent, type MapStyle, type MapView } from "./AtlasRender";
+import { provinceLegend, type LegendRow, type LegendSection } from "./ProvincePoster";
 
 // Poster composition. Everything here is in layout pixels: the long edge is
 // always LAYOUT_LONG_EDGE, and the device size only changes the pixel ratio.
@@ -25,8 +27,11 @@ export interface PosterSpec {
   flags: boolean;
   theme: MapTheme;
   thematic: ThematicMode;
+  thematic2?: ThematicMode; // the overlay drawn over it, keyed in its own legend section
+  style?: MapStyle; // a map style of its own (provinces, flags) instead of the live layers
   layers?: { thematic: ThematicMode; thematic2?: ThematicMode }; // draw these instead of the live map's layers
   imprint: string; // small print in the bottom margin
+  legendSections?: LegendSection[]; // a legend of its own (see ExpansionPoster)
 }
 
 type Box = { x: number; y: number; w: number; h: number };
@@ -142,7 +147,7 @@ export function posterView(L: PosterLayout, spec: PosterSpec): MapView {
   const w = Math.round(L.map.w * L.pr);
   const h = Math.round(L.map.h * L.pr);
   const scale = w / (spec.extent.x1 - spec.extent.x0);
-  return { x, y, w, h, scale, offsetX: -spec.extent.x0 * scale, offsetY: -spec.extent.y0 * scale, pixelRatio: L.pr, keep: spec.keep, thematic: spec.layers?.thematic, thematic2: spec.layers?.thematic2 };
+  return { x, y, w, h, scale, offsetX: -spec.extent.x0 * scale, offsetY: -spec.extent.y0 * scale, pixelRatio: L.pr, keep: spec.keep, thematic: spec.layers?.thematic, thematic2: spec.layers?.thematic2, style: spec.style };
 }
 
 export function paintBackground(ctx: CanvasRenderingContext2D, L: PosterLayout, spec: PosterSpec) {
@@ -582,109 +587,209 @@ function paintLegend(
   pr: number,
 ) {
   const theme = spec.theme;
-  type Row = { label: string; value?: string; color?: string; flag?: number };
-  let title = "Realms";
-  let rows: Row[];
-  let more = 0;
-  if (spec.thematic === "cultures" || spec.thematic === "races") {
-    const byRace = spec.thematic === "races";
-    title = byRace ? "Races" : "Cultures";
-    // Only those present in view, by land share
-    const count = new Map<number, number>();
-    const W = world.width;
-    const e = spec.extent;
-    for (let x = Math.floor(e.x0); x < Math.ceil(e.x1); x++) {
-      const col = world.grid[((x % W) + W) % W];
-      for (let y = Math.max(0, Math.floor(e.y0)); y < Math.min(world.height, Math.ceil(e.y1)); y++) {
-        const c = col[y];
-        if (c.isWater) continue;
-        const n = c.nationIndex ?? -1;
-        if (spec.keep && !spec.keep.has(n)) continue;
-        const id = (byRace ? c.raceIndex : c.cultureIndex) ?? -1;
-        if (id >= 0) count.set(id, (count.get(id) ?? 0) + 1);
+  type Row = { label: string; value?: string; color?: string; flag?: number; pattern?: "mixed" | "empty"; swatch?: LegendRow["swatch"] };
+  type Section = { title: string; rows: Row[]; more: number; edge?: boolean }; // edge: the overlay, keyed like its borders
+  // With an overlay the legend has two sections, each shorter
+  const overlay = spec.thematic2 && spec.thematic2 !== "none" && spec.thematic2 !== "off" ? spec.thematic2 : null;
+  const maxRows = overlay ? Math.ceil(LEGEND_ROWS / 2) + 1 : LEGEND_ROWS;
+  const sectionFor = (mode: ThematicMode): Section => {
+    let title = "Realms";
+    let rows: Row[];
+    let more = 0;
+    if (mode === "cultures" || mode === "races") {
+      const byRace = mode === "races";
+      title = byRace ? "Races" : "Cultures";
+      // Only those present in view, by land share
+      const count = new Map<number, number>();
+      let mixed = false;
+      let empty = false;
+      const W = world.width;
+      const e = spec.extent;
+      for (let x = Math.floor(e.x0); x < Math.ceil(e.x1); x++) {
+        const col = world.grid[((x % W) + W) % W];
+        for (let y = Math.max(0, Math.floor(e.y0)); y < Math.min(world.height, Math.ceil(e.y1)); y++) {
+          const c = col[y];
+          if (c.isWater) continue;
+          const n = c.nationIndex ?? -1;
+          if (spec.keep && !spec.keep.has(n)) continue;
+          const id = (byRace ? c.raceIndex : c.cultureIndex) ?? -1;
+          if (id >= 0) count.set(id, (count.get(id) ?? 0) + 1);
+          else empty = true;
+          if (id >= 0 && (byRace ? c.race2Index : c.culture2Index) !== undefined) mixed = true;
+        }
       }
+      const list = byRace ? world.races : world.cultures;
+      const ids = [...count.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id).filter((id) => list[id]);
+      // Mixed and uninhabited land get their own keys (0.2+ worlds)
+      const keys: Row[] = [];
+      if (mixed) keys.push({ label: "Mixed (stripes)", pattern: "mixed" });
+      if (empty) keys.push({ label: "Uninhabited", pattern: "empty" });
+      const fit = Math.max(1, maxRows - keys.length);
+      more = Math.max(0, ids.length - fit);
+      rows = ids.slice(0, fit).map((id): Row => ({ label: list[id].name, color: list[id].color })).concat(keys);
+    } else if (mode === "wealth") {
+      title = "Provincial wealth";
+      rows = [
+        { label: "Poorest", color: "rgb(120,110,100)" },
+        { label: "Average", color: "rgb(160,180,70)" },
+        { label: "Richest", color: "rgb(240,200,30)" },
+      ];
+    } else if (mode === "coalitions") {
+      title = "Coalitions";
+      more = Math.max(0, world.coalitions.length - maxRows);
+      rows = world.coalitions.slice(0, maxRows).map((u) => ({ label: u.name, value: `${membersOf(world, u.id).length} realms`, color: u.color }));
+    } else if (mode === "diplomacy") {
+      title = "Diplomacy";
+      rows = [{ label: "Focus nation", color: "#e6be3c" }, ...Object.entries(RELATION_COLORS).map(([k, v]) => ({ label: k, color: v }))];
+    } else {
+      const list = spec.legendNations;
+      more = Math.max(0, list.length - maxRows);
+      rows = list.slice(0, maxRows).map((i) => ({
+        label: world.nations[i].name,
+        value: `${compact((landArea[i] || 0) * CELL_KM2)} km²`,
+        color: world.nations[i].color,
+        flag: i,
+      }));
     }
-    const list = byRace ? world.races : world.cultures;
-    const ids = [...count.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id).filter((id) => list[id]);
-    more = Math.max(0, ids.length - LEGEND_ROWS);
-    rows = ids.slice(0, LEGEND_ROWS).map((id) => ({ label: list[id].name, color: list[id].color }));
-  } else if (spec.thematic === "wealth") {
-    title = "Provincial wealth";
-    rows = [
-      { label: "Poorest", color: "rgb(120,110,100)" },
-      { label: "Average", color: "rgb(160,180,70)" },
-      { label: "Richest", color: "rgb(240,200,30)" },
-    ];
-  } else if (spec.thematic === "diplomacy") {
-    title = "Diplomacy";
-    rows = [{ label: "Focus nation", color: "#e6be3c" }, ...Object.entries(RELATION_COLORS).map(([k, v]) => ({ label: k, color: v }))];
-  } else {
-    const list = spec.legendNations;
-    more = Math.max(0, list.length - LEGEND_ROWS);
-    rows = list.slice(0, LEGEND_ROWS).map((i) => ({
-      label: world.nations[i].name,
-      value: `${compact((landArea[i] || 0) * CELL_KM2)} km²`,
-      color: world.nations[i].color,
-      flag: i,
-    }));
-  }
-  if (!rows.length) return;
+    return { title, rows, more, edge: false };
+  };
+  const sections: Section[] = [];
+  const base = sectionFor(spec.thematic);
+  if (overlay) {
+    // "Base · Cultures" in solid swatches, "Overlay · Races" drawn like its borders
+    sections.push({ ...base, title: `Base · ${base.title}` });
+    const over = sectionFor(overlay);
+    sections.push({ ...over, title: `Overlay · ${over.title}`, edge: true });
+  } else sections.push(base);
+  // A provinces poster keys its realms with their province counts, and its lines
+  if (spec.style === "provinces") sections.splice(0, sections.length, ...provinceLegend(world, spec.keep, spec.legendNations, maxRows));
+  if (spec.legendSections) sections.splice(0, sections.length, ...spec.legendSections);
+  const shown = sections.filter((sec) => sec.rows.length);
+  if (!shown.length) return;
+  const allRows = shown.flatMap((sec) => sec.rows);
 
   ctx.save();
   const rowH = 26;
   const pad = 18;
   const titleH = 34;
+  const gap = 12; // between sections
+  const titleFont = `${theme === "Historical" ? "" : "700 "}${theme === "Atlas" ? 13 : overlay ? 16 : 20}px ${theme === "Atlas" ? st.body : st.title}`;
   ctx.font = `14px ${st.body}`;
-  const labelW = Math.min(220, Math.max(90, ...rows.map((r) => ctx.measureText(r.label).width)));
+  let labelW = Math.min(220, Math.max(90, ...allRows.map((r) => ctx.measureText(r.label).width)));
+  setSpacing(ctx, st.caps ? 2 : 0.5);
+  ctx.font = titleFont;
+  const titleW = Math.max(...shown.map((sec) => ctx.measureText(st.caps ? sec.title.toUpperCase() : sec.title).width));
+  setSpacing(ctx, 0);
   ctx.font = `12px ${st.body}`;
-  const valueW = Math.max(0, ...rows.map((r) => (r.value ? ctx.measureText(r.value).width : 0)));
-  const iconW = rows.some((r) => r.flag !== undefined) ? 34 : 22;
+  const valueW = Math.max(0, ...allRows.map((r) => (r.value ? ctx.measureText(r.value).width : 0)));
+  const iconW = allRows.some((r) => r.flag !== undefined) ? 34 : 22;
+  // Wide enough for the section titles too
+  labelW = Math.max(labelW, Math.min(260, titleW - iconW - (valueW ? valueW + 14 : 0)));
   const w = pad * 2 + iconW + labelW + (valueW ? valueW + 14 : 0);
-  const h = pad * 2 + titleH + rows.length * rowH + (more ? 20 : 0) - 6;
+  const secH = (sec: Section) => titleH + sec.rows.length * rowH + (sec.more ? 20 : 0);
+  const h = pad * 2 + shown.reduce((sum, sec) => sum + secH(sec), 0) + gap * (shown.length - 1) - 6;
   const x = right - w;
   const y = bottom - h;
   panel(ctx, st, theme, x, y, w, h);
   ctx.textBaseline = "middle";
   ctx.textAlign = "left";
-  setSpacing(ctx, st.caps ? 2 : 0.5);
-  ctx.font = `${theme === "Historical" ? "" : "700 "}${theme === "Atlas" ? 13 : 20}px ${theme === "Atlas" ? st.body : st.title}`;
-  ctx.fillStyle = st.ink;
-  ctx.fillText(st.caps ? title.toUpperCase() : title, x + pad, y + pad + 10);
-  setSpacing(ctx, 0);
-  let ry = y + pad + titleH + rowH / 2 - 4;
-  for (const r of rows) {
-    if (r.flag !== undefined) {
-      const fw = 27;
-      const fh = 18;
-      const flag = nationFlag(world, r.flag, Math.round(fw * pr), Math.round(fh * pr));
-      if (flag) ctx.drawImage(flag, x + pad, ry - fh / 2, fw, fh);
-      ctx.lineWidth = 0.6;
-      ctx.strokeStyle = "rgba(0,0,0,0.5)";
-      ctx.strokeRect(x + pad, ry - fh / 2, fw, fh);
-    } else if (r.color) {
-      ctx.fillStyle = r.color;
-      ctx.fillRect(x + pad, ry - 7, 14, 14);
-      ctx.lineWidth = 0.6;
-      ctx.strokeStyle = "rgba(0,0,0,0.45)";
-      ctx.strokeRect(x + pad, ry - 7, 14, 14);
+  let sy = y + pad;
+  for (const sec of shown) {
+    if (sec !== shown[0]) {
+      // A hairline between the base and the overlay
+      ctx.strokeStyle = st.muted;
+      ctx.globalAlpha = 0.4;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x + pad, sy - gap / 2 - 2);
+      ctx.lineTo(x + w - pad, sy - gap / 2 - 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
     }
-    ctx.font = `14px ${st.body}`;
+    setSpacing(ctx, st.caps ? 2 : 0.5);
+    ctx.font = titleFont;
     ctx.fillStyle = st.ink;
-    ctx.fillText(fitText(ctx, r.label, labelW), x + pad + iconW, ry);
-    if (r.value) {
-      ctx.font = `12px ${st.body}`;
-      ctx.fillStyle = st.muted;
-      ctx.textAlign = "right";
-      ctx.fillText(r.value, x + w - pad, ry);
-      ctx.textAlign = "left";
+    ctx.fillText(st.caps ? sec.title.toUpperCase() : sec.title, x + pad, sy + 10);
+    setSpacing(ctx, 0);
+    let ry = sy + titleH + rowH / 2 - 4;
+    for (const r of sec.rows) {
+      if (r.swatch) r.swatch(ctx, x + pad, ry - 7, iconW - 8, 14, st.ink);
+      else if (r.flag !== undefined) {
+        const fw = 27;
+        const fh = 18;
+        const flag = nationFlag(world, r.flag, Math.round(fw * pr), Math.round(fh * pr));
+        if (flag) ctx.drawImage(flag, x + pad, ry - fh / 2, fw, fh);
+        ctx.lineWidth = 0.6;
+        ctx.strokeStyle = "rgba(0,0,0,0.5)";
+        ctx.strokeRect(x + pad, ry - fh / 2, fw, fh);
+      } else if (r.pattern) {
+        // Diagonal stripes of two sample colors, or a sparse hatch on paper
+        const sx = x + pad;
+        const sy2 = ry - 7;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(sx, sy2, 14, 14);
+        ctx.clip();
+        ctx.fillStyle = r.pattern === "mixed" ? "#c9a26b" : "rgba(232,226,212,0.7)";
+        ctx.fillRect(sx, sy2, 14, 14);
+        ctx.strokeStyle = r.pattern === "mixed" ? "#6f9bc4" : "rgba(95,85,70,0.7)";
+        ctx.lineWidth = r.pattern === "mixed" ? 2.5 : 0.8;
+        for (let k = -14; k < 28; k += r.pattern === "mixed" ? 5 : 5.5) {
+          ctx.beginPath();
+          if (r.pattern === "mixed") {
+            ctx.moveTo(sx + k, sy2 + 14);
+            ctx.lineTo(sx + k + 14, sy2);
+          } else {
+            ctx.moveTo(sx + k, sy2);
+            ctx.lineTo(sx + k + 14, sy2 + 14);
+          }
+          ctx.stroke();
+        }
+        ctx.restore();
+        ctx.lineWidth = 0.6;
+        ctx.strokeStyle = "rgba(0,0,0,0.45)";
+        ctx.strokeRect(sx, sy2, 14, 14);
+      } else if (r.color && sec.edge) paintEdgeSwatch(ctx, x + pad, ry - 7, 14, r.color);
+      else if (r.color) {
+        ctx.fillStyle = r.color;
+        ctx.fillRect(x + pad, ry - 7, 14, 14);
+        ctx.lineWidth = 0.6;
+        ctx.strokeStyle = "rgba(0,0,0,0.45)";
+        ctx.strokeRect(x + pad, ry - 7, 14, 14);
+      }
+      ctx.font = `14px ${st.body}`;
+      ctx.fillStyle = st.ink;
+      ctx.fillText(fitText(ctx, r.label, labelW), x + pad + iconW, ry);
+      if (r.value) {
+        ctx.font = `12px ${st.body}`;
+        ctx.fillStyle = st.muted;
+        ctx.textAlign = "right";
+        ctx.fillText(r.value, x + w - pad, ry);
+        ctx.textAlign = "left";
+      }
+      ry += rowH;
     }
-    ry += rowH;
+    if (sec.more) {
+      ctx.font = `italic 12px ${st.body}`;
+      ctx.fillStyle = st.muted;
+      ctx.fillText(`and ${sec.more} more`, x + pad + iconW, ry - 4);
+    }
+    sy += secH(sec) + gap;
   }
-  if (more) {
-    ctx.font = `italic 12px ${st.body}`;
-    ctx.fillStyle = st.muted;
-    ctx.fillText(`and ${more} more`, x + pad + iconW, ry - 4);
-  }
+  ctx.restore();
+}
+
+// An overlay's legend swatch, drawn as on the map: a line of the color with
+// a soft glow inside it
+function paintEdgeSwatch(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, color: string) {
+  ctx.save();
+  ctx.globalAlpha = 0.3;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 4;
+  ctx.strokeRect(x + 3, y + 3, size - 6, size - 6);
+  ctx.globalAlpha = 1;
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(x + 0.75, y + 0.75, size - 1.5, size - 1.5);
   ctx.restore();
 }
 
