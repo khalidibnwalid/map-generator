@@ -2316,6 +2316,73 @@ input[type="range"]::-moz-range-thumb {
   font-size: 12.5px;
 }
 
+/* Expansion poster: how conquests split into periods */
+.pd-exp-num {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pd-exp-num-label {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.pd-exp-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pd-exp-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pd-exp-row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto 1fr 26px;
+  align-items: center;
+  gap: 4px 6px;
+}
+
+.pd-exp-row .stepper-btn {
+  width: 22px;
+}
+
+.pd-exp-swatch {
+  width: 10px;
+  height: 24px;
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+
+.pd-exp-dash {
+  color: var(--faint);
+}
+
+.pd-exp-name {
+  grid-column: 2 / -1;
+  height: 28px;
+  font-size: 12px;
+}
+
+.pd-exp-remove:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.pd-exp-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pd-exp-note:empty {
+  display: none;
+}
+
 .coalition-actions .btn-ghost {
   flex: none;
   height: 30px;

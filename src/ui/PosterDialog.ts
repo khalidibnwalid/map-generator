@@ -14,7 +14,19 @@ import {
 import { loadPosterFonts, paintBackground, paintDecorations, posterLayout, posterView, type PosterSpec } from "./PosterDecor";
 import { background } from "./components/Toast";
 import { MAP_STYLES, type PosterStyle } from "./ProvincePoster";
-import { EXPANSION_STYLE, expansionDefaultsFor, expansionSpecFor, historyStamp, isExpansionSpec, paintExpansionPoster, syncExpansionControls, type ExpansionChoice } from "./ExpansionPoster";
+import {
+  chooseSplit,
+  defaultExpansionChoice,
+  EXPANSION_SPLIT_HTML,
+  EXPANSION_STYLE,
+  expansionDefaultsFor,
+  expansionSpecFor,
+  historyStamp,
+  isExpansionSpec,
+  paintExpansionPoster,
+  syncExpansionControls,
+  type ExpansionChoice,
+} from "./ExpansionPoster";
 import { installSteppers } from "./components/NumberInput";
 
 type Scope = "world" | "nations";
@@ -59,7 +71,7 @@ export class PosterDialog {
   private vassals = true;
   private layers: "live" | "cultures" | "races" | "both" = "live";
   private style: PosterStyle | "expansion" = "live"; // provinces or nations as flags instead of the live layers, or a realm's expansion
-  private expansion: ExpansionChoice = { nation: -1, endYear: 0, periods: 5 };
+  private expansion: ExpansionChoice = defaultExpansionChoice(); // kept for the session
   private tabSelection = -1; // the nation selected in the Nations tab
   private historyWatch = 0;
   private historySeen = "";
@@ -112,8 +124,7 @@ export class PosterDialog {
               <div id="pd-exp-nation"></div>
               <div class="field-label">Up to year</div>
               <input type="number" id="pd-exp-end" step="1" data-stepper />
-              <div class="field-label">Periods of conquest</div>
-              ${seg("periods", [3, 4, 5, 6].map((n) => ({ value: n, label: `${n}` })))}
+              ${EXPANSION_SPLIT_HTML}
             </div>
             <div class="field" id="pd-layers-field">
               <div class="field-label">Map layers</div>
@@ -189,7 +200,7 @@ export class PosterDialog {
           if (v === "expansion" && this.style !== "expansion") this.expansion.nation = -1;
           this.style = v as PosterStyle | "expansion";
         }
-        else if (key === "periods") this.expansion.periods = Number(v);
+        else if (key === "split") chooseSplit(this.host.getWorld(), this.host.simulation?.() ?? null, this.expansion, v);
         else if (key === "size") this.size = Number(v);
         else if (key === "format") this.format = v as Format;
         this.sync();
@@ -329,7 +340,10 @@ export class PosterDialog {
       this.sync();
       this.schedulePreview();
     };
-    const ok = syncExpansionControls(this.root, this.host.getWorld(), sim, this.expansion, this.style === "expansion", this.host.landArea(), [...this.picked, this.tabSelection], pick);
+    const ok = syncExpansionControls(this.root, this.host.getWorld(), sim, this.expansion, this.style === "expansion", this.host.landArea(), [...this.picked, this.tabSelection], pick, () => {
+      this.sync();
+      this.schedulePreview();
+    });
     if (!ok && this.style === "expansion") this.style = "live";
     mark("style", this.style);
     $("pd-layers-field").style.display = this.style === "live" ? "" : "none";

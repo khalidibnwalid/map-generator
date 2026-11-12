@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { MapGenerator } from "../src/game/MapGenerator";
 import { Simulation } from "../src/game/sim/Simulation";
-import { conquestPeriods, CORE, expansionOf, expansionShades, lightness, LOST, NONE } from "../src/ui/ExpansionPoster";
+import { bandCount, conquestPeriods, CORE, everyYears, expansionOf, expansionShades, lightness, LOST, NONE, normalizeBounds, type Expansion } from "../src/ui/ExpansionPoster";
 
 test("a realm's expansion: every land cell it ever held is classified once, periods in order, its own battles", async () => {
   const g = new MapGenerator(400, 225, 8080);
@@ -17,7 +17,7 @@ test("a realm's expansion: every land cell it ever held is classified once, peri
   const wins = new Map<string, number>();
   for (const b of sim.battles) wins.set(b.winner, (wins.get(b.winner) ?? 0) + b.size);
   const best = world.nations.map((n, i) => ({ i, w: wins.get(n.name) ?? 0 })).sort((a, b) => b.w - a.w)[0];
-  const exp = expansionOf(world, sim, best.i, { periods: 5 })!;
+  const exp = expansionOf(world, sim, best.i)!; // default: a period every 10 years
   expect(exp).not.toBeNull();
   expect(exp.startYear).toBe(frames[0].year);
   expect(exp.endYear).toBe(frames[frames.length - 1].year);
@@ -75,15 +75,16 @@ test("a realm's expansion: every land cell it ever held is classified once, peri
   expect(exp.periods.map((p) => p.cells)).toEqual(inPeriod);
   // It grew: there are conquest periods, ordered and contiguous
   expect(exp.periods.length).toBeGreaterThan(0);
-  expect(exp.periods.length).toBeLessThanOrEqual(5);
+  expect(exp.step).toEqual({ asked: 10, used: 10 });
   for (let k = 0; k < exp.periods.length; k++) {
     const p = exp.periods[k];
     expect(p.from).toBeLessThanOrEqual(p.to);
-    expect(p.cells).toBeGreaterThan(0);
+    if (k === 0 || k === exp.periods.length - 1) expect(p.cells).toBeGreaterThan(0); // empty ends are dropped
+    else expect(p.to - p.from + 1).toBe(10);
     if (k > 0) expect(p.from).toBe(exp.periods[k - 1].to + 1);
   }
-  expect(exp.periods[0].from).toBe(exp.startYear + 1);
-  expect(exp.periods[exp.periods.length - 1].to).toBe(exp.endYear);
+  expect(exp.periods[0].from).toBeGreaterThanOrEqual(exp.startYear + 1);
+  expect(exp.periods[exp.periods.length - 1].to).toBeLessThanOrEqual(exp.endYear);
 
   // Greatest extent: no year had more of its land
   let peakMask = 0;
@@ -105,7 +106,7 @@ test("a realm's expansion: every land cell it ever held is classified once, peri
 
   // An earlier end year: the end is that year
   const mid = exp.startYear + 60;
-  const early = expansionOf(world, sim, best.i, { endYear: mid, periods: 4 })!;
+  const early = expansionOf(world, sim, best.i, { endYear: mid, split: { kind: "bands", count: 4 } })!;
   expect(early.endYear).toBe(mid);
   expect(early.periods.every((p) => p.to <= mid)).toBe(true);
   expect(early.battles.every((b) => b.year <= mid)).toBe(true);
@@ -182,14 +183,138 @@ test("at today's year the poster holds exactly the realm's land on the live map,
 
 test("period shades: one hue, evenly lighter, never black or white, for mid, pale and dark realm colors", () => {
   for (const color of ["#b03a2e", "#f3d9e2", "#1d2a55", "#6f8f3a", "#808080"]) {
-    for (const periods of [5, 6]) {
+    for (const periods of [1, 2, 5, 6, 8, 12]) {
       const shades = expansionShades(color, periods);
       expect(shades.length).toBe(periods + 1);
       const L = shades.map(lightness);
       expect(L[0]).toBeGreaterThan(0.34);
       expect(L[L.length - 1]).toBeLessThan(0.93);
-      for (let k = 1; k < L.length; k++) expect(L[k] - L[k - 1]).toBeGreaterThan(0.06);
+      // A slightly smaller step is fine past 6 periods
+      for (let k = 1; k < L.length; k++) expect(L[k] - L[k - 1]).toBeGreaterThan(periods > 6 ? 0.04 : 0.06);
       expect(shades.every((c) => c.some((v) => v < 250))).toBe(true);
     }
   }
 });
+
+// Every land cell held at the end and first taken after the start sits in exactly one period
+function checkPeriods(exp: Expansion) {
+  const sum = new Array(exp.periods.length).fill(0);
+  for (let i = 0; i < exp.cls.length; i++) {
+    const c = exp.cls[i];
+    if (c >= 1) {
+      expect(c).toBeLessThanOrEqual(exp.periods.length);
+      sum[c - 1]++;
+    } else if (c === NONE) expect(exp.firstHeld[i]).toBe(-1);
+  }
+  expect(exp.periods.map((p) => p.cells)).toEqual(sum);
+  expect(exp.counts.core + exp.counts.lost + sum.reduce((a, b) => a + b, 0)).toBe(exp.counts.everHeld);
+  for (let k = 1; k < exp.periods.length; k++) expect(exp.periods[k].from).toBe(exp.periods[k - 1].to + 1);
+}
+
+test("periods every N years: 10 by default, 12.5 alternates 13 and 12, no limit on how many", () => {
+  const ten = everyYears(0, 120, 10);
+  expect(ten.used).toBe(10);
+  expect(ten.bounds.map((b) => [b.from, b.to])).toEqual(Array.from({ length: 12 }, (_, k) => [k * 10 + 1, k * 10 + 10]));
+  const half = everyYears(0, 100, 12.5);
+  const spans = half.bounds.slice(0, -1).map((b) => b.to - b.from + 1);
+  expect(spans).toEqual([13, 12, 13, 12, 13, 12, 13]);
+  expect(half.bounds[half.bounds.length - 1].to).toBe(100);
+  const many = everyYears(0, 500, 10);
+  expect(many.bounds.length).toBe(50);
+  expect(many.used).toBe(10);
+  expect(many.bounds[0].from).toBe(1);
+  expect(many.bounds[many.bounds.length - 1].to).toBe(500);
+  // Bands are whole, at least one, no upper limit
+  expect([bandCount(4.6), bandCount(0), bandCount(30)]).toEqual([5, 1, 30]);
+});
+
+test("custom periods: sorted, clamped, gaps and overlaps snapped, names kept", () => {
+  const n = normalizeBounds(
+    [
+      { from: 60, to: 2000, name: "  The Late Wars " },
+      { from: -50, to: 20, name: "Founding" },
+      { from: 31, to: 70 },
+      { from: 900, to: 950 },
+    ],
+    0,
+    120,
+  );
+  expect(n.bounds).toEqual([
+    { from: 1, to: 20, name: "Founding" },
+    { from: 21, to: 70 }, // the gap 21-30 snapped
+    { from: 71, to: 120, name: "The Late Wars" }, // overlap snapped, clamped to the end
+  ]);
+  expect(n.notes.length).toBeGreaterThanOrEqual(4);
+  expect(normalizeBounds([], 0, 50).bounds).toEqual([{ from: 1, to: 50 }]);
+  const lots = normalizeBounds(Array.from({ length: 20 }, (_, k) => ({ from: k * 5 + 1, to: k * 5 + 5 })), 0, 100);
+  expect(lots.bounds.length).toBe(20);
+  expect(lots.bounds[19].to).toBe(100);
+});
+
+test("every split classifies each conquest once: years, 12.5 years, bands of 1 and 12, custom with names", async () => {
+  const g = new MapGenerator(400, 225, 8080);
+  g.currentPreset = "Earthlike";
+  g.pin("0.1");
+  const world = await g.generate();
+  const sim = new Simulation(world, g.getNoise());
+  for (let i = 0; i < 90; i++) sim.step();
+  const wins = new Map<string, number>();
+  for (const b of sim.battles) wins.set(b.winner, (wins.get(b.winner) ?? 0) + b.size);
+  const idx = world.nations.map((n, i) => ({ i, w: wins.get(n.name) ?? 0 })).sort((a, b) => b.w - a.w)[0].i;
+
+  const years = expansionOf(world, sim, idx, { split: { kind: "years", every: 12.5 } })!;
+  checkPeriods(years);
+  expect(years.step).toEqual({ asked: 12.5, used: 12.5 });
+  const inner = years.periods.slice(1, -1).map((p) => p.to - p.from + 1);
+  for (const span of inner) expect([12, 13]).toContain(span);
+
+  const capped = expansionOf(world, sim, idx, { split: { kind: "years", every: 1 } })!;
+  checkPeriods(capped);
+  expect(capped.step).toEqual({ asked: 1, used: 1 });
+
+  const one = expansionOf(world, sim, idx, { split: { kind: "bands", count: 1 } })!;
+  checkPeriods(one);
+  expect(one.periods.length).toBe(1);
+  expect(one.step).toBeNull();
+  const twelve = expansionOf(world, sim, idx, { split: { kind: "bands", count: 12 } })!;
+  checkPeriods(twelve);
+  expect(twelve.periods.length).toBeGreaterThan(1);
+  expect(twelve.periods.length).toBeLessThanOrEqual(12); // bands can merge where little was taken
+
+  // Custom: a gap (31-40) and land past the last period fall into the nearest one
+  const custom = expansionOf(world, sim, idx, {
+    split: {
+      kind: "custom",
+      bounds: [
+        { from: -10, to: 30, name: "The Founding Wars" },
+        { from: 41, to: 60 },
+        { from: 55, to: 9999, name: "Reign of Idris II" },
+      ],
+    },
+  })!;
+  checkPeriods(custom);
+  expect(custom.periods.map((p) => [p.from, p.to, p.name])).toEqual([
+    [custom.startYear + 1, 30, "The Founding Wars"],
+    [31, 60, undefined],
+    [61, custom.endYear, "Reign of Idris II"],
+  ]);
+  // Unsnapped rows (as typed, before the editor fixes them): gains in the gap go to the nearest period
+  const gapped = expansionOf(world, sim, idx, { split: { kind: "custom", bounds: [{ from: 1, to: 20 }, { from: 61, to: custom.endYear }] } })!;
+  checkPeriods(gapped);
+  for (let i = 0; i < gapped.cls.length; i++) {
+    if (gapped.cls[i] < 1) continue;
+    const y = gapped.firstHeld[i];
+    const p = gapped.periods[gapped.cls[i] - 1];
+    expect(y >= p.from && y <= p.to).toBe(true); // snapped: 21-60 joined the second period
+  }
+  // Periods ending before the end year: later conquests fall into the nearest (last) one
+  const short = expansionOf(world, sim, idx, { split: { kind: "custom", bounds: [{ from: 1, to: 20 }, { from: 21, to: 40 }] } })!;
+  checkPeriods(short);
+  let late = 0;
+  for (let i = 0; i < short.cls.length; i++) {
+    if (short.cls[i] < 1 || short.firstHeld[i] <= 40) continue;
+    late++;
+    expect(short.cls[i]).toBe(2);
+  }
+  expect(late).toBeGreaterThan(0);
+}, 300_000);

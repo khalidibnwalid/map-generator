@@ -7,6 +7,7 @@ import { loadPosterFonts, paintBackground, paintDecorations, posterLayout, poste
 import type { LegendRow, LegendSection } from "./ProvincePoster";
 import { createDropdown } from "./components/Dropdown";
 import { nationFlagUrl } from "../game/flags";
+import { installSteppers } from "./components/NumberInput";
 
 // "Expansion history" poster of one realm, after the classic maps of an
 // empire's growth: its land at the start of the recorded history in the
@@ -31,7 +32,23 @@ export interface ExpansionPeriod {
   from: number; // years, inclusive
   to: number;
   cells: number; // land cells held at the end that were first taken in it
+  name?: string; // a custom period's name ("The Northern Wars")
 }
+
+// A custom period: its first and last year (inclusive) and an optional name
+export interface PeriodBound {
+  from: number;
+  to: number;
+  name?: string;
+}
+
+export const DEFAULT_YEARS_PER_PERIOD = 10;
+export const DEFAULT_BANDS = 5;
+
+// How conquests are split into periods: one every N years (decimals allowed),
+// a number of bands holding about equal shares of the conquered land, or
+// custom periods
+export type Split = { kind: "years"; every: number } | { kind: "bands"; count: number } | { kind: "custom"; bounds: PeriodBound[] };
 
 export interface ExpansionVassal {
   uid: number;
@@ -64,6 +81,7 @@ export interface Expansion {
   firstHeld: Int32Array; // first year held, -1 never
   lostAt: Int32Array; // last year it was lost, -1 never
   periods: ExpansionPeriod[];
+  step: { asked: number; used: number } | null; // years per period, when split by years
   vassalCell: Int16Array; // per cell: index into vassals, -1 none
   vassals: ExpansionVassal[];
   peak: { year: number; cells: number; mask: Uint8Array }; // its own land at its greatest extent
@@ -74,7 +92,7 @@ export interface Expansion {
 
 export interface ExpansionOptions {
   endYear?: number; // defaults to the last recorded year
-  periods?: number; // conquest periods, 1-8 (default 5)
+  split?: Split; // how the conquests are split into periods (default: every 10 years)
   // The end is the live map (the default when the end year is the last one):
   // land changed since the last recorded year (edits, painting) counts too
   live?: boolean;
@@ -155,6 +173,8 @@ function replay(
   }
 }
 
+const yearsText = (p: { from: number; to: number }) => (p.from === p.to ? `${p.from}` : `${p.from}–${p.to}`);
+
 // Step between period boundaries: round years for long histories
 function roundStep(span: number, periods: number): number {
   const per = span / Math.max(1, periods);
@@ -201,6 +221,87 @@ export function conquestPeriods(gainYears: Map<number, number>, startYear: numbe
     out.splice(i, 1);
   }
   return out;
+}
+
+// Periods of N years from the first year after the start (the start itself
+// is the core): period k covers [base + k·N, base + (k+1)·N), boundaries
+// rounded to whole years (12.5 gives spans of 13, 12, 13...), the last one
+// ending at endYear. There is no limit on how many there are.
+export function everyYears(startYear: number, endYear: number, asked: number): { bounds: PeriodBound[]; used: number } {
+  const base = startYear + 1;
+  const n = Math.max(1, Number.isFinite(asked) ? asked : DEFAULT_YEARS_PER_PERIOD);
+  const bounds: PeriodBound[] = [];
+  for (let k = 0; ; k++) {
+    const from = base + Math.round(k * n);
+    if (from > endYear && k > 0) break;
+    bounds.push({ from, to: Math.min(endYear, base + Math.round((k + 1) * n) - 1) });
+    if (from > endYear) break;
+  }
+  return { bounds, used: n };
+}
+
+// Custom periods made usable: each row reads start to end, sorted by start,
+// clamped into the recorded years (the first from startYear + 1, the last up
+// to endYear), and each start snapped right after the previous end, so there
+// are no gaps or overlaps. Rows left empty go; at least one remains.
+// Returns what was adjusted, for the editor to say so.
+export function normalizeBounds(bounds: PeriodBound[], startYear: number, endYear: number): { bounds: PeriodBound[]; notes: string[] } {
+  const lo = startYear + 1;
+  const notes: string[] = [];
+  const list = bounds
+    .filter((b) => Number.isFinite(b.from) && Number.isFinite(b.to))
+    .map((b) => {
+      const from = Math.round(Math.min(b.from, b.to));
+      const to = Math.round(Math.max(b.from, b.to));
+      if (b.from > b.to) notes.push(`${yearsText({ from, to })}: start and end swapped.`);
+      const name = b.name?.trim();
+      return name ? { from, to, name } : { from, to };
+    })
+    .sort((a, b) => a.from - b.from || a.to - b.to);
+  const kept: PeriodBound[] = [];
+  for (const b of list) {
+    if (b.to < lo || b.from > endYear) {
+      notes.push(`${yearsText(b)} lies outside years ${lo}–${endYear} and was removed.`);
+      continue;
+    }
+    if (b.from < lo || b.to > endYear) {
+      const c = { ...b, from: Math.max(lo, b.from), to: Math.min(endYear, b.to) };
+      notes.push(`${yearsText(b)} was clamped to ${yearsText(c)}.`);
+      kept.push(c);
+    } else kept.push(b);
+  }
+  const out: PeriodBound[] = [];
+  for (const b of kept) {
+    const prev = out[out.length - 1];
+    if (prev && b.from !== prev.to + 1) {
+      const from = prev.to + 1;
+      if (from > b.to) {
+        notes.push(`${yearsText(b)} fell inside the period before it and was removed.`);
+        continue;
+      }
+      notes.push(`${b.from < from ? "Overlap" : "Gap"} fixed: ${yearsText(b)} now starts in ${from}.`);
+      out.push({ ...b, from });
+    } else out.push(b);
+  }
+  if (!out.length) out.push({ from: lo, to: Math.max(lo, endYear) });
+  return { bounds: out, notes };
+}
+
+// Whole bands, at least one
+export const bandCount = (n: number) => Math.max(1, Math.round(Number.isFinite(n) ? n : DEFAULT_BANDS));
+
+// The period a year falls in, else the nearest one (a gap, or past the ends)
+function periodIndex(periods: { from: number; to: number }[], y: number): number {
+  let best = 0;
+  let bestD = Infinity;
+  periods.forEach((p, k) => {
+    const d = y < p.from ? p.from - y : y > p.to ? y - p.to : 0;
+    if (d < bestD) {
+      bestD = d;
+      best = k;
+    }
+  });
+  return best;
 }
 
 // Name of the nearest town (within reach), else the province
@@ -327,12 +428,29 @@ export function expansionOf(world: WorldData, sim: ExpansionSource, nation: numb
       counts.core++;
     } else gains.set(firstHeld[i], (gains.get(firstHeld[i]) ?? 0) + 1);
   }
-  const periods = conquestPeriods(gains, startYear, endYear, Math.max(1, Math.min(8, opts.periods ?? 5)));
+  // Periods: every N years, bands of equal conquest, or custom; land first
+  // taken in a gap or past the ends counts in the nearest period
+  const sp: Split = opts.split ?? { kind: "years", every: DEFAULT_YEARS_PER_PERIOD };
+  const years = sp.kind === "years" ? everyYears(startYear, endYear, sp.every) : null;
+  let periods: ExpansionPeriod[] = (
+    sp.kind === "custom"
+      ? normalizeBounds(sp.bounds, startYear, endYear).bounds
+      : sp.kind === "bands"
+        ? conquestPeriods(gains, startYear, endYear, bandCount(sp.count))
+        : years!.bounds
+  ).map((b) => ({ ...b, cells: 0 }));
+  if (periods.length) for (const [y, n] of gains) periods[periodIndex(periods, y)].cells += n;
+  // Periods of years without any conquest at either end go (those between stay)
+  if (sp.kind === "years") {
+    let a = 0;
+    let b = periods.length;
+    while (a < b && !periods[a].cells) a++;
+    while (b > a && !periods[b - 1].cells) b--;
+    periods = periods.slice(a, b);
+  }
   for (let i = 0; i < N; i++) {
     if (cls[i] !== NONE || firstHeld[i] < 0 || !heldAtEnd(i)) continue;
-    const y = firstHeld[i];
-    const k = periods.findIndex((p) => y >= p.from && y <= p.to);
-    cls[i] = k >= 0 ? k + 1 : periods.length; // (rounding never leaves a gap, but stay safe)
+    cls[i] = periodIndex(periods, firstHeld[i]) + 1;
   }
 
   // --- Greatest extent and the vassals' land (a second, cheap replay) ---
@@ -434,6 +552,7 @@ export function expansionOf(world: WorldData, sim: ExpansionSource, nation: numb
     firstHeld,
     lostAt,
     periods,
+    step: years && sp.kind === "years" ? { asked: sp.every, used: years.used } : null,
     vassalCell,
     vassals,
     peak: { year: frames[peakFrame].year, cells: peakCells, mask: peakMask },
@@ -546,13 +665,18 @@ function oklchRgb(L: number, C: number, h: number): RGB {
 // (last period, L 0.89, about HSL 83%), chroma falling along it. The ramp is
 // absolute, so a pale or a dark realm color gets the same spread; a gray
 // realm stays gray.
+// With many periods the ramp widens a little and the chroma alternates, so
+// neighbors still differ.
 export function expansionShades(color: string, periods: number): RGB[] {
   const [, C0, h] = oklch(color);
   const C = C0 < 0.025 ? C0 : Math.max(0.11, Math.min(0.2, C0 * 1.15));
   const n = periods + 1;
+  const many = periods > 6;
+  const L0 = many ? 0.34 : 0.38;
+  const L1 = many ? 0.92 : 0.89;
   return Array.from({ length: n }, (_, k) => {
     const t = n === 1 ? 0 : k / (n - 1);
-    return oklchRgb(0.38 + 0.51 * t, C * (1 - 0.6 * t), h);
+    return oklchRgb(L0 + (L1 - L0) * t, C * (1 - 0.6 * t) * (many && k % 2 ? 0.75 : 1), h);
   });
 }
 
@@ -600,7 +724,7 @@ function liveStamp(world: WorldData, nation: number): string {
 
 export function cachedExpansion(world: WorldData, sim: ExpansionSource, nation: number, opts: ExpansionOptions): Expansion | null {
   const frames = sim.history.frames;
-  const key = [nation, world.nations[nation]?.name, frames.length, frames[frames.length - 1]?.year, sim.battles.length, opts.endYear, opts.periods, opts.maxBattles, liveStamp(world, nation)].join("|");
+  const key = [nation, world.nations[nation]?.name, frames.length, frames[frames.length - 1]?.year, sim.battles.length, opts.endYear, opts.maxBattles, opts.live, JSON.stringify(opts.split ?? null), liveStamp(world, nation)].join("|");
   if (cache && cache.key === key && cache.world === world && cache.frames === frames) return cache.exp;
   const exp = expansionOf(world, sim, nation, opts);
   cache = { key, world, frames, exp };
@@ -679,11 +803,148 @@ export const EXPANSION_STYLE = { value: "expansion", label: "Expansion" } as con
 export interface ExpansionChoice {
   nation: number; // -1: the dialog picks the largest realm
   endYear: number; // 0: the last recorded year
-  periods: number;
+  auto: "years" | "bands"; // the automatic split (custom periods are kept per realm, below)
+  every: number; // years per period
+  bands: number; // number of color bands
 }
 
-function optionsOf(c: ExpansionChoice): ExpansionOptions {
-  return { endYear: c.endYear || undefined, periods: c.periods };
+export const defaultExpansionChoice = (): ExpansionChoice => ({ nation: -1, endYear: 0, auto: "years", every: DEFAULT_YEARS_PER_PERIOD, bands: DEFAULT_BANDS });
+
+// Custom periods per world and realm (by name) for the session; `active`
+// while the realm is shown with them
+interface CustomPeriods {
+  active: boolean;
+  bounds: PeriodBound[];
+  end: number; // the end year they were last fitted to
+  note: string; // what the last edit adjusted
+}
+const customs = new WeakMap<WorldData, Map<string, CustomPeriods>>();
+
+function customOf(world: WorldData, nation: number): CustomPeriods | undefined {
+  const name = world.nations[nation]?.name;
+  return name === undefined ? undefined : customs.get(world)?.get(name);
+}
+
+function autoSplit(c: ExpansionChoice): Split {
+  return c.auto === "bands" ? { kind: "bands", count: bandCount(c.bands) } : { kind: "years", every: Math.max(1, c.every || DEFAULT_YEARS_PER_PERIOD) };
+}
+
+function optionsOf(world: WorldData, c: ExpansionChoice): ExpansionOptions {
+  const cu = customOf(world, c.nation);
+  return { endYear: c.endYear || undefined, split: cu?.active ? { kind: "custom", bounds: cu.bounds } : autoSplit(c) };
+}
+
+// The periods an automatic split shows now, as editable rows
+function autoRows(world: WorldData, sim: ExpansionSource, c: ExpansionChoice, split: Split): PeriodBound[] {
+  const exp = cachedExpansion(world, sim, c.nation, { endYear: c.endYear || undefined, split });
+  return (exp?.periods ?? []).map((p) => ({ from: p.from, to: p.to }));
+}
+
+// "Split by": Years and Bands pick the automatic split, Custom opens the
+// realm's own periods (first filled from the split shown)
+export function chooseSplit(world: WorldData, sim: ExpansionSource | null, c: ExpansionChoice, value: string) {
+  const name = world.nations[c.nation]?.name;
+  if (value === "years" || value === "bands") {
+    c.auto = value;
+    const cu = customOf(world, c.nation);
+    if (cu) cu.active = false;
+    return;
+  }
+  if (value !== "custom" || name === undefined || !sim || !hasHistory(sim)) return;
+  let map = customs.get(world);
+  if (!map) customs.set(world, (map = new Map()));
+  const cu = map.get(name);
+  if (cu) cu.active = true;
+  else {
+    const years = historyYears(sim)!;
+    const end = c.endYear || years.last;
+    const rows = autoRows(world, sim, c, autoSplit(c));
+    map.set(name, { active: true, bounds: rows.length ? rows : [{ from: years.first + 1, to: end }], end, note: "" });
+  }
+}
+
+// The controls under "Split by", for the dialog's options column
+export const EXPANSION_SPLIT_HTML = /* html */ `
+  <div class="field-label">Split by</div>
+  <div class="picker segmented pd-seg" data-key="split">
+    <button type="button" class="pick" data-value="years"><span class="pick-label">Years</span></button>
+    <button type="button" class="pick" data-value="bands"><span class="pick-label">Bands</span></button>
+    <button type="button" class="pick" data-value="custom"><span class="pick-label">Custom</span></button>
+  </div>
+  <div class="pd-exp-num" id="pd-exp-years">
+    <span class="pd-exp-num-label">Years per period</span>
+    <input type="number" id="pd-exp-every" min="1" step="0.5" data-stepper />
+  </div>
+  <div class="pd-exp-num" id="pd-exp-bands">
+    <span class="pd-exp-num-label">Number of colour bands</span>
+    <input type="number" id="pd-exp-bands-n" min="1" step="1" data-stepper />
+  </div>
+  <small class="pd-hint pd-exp-note" id="pd-exp-split-note"></small>
+  <div id="pd-exp-custom"></div>`;
+
+const esc = (t: string) => t.replace(/[&<>"]/g, (ch) => `&#${ch.charCodeAt(0)};`);
+
+// The custom periods editor: rows of start, end and name, add and remove,
+// and a reset to the current every-N-years split. Edits apply on change
+// (blur, or releasing a stepper), when gaps and overlaps are fixed.
+function renderCustomEditor(host: HTMLElement, world: WorldData, sim: ExpansionSource, c: ExpansionChoice, cu: CustomPeriods, first: number, end: number, onEdit: () => void) {
+  const shades = expansionShades(world.nations[c.nation]?.color ?? "#888888", cu.bounds.length);
+  const lo = first + 1;
+  const every = everyYears(first, end, Math.max(1, c.every)).used; // as the Years split uses it
+  const box = document.createElement("div");
+  box.className = "pd-exp-editor";
+  box.innerHTML = `
+    <div class="pd-exp-rows">${cu.bounds
+      .map(
+        (b, k) => `<div class="pd-exp-row" data-k="${k}">
+          <span class="pd-exp-swatch" style="background:${hex(shades[k + 1])}"></span>
+          <input type="number" class="pd-exp-from" min="${lo}" max="${end}" step="1" value="${b.from}" data-stepper title="First year" />
+          <span class="pd-exp-dash">–</span>
+          <input type="number" class="pd-exp-to" min="${lo}" max="${end}" step="1" value="${b.to}" data-stepper title="Last year" />
+          <button type="button" class="icon-btn pd-exp-remove" title="Remove this period" ${cu.bounds.length < 2 ? "disabled" : ""}>✕</button>
+          <input type="text" class="pd-exp-name" placeholder="Name (optional)" value="${esc(b.name ?? "")}" maxlength="48" />
+        </div>`,
+      )
+      .join("")}</div>
+    <div class="pd-exp-tools">
+      <button type="button" class="btn-ghost pd-mini" data-act="add">+ Add period</button>
+      <button type="button" class="btn-ghost pd-mini" data-act="reset" title="Back to one period every ${every} years">Reset to every ${every} years</button>
+    </div>
+    <small class="pd-hint pd-exp-note">${esc(cu.note)}</small>`;
+  const read = (): PeriodBound[] =>
+    [...box.querySelectorAll<HTMLElement>(".pd-exp-row")].map((row) => ({
+      from: Number(row.querySelector<HTMLInputElement>(".pd-exp-from")!.value),
+      to: Number(row.querySelector<HTMLInputElement>(".pd-exp-to")!.value),
+      name: row.querySelector<HTMLInputElement>(".pd-exp-name")!.value,
+    }));
+  const apply = (rows: PeriodBound[], note = "") => {
+    const n = normalizeBounds(rows, first, end);
+    cu.bounds = n.bounds;
+    cu.end = end;
+    cu.note = [note, ...n.notes].filter(Boolean).slice(0, 2).join(" ");
+    onEdit();
+  };
+  box.addEventListener("change", () => apply(read()));
+  box.addEventListener("click", (e) => {
+    const t = e.target as HTMLElement;
+    const rows = read();
+    if (t.closest(".pd-exp-remove")) {
+      const k = Number(t.closest<HTMLElement>(".pd-exp-row")!.dataset.k);
+      if (rows.length > 1) rows.splice(k, 1);
+      apply(rows);
+    } else if (t.closest("[data-act=add]")) {
+      const last = rows[rows.length - 1];
+      if (last.to < end) rows.push({ from: last.to + 1, to: end });
+      else if (last.to > last.from) {
+        const mid = Math.floor((last.from + last.to) / 2);
+        rows.push({ from: mid + 1, to: last.to });
+        last.to = mid;
+      } else return apply(rows, "No room after the last period.");
+      apply(rows);
+    } else if (t.closest("[data-act=reset]")) apply(autoRows(world, sim, c, { kind: "years", every: Math.max(1, c.every) }));
+  });
+  host.replaceChildren(box);
+  installSteppers(box);
 }
 
 // The realm that conquered the most (land taken in battles won), else the largest
@@ -721,6 +982,7 @@ export function syncExpansionControls(
   landArea: number[],
   preferred: number[],
   onPick: (nation: number) => void,
+  onEdit: () => void, // the periods changed: repaint the controls and the preview
 ): boolean {
   const ok = hasHistory(sim);
   const q = <E extends HTMLElement>(sel: string) => root.querySelector<E>(sel)!;
@@ -759,12 +1021,64 @@ export function syncExpansionControls(
   end.min = String(years.first + 1);
   end.max = String(years.last);
   if (document.activeElement !== end) end.value = String(choice.endYear || years.last);
-  root.querySelectorAll<HTMLElement>(`.pd-seg[data-key="periods"] .pick`).forEach((b) => b.classList.toggle("active", Number(b.dataset.value) === choice.periods));
+  syncSplitControls(root, world, sim!, choice, years.first, choice.endYear || years.last, onEdit);
   return true;
 }
 
+// "Split by" and its inputs: the active mode, the numbers, the notes, and
+// the custom editor (rebuilt only when its periods change, keeping focus)
+function syncSplitControls(root: HTMLElement, world: WorldData, sim: ExpansionSource, c: ExpansionChoice, first: number, end: number, onEdit: () => void) {
+  const q = <E extends HTMLElement>(sel: string) => root.querySelector<E>(sel)!;
+  const cu = customOf(world, c.nation);
+  // Custom periods follow a moving end year: a last period that reached it keeps reaching it
+  if (cu && cu.end !== end) {
+    const last = cu.bounds[cu.bounds.length - 1];
+    if (last && last.to === cu.end) last.to = end;
+    cu.bounds = normalizeBounds(cu.bounds, first, end).bounds;
+    cu.end = end;
+  }
+  const mode = cu?.active ? "custom" : c.auto;
+  root.querySelectorAll<HTMLElement>(`.pd-seg[data-key="split"] .pick`).forEach((b) => b.classList.toggle("active", b.dataset.value === mode));
+  q("#pd-exp-years").style.display = mode === "years" ? "" : "none";
+  q("#pd-exp-bands").style.display = mode === "bands" ? "" : "none";
+  const every = q<HTMLInputElement>("#pd-exp-every");
+  const bands = q<HTMLInputElement>("#pd-exp-bands-n");
+  if (!root.dataset.splitWired) {
+    root.dataset.splitWired = "1";
+    every.addEventListener("change", () => {
+      const v = Number(every.value);
+      c.every = Number.isFinite(v) && v >= 1 ? v : Math.max(1, c.every);
+      onEdit();
+    });
+    bands.addEventListener("change", () => {
+      c.bands = bandCount(Number(bands.value));
+      bands.value = String(c.bands); // a decimal shows rounded
+      onEdit();
+    });
+  }
+  if (document.activeElement !== every) every.value = String(c.every);
+  if (document.activeElement !== bands) bands.value = String(c.bands);
+  // Years and bands: how many periods that makes (there is no limit)
+  const note = q("#pd-exp-split-note");
+  note.textContent = "";
+  if (mode !== "custom") {
+    const n = cachedExpansion(world, sim, c.nation, optionsOf(world, c))?.periods.length ?? 0;
+    if (n) note.textContent = `${n} period${n === 1 ? "" : "s"}`;
+  }
+  const host = q("#pd-exp-custom");
+  host.style.display = mode === "custom" ? "" : "none";
+  if (mode !== "custom" || !cu) {
+    host.dataset.key = "";
+    return;
+  }
+  const key = JSON.stringify([world.seed, c.nation, world.nations[c.nation]?.color, cu.bounds, cu.note, end, c.every]);
+  if (host.dataset.key === key) return;
+  host.dataset.key = key;
+  renderCustomEditor(host, world, sim, c, cu, first, end, onEdit);
+}
+
 export function expansionDefaultsFor(world: WorldData, sim: ExpansionSource | null, c: ExpansionChoice) {
-  const exp = sim && hasHistory(sim) ? cachedExpansion(world, sim, c.nation, optionsOf(c)) : null;
+  const exp = sim && hasHistory(sim) ? cachedExpansion(world, sim, c.nation, optionsOf(world, c)) : null;
   return exp ? expansionDefaults(exp) : null;
 }
 
@@ -779,7 +1093,7 @@ export function expansionSpecFor(
   subtitle: string,
 ): ExpansionPosterSpec | null {
   if (!sim || !hasHistory(sim)) return null;
-  const exp = cachedExpansion(world, sim, c.nation, optionsOf(c));
+  const exp = cachedExpansion(world, sim, c.nation, optionsOf(world, c));
   if (!exp) return null;
   const base = {
     longEdge,
@@ -863,7 +1177,11 @@ export function expansionLegend(exp: Expansion, theme: MapTheme): LegendSection[
   const area = (cells: number) => `${compact(cells * CELL_KM2)} km²`;
   const growth: LegendRow[] = [{ label: `Realm in ${exp.startYear}`, value: area(exp.counts.core), color: onMap(shades[0], theme) }];
   exp.periods.forEach((p, k) =>
-    growth.push({ label: `${k === 0 ? "Conquered " : ""}${p.from}–${p.to}`, value: area(p.cells), color: onMap(shades[k + 1], theme) }),
+    growth.push(
+      p.name
+        ? { label: p.name, value: `${yearsText(p)} · ${area(p.cells)}`, color: onMap(shades[k + 1], theme) }
+        : { label: `${k === 0 ? "Conquered " : ""}${yearsText(p)}`, value: area(p.cells), color: onMap(shades[k + 1], theme) },
+    ),
   );
   if (exp.counts.lost) {
     const l = lostFill(exp.color);
@@ -1196,10 +1514,11 @@ function paintOverlay(ctx: CanvasRenderingContext2D, world: WorldData, exp: Expa
   for (const g of periodSpots) {
     const p = exp.periods[g.key - 1];
     if (!p || (perPeriod.get(g.key) ?? 0) >= 2) continue;
-    const text = p.from === p.to ? `${p.from}` : `${p.from}–${p.to}`;
     ctx.font = `italic 600 11px ${L.font}`;
     ctx.letterSpacing = "0px";
-    if (ctx.measureText(text).width + 6 > g.depth * s * 2 || g.depth * s < 9) continue;
+    const room = g.depth * s * 2;
+    const text = [p.name, yearsText(p)].find((t) => !!t && ctx.measureText(t).width + 6 <= room);
+    if (!text || g.depth * s < 9) continue;
     const dark = lightness(shades[g.key]) < 0.66;
     const placed = note([{ text, size: 11, italic: true }], px(wrapX(g.x)), py(g.y), dark ? "#fffaf0" : "#2a2018", dark ? "rgba(20,16,12,0.55)" : "rgba(255,250,240,0.75)");
     if (placed) perPeriod.set(g.key, (perPeriod.get(g.key) ?? 0) + 1);
