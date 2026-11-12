@@ -21,8 +21,10 @@ uniform sampler2D u_coastTex;
 uniform sampler2D u_nationsTexture;
 uniform sampler2D u_provincesTexture;
 uniform sampler2D u_thematicTex;
-uniform sampler2D u_thematicTex2; // the overlapping layer, drawn as stripes
-uniform int u_thematic2;
+uniform sampler2D u_thematicTex2; // the overlay layer over the base map
+uniform int u_thematic2; // 0 off, 1 overlay (colored region borders), 2 hovered row highlight (stripes)
+uniform sampler2D u_thematicStripeTex; // per-cell second color of the main layer, striped
+uniform int u_thematicStripes;
 uniform sampler2D u_nationIdxTex;
 
 uniform vec2 u_resolution;
@@ -67,6 +69,18 @@ uniform bool u_sat;             // Satellite style: photographic shading of the 
 // scale with it) and where this tile sits in the whole image.
 uniform float u_pixelRatio;
 uniform vec4 u_frame; // tile offset xy, full image size zw
+// Nations as flags (see FlagMapRenderer)
+uniform bool u_flagMap;
+uniform bool u_hoverFaint; // off the political map the hovered realm is only lifted faintly
+uniform sampler2D u_flagAtlas; // one flag per realm, mipmapped
+uniform highp sampler2D u_flagPlaceTex; // per flag copy: center & size (cells), then atlas rect
+uniform sampler2D u_flagCellTex; // per cell: the flag copy covering it (RG, 0 = none)
+uniform float u_provShade; // brightness spread between the provinces of a realm
+uniform float u_fillMin; // least opacity of the realm fill (posters about the realms)
+uniform float u_thematicStrength; // how strongly a thematic fill covers the map (0.55; posters of their own colors more)
+uniform bool u_provFill; // the fill colors are per province (provinces poster): follow province edges
+uniform bool u_conquest; // History map: recently conquered land in a lighter shade
+uniform sampler2D u_conquestTex; // per cell: R = how recently conquered (0 = not)
 
 out vec4 fragColor;
 
@@ -281,6 +295,31 @@ vec4 fetchW(sampler2D t, ivec2 p) {
   p.x = (p.x + u_worldSizeI.x * 4) % u_worldSizeI.x;
   p.y = clamp(p.y, 0, u_worldSizeI.y - 1);
   return texelFetch(t, p, 0);
+}
+
+// Nations as flags: the color of the flag copy covering texel t at world point
+// p (cells). False where no flag is placed.
+bool flagFill(ivec2 t, vec2 p, out vec3 rgb) {
+  rgb = vec3(0.0);
+  vec4 c = fetchW(u_flagCellTex, t);
+  int id = int(c.r * 255.0 + 0.5) + int(c.g * 255.0 + 0.5) * 256;
+  if (c.a < 0.5 || id <= 0) return false;
+  int tw = textureSize(u_flagPlaceTex, 0).x;
+  int k = id * 2;
+  vec4 box = texelFetch(u_flagPlaceTex, ivec2(k % tw, k / tw), 0);
+  vec4 rect = texelFetch(u_flagPlaceTex, ivec2((k + 1) % tw, (k + 1) / tw), 0);
+  if (box.z <= 0.0 || rect.z <= 0.0) return false;
+  // The nearest copy across the date line
+  float dx = p.x - box.x;
+  dx -= u_worldSize.x * floor(dx / u_worldSize.x + 0.5);
+  vec2 f = vec2(dx, p.y - box.y) / box.zw + 0.5;
+  // Past the flag's edge (cropped or contained fits) its edge colors carry on
+  vec2 halfT = 0.5 / vec2(textureSize(u_flagAtlas, 0));
+  vec2 uv = rect.xy + clamp(f * rect.zw, halfT, rect.zw - halfT);
+  // Analytic derivatives: the copy changes between texels, screen-space ones would spike there
+  vec2 g = rect.zw / (box.zw * u_scale);
+  rgb = textureGrad(u_flagAtlas, uv, vec2(g.x, 0.0), vec2(0.0, g.y)).rgb;
+  return true;
 }
 
 // Lattice coordinates at frequency f (lattice points per cell) for the split
@@ -1147,30 +1186,23 @@ void main() {
       // Focus nation in diplomacy view: diagonal hatching
       float hatch = step(0.5, fract((sc.x + sc.y + u_frame.x + u_frame.y) / (7.0 * u_pixelRatio)));
       color = mix(color, tc.rgb, a * (0.45 + 0.25 * hatch));
+    } else if (tc.a > 0.03 && tc.a < 0.1) {
+      // Uninhabited land (UNINHABITED_TEXEL): bare map under a faint, sparse hatch
+      float period = 10.0 * u_pixelRatio;
+      float d = abs(mod(sc.x - sc.y + u_frame.x - u_frame.y, period) - 0.5 * period);
+      float line = 1.0 - smoothstep(0.25 * u_pixelRatio, 0.75 * u_pixelRatio, d);
+      color = mix(color, tc.rgb, landMask * politicalFade * line * 0.3);
     } else {
-      color = mix(color, tc.rgb, a * 0.55);
+      color = mix(color, tc.rgb, a * u_thematicStrength);
+    }
+    if (u_thematicStripes > 0) {
+      // Cells with a second color: diagonal stripes of it over the first
+      vec4 st = fetchW(u_thematicStripeTex, ixy + dominantCorner(t00, t10, t01, t11, noisy_fxy));
+      float band = step(0.5, fract((sc.x + sc.y + u_frame.x + u_frame.y) / (9.0 * u_pixelRatio)));
+      color = mix(color, st.rgb, st.a * landMask * politicalFade * band * 0.6);
     }
     float tb = getBorderStrength(t00, t10, t01, t11, noisy_fxy, 0.6 * field_per_pixel * zoomVisibility, aa);
     color = mix(color, vec3(0.12), tb * 0.5 * landMask);
-  }
-
-  // --- Overlapping layer: diagonal stripes over whatever is underneath ---
-  if (u_thematic2 > 0) {
-    vec4 s00 = fetchW(u_thematicTex2, ixy);
-    vec4 s10 = fetchW(u_thematicTex2, ixy + ivec2(1, 0));
-    vec4 s01 = fetchW(u_thematicTex2, ixy + ivec2(0, 1));
-    vec4 s11 = fetchW(u_thematicTex2, ixy + ivec2(1, 1));
-    vec4 sc2 = fetchW(u_thematicTex2, ixy + dominantCorner(s00, s10, s01, s11, noisy_fxy));
-    float a2 = sc2.a * landMask * politicalFade;
-    float stripe = step(0.5, fract((sc.x - sc.y + u_frame.x - u_frame.y) / (8.0 * u_pixelRatio)));
-    color = mix(color, sc2.rgb, a2 * stripe * 0.8);
-    // A firm outline between the layer's regions, in a dark shade of their color
-    vec4 sBest = s00;
-    if (s10.a > sBest.a) sBest = s10;
-    if (s01.a > sBest.a) sBest = s01;
-    if (s11.a > sBest.a) sBest = s11;
-    float sb = getBorderStrength(s00, s10, s01, s11, noisy_fxy, 1.3 * field_per_pixel * zoomVisibility, aa);
-    color = mix(color, sBest.rgb * 0.3, sb * 0.9 * landMask);
   }
 
   // --- Nations fill (land strong, territorial waters faint) ---
@@ -1179,7 +1211,9 @@ void main() {
     vec4 c10 = fetchW(u_nationIdxTex, ixy + ivec2(1, 0));
     vec4 c01 = fetchW(u_nationIdxTex, ixy + ivec2(0, 1));
     vec4 c11 = fetchW(u_nationIdxTex, ixy + ivec2(1, 1));
-    ivec2 ownerTexel = ixy + dominantCorner(c00, c10, c01, c11, noisy_fxy);
+    ivec2 ownerTexel = ixy + (u_provFill
+      ? dominantCorner(fetchW(u_provincesTexture, ixy), fetchW(u_provincesTexture, ixy + ivec2(1, 0)), fetchW(u_provincesTexture, ixy + ivec2(0, 1)), fetchW(u_provincesTexture, ixy + ivec2(1, 1)), noisy_fxy)
+      : dominantCorner(c00, c10, c01, c11, noisy_fxy));
     vec4 nationColor = fetchW(u_nationsTexture, ownerTexel);
     vec4 ownerIdx = fetchW(u_nationIdxTex, ownerTexel);
     if (nationColor.a > 0.1) {
@@ -1187,18 +1221,22 @@ void main() {
       bool hovered = u_hoverNationIndex >= 0.0 && abs(decodeIdx(ownerIdx) - u_hoverNationIndex) < 0.5;
       bool inBloc = !hovered && u_hoverNationIndex >= 0.0 && inHover(ownerIdx) > 0.5;
       vec3 nc = nationColor.rgb;
+      // Nations as flags: the realm's flag instead of its color, keeping a hint of relief
+      vec3 flagRgb;
+      bool flagged = u_flagMap && flagFill(ownerTexel, wxwy, flagRgb);
+      if (flagged) nc = flagRgb * mix(1.0, shade, 0.2);
       // Province patchwork: tiny brightness shift per province
-      if (u_showProvinces) {
+      if (u_showProvinces && !flagged) {
         // Bilinear blend of per-province brightness avoids blocky texel edges
-        float b00 = 0.93 + 0.14 * rand(vec2(decodeIdx(fetchW(u_provincesTexture, ixy)), 7.1));
-        float b10 = 0.93 + 0.14 * rand(vec2(decodeIdx(fetchW(u_provincesTexture, ixy + ivec2(1, 0))), 7.1));
-        float b01 = 0.93 + 0.14 * rand(vec2(decodeIdx(fetchW(u_provincesTexture, ixy + ivec2(0, 1))), 7.1));
-        float b11 = 0.93 + 0.14 * rand(vec2(decodeIdx(fetchW(u_provincesTexture, ixy + ivec2(1, 1))), 7.1));
+        float b00 = 1.0 - 0.5 * u_provShade + u_provShade * rand(vec2(decodeIdx(fetchW(u_provincesTexture, ixy)), 7.1));
+        float b10 = 1.0 - 0.5 * u_provShade + u_provShade * rand(vec2(decodeIdx(fetchW(u_provincesTexture, ixy + ivec2(1, 0))), 7.1));
+        float b01 = 1.0 - 0.5 * u_provShade + u_provShade * rand(vec2(decodeIdx(fetchW(u_provincesTexture, ixy + ivec2(0, 1))), 7.1));
+        float b11 = 1.0 - 0.5 * u_provShade + u_provShade * rand(vec2(decodeIdx(fetchW(u_provincesTexture, ixy + ivec2(1, 1))), 7.1));
         vec2 sw = smoothstep(0.25, 0.75, noisy_fxy);
         nc *= mix(mix(b00, b10, sw.x), mix(b01, b11, sw.x), sw.y);
       }
-      float landA = u_theme == 2 ? 0.88 : (u_theme == 1 ? 0.22 : 0.4);
-      if (u_theme == 2) {
+      float landA = flagged ? (u_theme == 1 ? 0.8 : 0.92) : max(u_fillMin, u_theme == 2 ? 0.88 : (u_theme == 1 ? 0.22 : 0.4));
+      if (u_theme == 2 && !flagged) {
         // Pastel fill that keeps the relief, plus a saturated ribbon inside borders
         vec3 pastel = mix(nc, vec3(1.0), 0.5) * mix(1.0, shade, 0.35);
         float rib = getBorderStrength(c00, c10, c01, c11, noisy_fxy, 3.0 * field_per_pixel, aa * 2.0);
@@ -1206,10 +1244,17 @@ void main() {
       }
       float lm = max(landMask, isletMask);
       float alpha = landA * lm * politicalFade * (1.0 - 0.75 * iceMask);
-      if (u_theme == 1) {
+      if (u_theme == 1 && !flagged) {
         // Vintage ribbon: strong color wash just inside each border
         float rib = getBorderStrength(c00, c10, c01, c11, noisy_fxy, 4.0 * field_per_pixel, aa * 3.0);
         alpha += rib * 0.4 * landMask;
+      }
+      // Land taken in battle and not yet settled by a peace: a lighter shade of the
+      // conqueror's color, laid on thick enough to read over the terrain
+      if (u_conquest) {
+        float conq = fetchW(u_conquestTex, ownerTexel).r;
+        nc = mix(nc, vec3(0.98, 0.95, 0.88), 0.45 * conq);
+        alpha = mix(alpha, max(alpha, 0.8 * lm * politicalFade * (1.0 - 0.75 * iceMask)), conq);
       }
       // Full highlight for the hovered realm; its bloc is lifted only a little,
       // so a hovered vassal stands out from its overlord
@@ -1219,7 +1264,7 @@ void main() {
     }
     // Sea claims stay plain water; hovering a nation reveals its waters, with
     // ownership blended smoothly between texels (no cell squares)
-    if (u_hoverNationIndex >= 0.0) {
+    if (u_hoverNationIndex >= 0.0 && !u_hoverFaint) {
       // Weight 1 for the hovered realm's waters, faint for the rest of its bloc
       vec4 hv = vec4(
         hoverWeight(c00) * c00.a,
@@ -1233,6 +1278,50 @@ void main() {
     }
   }
 
+  // --- Overlay: a second thematic layer over the base map (and over the
+  // nation fill, so it reads on the political map too). Kept quiet: only the
+  // borders between the layer's regions are drawn, as a thin line with a soft
+  // glow a few px into each side in that region's color. No fill pattern, so
+  // labels, rivers and borders stay clear, and nothing like the stripes of
+  // mixed cells or coalition overlaps. Widths are in screen pixels (same at
+  // any zoom) and it fades with the political fill at city scale. ---
+  if (u_thematic2 > 0) {
+    vec4 s00 = fetchW(u_thematicTex2, ixy);
+    vec4 s10 = fetchW(u_thematicTex2, ixy + ivec2(1, 0));
+    vec4 s01 = fetchW(u_thematicTex2, ixy + ivec2(0, 1));
+    vec4 s11 = fetchW(u_thematicTex2, ixy + ivec2(1, 1));
+    vec4 sc2 = fetchW(u_thematicTex2, ixy + dominantCorner(s00, s10, s01, s11, noisy_fxy));
+    float a2 = sc2.a * landMask * politicalFade;
+    if (u_thematic2 == 2) {
+      // A hovered culture or race row: diagonal stripes with a dark outline
+      float stripe = step(0.5, fract((sc.x - sc.y + u_frame.x - u_frame.y) / (8.0 * u_pixelRatio)));
+      color = mix(color, sc2.rgb, a2 * stripe * 0.8);
+      vec4 sBest = s00;
+      if (s10.a > sBest.a) sBest = s10;
+      if (s01.a > sBest.a) sBest = s01;
+      if (s11.a > sBest.a) sBest = s11;
+      float sb = getBorderStrength(s00, s10, s01, s11, noisy_fxy, 1.3 * field_per_pixel * zoomVisibility, aa);
+      color = mix(color, sBest.rgb * 0.3, sb * 0.9 * landMask);
+    } else if (sc2.a > 0.01) {
+      // Only borders between two of the layer's regions: not coasts, nor the
+      // edge of land the layer leaves blank
+      float otherA = 0.0;
+      if (distance(s00, sc2) > 0.001) otherA = max(otherA, s00.a);
+      if (distance(s10, sc2) > 0.001) otherA = max(otherA, s10.a);
+      if (distance(s01, sc2) > 0.001) otherA = max(otherA, s01.a);
+      if (distance(s11, sc2) > 0.001) otherA = max(otherA, s11.a);
+      if (otherA > 0.01) {
+        float edgeA = min(1.0, sc2.a * 1.25) * landMask * politicalFade;
+        // Soft glow fading ~5 px into each side, in that side's color
+        float glow = getBorderStrength(s00, s10, s01, s11, noisy_fxy, 2.0 * field_per_pixel, 6.0 * field_per_pixel);
+        color = mix(color, sc2.rgb, glow * edgeA * 0.35);
+        // A thin line in a deeper shade of each side's color
+        float line = getBorderStrength(s00, s10, s01, s11, noisy_fxy, 1.0 * field_per_pixel, aa);
+        color = mix(color, sc2.rgb * 0.72, line * edgeA * 0.85);
+      }
+    }
+  }
+
   // --- Hovered realm: it stays clean with a bright inner rim, while the realms
   // bound to it (its overlord or vassals) are hatched, so each one is easy to tell apart ---
   if (u_hoverNationIndex >= 0.0) {
@@ -1242,11 +1331,22 @@ void main() {
     vec4 h11 = fetchW(u_nationIdxTex, ixy + ivec2(1, 1));
     ivec2 hTexel = ixy + dominantCorner(h00, h10, h01, h11, noisy_fxy);
     vec4 hOwner = fetchW(u_nationIdxTex, hTexel);
+    if (u_hoverFaint) {
+      // A soft white lift over the realm, blended between texels like a hovered province
+      float f00 = step(abs(decodeIdx(h00) - u_hoverNationIndex), 0.5) * h00.a;
+      float f10 = step(abs(decodeIdx(h10) - u_hoverNationIndex), 0.5) * h10.a;
+      float f01 = step(abs(decodeIdx(h01) - u_hoverNationIndex), 0.5) * h01.a;
+      float f11 = step(abs(decodeIdx(h11) - u_hoverNationIndex), 0.5) * h11.a;
+      float fw = mix(mix(f00, f10, noisy_fxy.x), mix(f01, f11, noisy_fxy.x), noisy_fxy.y);
+      color += vec3(0.14) * max(landMask, isletMask) * fw;
+    }
     if (hOwner.a > 0.1) {
       float hl = max(landMask, isletMask);
       if (abs(decodeIdx(hOwner) - u_hoverNationIndex) < 0.5) {
-        float rim = getBorderStrength(h00, h10, h01, h11, noisy_fxy, 4.0 * field_per_pixel, aa * 2.0);
-        color = mix(color, vec3(1.0, 0.82, 0.3), hl * rim * 0.9);
+        if (!u_hoverFaint) {
+          float rim = getBorderStrength(h00, h10, h01, h11, noisy_fxy, 4.0 * field_per_pixel, aa * 2.0);
+          color = mix(color, vec3(1.0, 0.82, 0.3), hl * rim * 0.9);
+        }
       } else if (inHover(hOwner) > 0.5) {
         float hatch = step(0.5, fract((sc.x + sc.y + u_frame.x + u_frame.y) / (7.0 * u_pixelRatio)));
         // Stripes in the overlord's color, lightened so they read on any terrain
@@ -1267,10 +1367,11 @@ void main() {
     natBorderStrength = getBorderStrength(n00, n10, n01, n11, noisy_fxy, thickness, aa);
     if (natBorderStrength > 0.01) {
       vec3 bc = u_theme == 1 ? vec3(0.55, 0.12, 0.10) : (u_theme == 2 ? vec3(0.25) : vec3(1.0));
+      if (u_flagMap && u_thematic == 0) bc = vec3(0.08); // dark lines read on any flag
       float landPart = natBorderStrength * 0.8 * landMask;
       // Maritime limits only for the hovered nation, thin and dashed
       float seaPart = 0.0;
-      if (u_hoverNationIndex >= 0.0) {
+      if (u_hoverNationIndex >= 0.0 && !u_hoverFaint) {
         float own = max(max(inHover(n00) * n00.a, inHover(n10) * n10.a),
                         max(inHover(n01) * n01.a, inHover(n11) * n11.a));
         float dash = step(0.45, fract((sc.x + sc.y) / (9.0 * u_pixelRatio)));
@@ -1286,13 +1387,24 @@ void main() {
     vec4 p10 = fetchW(u_provincesTexture, ixy + ivec2(1, 0));
     vec4 p01 = fetchW(u_provincesTexture, ixy + ivec2(0, 1));
     vec4 p11 = fetchW(u_provincesTexture, ixy + ivec2(1, 1));
-    float thickness = 0.5 * field_per_pixel * zoomVisibility;
+    float thickness = (u_provFill ? 0.7 : 0.5) * field_per_pixel * zoomVisibility;
     float provBorderStrength = getBorderStrength(p00, p10, p01, p11, noisy_fxy, thickness, aa);
     provBorderStrength *= (1.0 - natBorderStrength) * landMask;
     if (provBorderStrength > 0.01) {
       float dash = step(0.4, fract((wxwy.x + wxwy.y) * 1.5 * max(1.0, vScale / 6.0)));
       vec3 pcol = u_theme == 1 ? vec3(0.42, 0.28, 0.18) : vec3(0.0);
-      color = mix(color, pcol, provBorderStrength * 0.4 * (0.6 + 0.4 * dash));
+      color = mix(color, pcol, provBorderStrength * (u_provFill ? 0.55 : 0.4 * (0.6 + 0.4 * dash)));
+    }
+    // Autonomous regions (texel alpha 240, see provinceTexel): a fine dashed
+    // line just inside their own border
+    vec4 pHere = fetchW(u_provincesTexture, ixy + dominantCorner(p00, p10, p01, p11, noisy_fxy));
+    if (pHere.a > 0.5 && pHere.a < 0.97 && zoomVisibility > 0.01) {
+      float outer = min(thickness * 7.0, 0.45);
+      float inner = min(thickness * 3.5, 0.25);
+      float band = getBorderStrength(p00, p10, p01, p11, noisy_fxy, outer, aa) - getBorderStrength(p00, p10, p01, p11, noisy_fxy, inner, aa);
+      float tick = step(0.5, fract((wxwy.x - wxwy.y) * 2.5 * max(1.0, vScale / 6.0)));
+      vec3 acol = u_theme == 1 ? vec3(0.42, 0.28, 0.18) : vec3(0.0);
+      color = mix(color, acol, max(band, 0.0) * tick * 0.3 * (1.0 - natBorderStrength) * landMask);
     }
     if (u_hoverProvinceIndex >= 0.0) {
       float h00 = step(abs(decodeIdx(p00) - u_hoverProvinceIndex), 0.5) * p00.a;

@@ -156,3 +156,64 @@ export function drawFronts(
   }
   ctx.restore();
 }
+
+// A front line being drawn for an attack (see Interface's "Attack line"): the
+// line in the army's colour, dashed while drawing, with arrows where its
+// prongs will push (x may be unwrapped)
+export function drawAttackLine(
+  ctx: CanvasRenderingContext2D,
+  line: { x: number; y: number }[],
+  arrows: { x: number; y: number; dx: number; dy: number }[],
+  color: string,
+  dashed: boolean,
+  alpha: number,
+  worldW: number,
+  width: number,
+  scale: number,
+  offX: number,
+  offY: number,
+) {
+  if (!line.length) return;
+  const lw = Math.max(3, Math.min(6, scale * 0.9));
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  const span = worldW * scale;
+  for (let copy = -1; copy <= 1; copy++) {
+    const ox = offX + copy * span;
+    const xs = line.map((p) => p.x * scale + ox);
+    if (Math.max(...xs) < -40 || Math.min(...xs) > width + 40) continue;
+    const path = new Path2D();
+    path.moveTo(xs[0], line[0].y * scale + offY);
+    for (let k = 1; k < line.length; k++) path.lineTo(xs[k], line[k].y * scale + offY);
+    ctx.setLineDash([]);
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = lw + 3;
+    ctx.stroke(path);
+    ctx.setLineDash(dashed ? [lw * 2.4, lw * 1.6] : []);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lw;
+    ctx.stroke(path);
+    ctx.setLineDash([]);
+    // Arrowheads just past the line, pointing the way the army pushes
+    const head = Math.max(9, Math.min(16, lw * 2.6));
+    for (const a of arrows) {
+      const bx = a.x * scale + ox + a.dx * lw * 1.2;
+      const by = a.y * scale + offY + a.dy * lw * 1.2;
+      const tx = bx + a.dx * head;
+      const ty = by + a.dy * head;
+      ctx.beginPath();
+      ctx.moveTo(tx, ty);
+      ctx.lineTo(bx - a.dy * head * 0.6, by + a.dx * head * 0.6);
+      ctx.lineTo(bx + a.dy * head * 0.6, by - a.dx * head * 0.6);
+      ctx.closePath();
+      ctx.fillStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = INK;
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+}

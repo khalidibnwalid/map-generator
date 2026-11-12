@@ -150,6 +150,20 @@ button {
   display: block;
 }
 
+.rail-version {
+  margin: -6px 0 8px;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  opacity: 0.7;
+  cursor: default;
+}
+
+.file-version {
+  margin-top: 16px;
+  font-size: 12px;
+}
+
 .gh-link {
   position: absolute;
   left: 16px;
@@ -202,6 +216,40 @@ button {
 .rail-btn.active {
   color: var(--accent);
   background: var(--accent-soft);
+}
+
+/* Tabs past the sixth hide until the rail is expanded (the open one stays) */
+.rail:not(.expanded) .rail-extra:not(.active) {
+  display: none;
+}
+
+.rail-expand {
+  width: 52px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.rail-expand:hover {
+  color: var(--text);
+  background: var(--ink-hover);
+}
+
+.rail-expand svg {
+  width: 18px;
+  height: 18px;
+  transition: transform 0.2s;
+}
+
+.rail.expanded .rail-expand svg {
+  transform: rotate(180deg);
 }
 
 /* === Panel === */
@@ -1189,7 +1237,7 @@ code {
 
 .map-legend {
   position: absolute;
-  left: 16px;
+  left: calc(16px + var(--rail-w) + 10px); /* beside the rail, not under it */
   bottom: 16px;
   z-index: 15;
   min-width: 190px;
@@ -1203,6 +1251,48 @@ code {
 .legend-title {
   margin-bottom: 8px;
   font-weight: 600;
+}
+
+/* Fold button in the corner; folded, the legend is just a small "Legend" button */
+.legend-hide {
+  position: sticky;
+  top: 0;
+  float: right;
+  z-index: 1;
+  width: 22px;
+  height: 22px;
+  margin: -4px -6px 0 8px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.legend-hide:hover,
+.legend-show:hover {
+  color: var(--text);
+  background: var(--ink-hover);
+}
+
+.map-legend.folded {
+  min-width: 0;
+  padding: 4px;
+  overflow: visible;
+}
+
+.legend-show {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 .legend-row {
@@ -1224,6 +1314,69 @@ code {
   margin-top: 8px;
   font-size: 11px;
   color: var(--muted);
+}
+
+/* Beside the open side panel too */
+@media (min-width: 641px) {
+  .panel:not(.collapsed) ~ .map-legend {
+    left: calc(16px + var(--rail-w) + 10px + var(--panel-w) + 10px);
+  }
+}
+
+/* Base map + overlay: two labelled sections, each scrolling on its own so
+   both stay in view however many cultures or races there are */
+.legend-section {
+  max-height: 19vh;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(239, 228, 204, 0.24) transparent;
+}
+
+.legend-section + .legend-section {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.legend-kicker {
+  margin-right: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.legend-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.legend-x {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.legend-x:hover {
+  background: var(--ink-hover);
+  color: var(--text);
+}
+
+/* An overlay's swatch looks like the map: a colored line with a soft inner glow */
+.legend-swatch.edge {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--sw), inset 0 0 5px 1px var(--sw);
 }
 
 /* === Tooltip === */
@@ -1380,6 +1533,25 @@ code {
   margin: 10px 0 20px;
   color: var(--muted);
   line-height: 1.5;
+}
+
+.modal-skip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -6px 0 18px;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.modal-skip[hidden] {
+  display: none;
+}
+
+.modal-skip input {
+  accent-color: var(--accent);
 }
 
 .modal-actions {
@@ -2100,6 +2272,137 @@ input[type="range"]::-moz-range-thumb {
 
 .diplo-dd-wide {
   flex: 1;
+}
+
+/* Coalitions tab and the Diplomacy tab's coalition row */
+.coalition-members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  margin: -2px 0 6px 40px;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.coalition-members span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.coalition-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Coalition pickers: same height and padding as the name field next to them */
+.dd.coalition-dd {
+  flex: 1 1 160px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 8px 0 10px;
+  font-size: 12px;
+}
+
+/* Expansion poster's realm picker: as tall as the poster dialog's fields */
+.dd.pd-exp-dd {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border-color: var(--line-strong);
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+
+.coalition-actions .btn-ghost {
+  flex: none;
+  height: 30px;
+  padding: 0 10px;
+}
+
+.coalition-pick.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.coalition-hint {
+  margin: 0;
+  color: var(--accent);
+  font-size: 11.5px;
+}
+
+.legend-flag,
+.tooltip-badge-flag {
+  width: 18px;
+  height: 12px;
+  margin-right: 6px;
+  vertical-align: -2px;
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+}
+
+.tooltip-badges div {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.coalition-draft {
+  margin: 0 0 6px;
+}
+
+.coalition-member {
+  cursor: pointer;
+}
+
+.coalition-member:hover {
+  border-color: var(--line-strong);
+}
+
+.coalition-member .diplo-x {
+  padding: 0 0 0 2px;
+  border: none;
+  background: none;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.coalition-member .diplo-x:hover {
+  color: var(--danger);
+}
+
+.coalition-empty {
+  padding: 8px 4px;
+}
+
+.coalition-name {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--well);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.coalition-color {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: none;
+  cursor: pointer;
+}
+
+.coalition-note {
+  color: var(--faint);
 }
 
 /* === Build tab === */
@@ -3330,11 +3633,61 @@ input[type="color"]::-moz-color-swatch {
   box-shadow: inset 3px 0 0 #ffd65a;
 }
 
-/* A layer drawn over the first one as stripes */
-.pick.overlay {
-  border-style: dashed;
-  border-color: var(--accent);
-  background: repeating-linear-gradient(135deg, transparent 0 6px, var(--accent-soft) 6px 9px);
+/* Thematic overlay: its own chip row, a swap button and a note with a dot sample */
+.overlay-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.overlay-swap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px 2px 4px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+.overlay-swap svg {
+  width: 15px;
+  height: 15px;
+}
+
+.overlay-swap:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.overlay-swap:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.picker .pick:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.overlay-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.overlay-edge {
+  flex: none;
+  width: 22px;
+  height: 14px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1.5px var(--accent), inset 0 0 5px 1px var(--accent);
 }
 
 .fs-map-modes {
@@ -3439,4 +3792,74 @@ input[type="color"]::-moz-color-swatch {
 .sim-branch-row svg {
   width: 15px;
   height: 15px;
+}
+
+/* Cultures and Races tabs: the territory brush */
+.people-paint {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.people-modes span {
+  padding: 5px 0;
+  font-size: 11px;
+}
+.people-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.people-status b {
+  color: var(--text);
+  font-weight: 600;
+}
+.people-status .muted {
+  flex-basis: 100%;
+  color: var(--faint);
+}
+.people-chip {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.45);
+}
+
+/* === Province types (capital district, autonomous region...) === */
+.province-type-badge {
+  flex: none;
+  width: 14px;
+  margin-right: -4px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  text-align: center;
+  cursor: help;
+}
+
+.province-type-badge.pt-capital,
+.province-type-badge.pt-autonomous {
+  color: var(--accent);
+}
+
+.province-type-row {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 3px;
+  margin: 2px 6px 6px 24px;
+}
+
+.province-type-dd {
+  height: 24px;
+}
+
+.province-type-desc {
+  padding: 0 2px;
+  color: var(--faint);
+  font-size: 10.5px;
+  line-height: 1.3;
 }

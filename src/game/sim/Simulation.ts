@@ -1,4 +1,5 @@
 import type { City, WorldData } from "../WorldData";
+import { mulberry } from "../names";
 import type { NoiseEngine } from "../../core/NoiseEngine";
 import {
   appendNation,
@@ -10,10 +11,13 @@ import {
   setRelation,
 } from "../politics";
 import { colorForNewNation, partitionNation, refreshTerritorialWaters } from "../generators";
+import { refreshProvinceTypes } from "../provinceTypes";
 import { EconomySim, type EconCheckpoint, type EconEventKind } from "./economySim";
 import { HistoryRecorder, type HistoryFrame, type SavedHistory } from "./History";
 import { captureWorld, packSnapshot, restoreWorld, unpackSnapshot, type PackedSnapshot } from "../EditHistory";
 import { crownRulers, foundHouse, installCadet, reignYear, rulerStyle, succeed, usurp } from "./Rulers";
+import { conquestMask } from "./conquest";
+import { frontSamples, landNear, type LinePoint, type LineSample } from "./frontLine";
 
 export interface SavedSim {
   history: SavedHistory;
@@ -222,6 +226,9 @@ export class Simulation {
   private gainedAt: Int32Array;
   private gainedBy: Int16Array;
   private gainCache: { key: string; lines: FrontLine[] } | null = null;
+  // Read-only views for the map (conquestMask, warFronts), rebuilt when the year or the wars change
+  private conquestCache: { key: string; mask: Uint8Array } | null = null;
+  private frontCache: { key: string; lines: FrontLine[] } | null = null;
   private checkpoints: Checkpoint[] = [];
   private ops: Op[] = [];
   private needsCheckpoint = true;
@@ -317,6 +324,8 @@ export class Simulation {
     this.stampId = 0;
     this.byProv = null;
     this.gainCache = null;
+    this.conquestCache = null;
+    this.frontCache = null;
     this.changedCities.clear();
     this.dirty = { y0: 0, y1: this.H - 1, provinces: true };
     this.needsSync = true;
@@ -556,14 +565,16 @@ export class Simulation {
     const mainCulture = new Int32Array(n);
     const strength = new Float64Array(n);
     for (let i = 0; i < n; i++) {
+      // Bucket 0 is land nobody lives on (0.2+): it neither leads nor divides
       let best = 0;
       let bestK = 0;
-      for (let k = 0; k < C; k++)
+      for (let k = 1; k < C; k++)
         if (cult[i * C + k] > best) {
           best = cult[i * C + k];
           bestK = k;
         }
-      cohesion[i] = land[i] ? best / land[i] : 1;
+      const peopled = land[i] - cult[i * C];
+      cohesion[i] = peopled > 0 ? best / peopled : 1;
       mainCulture[i] = bestK - 1;
       const gov = GOV_FACTOR[w.nations[i].government ?? ""] ?? 1;
       strength[i] =
@@ -889,6 +900,8 @@ export class Simulation {
     const w = this.world;
     if (changed) this.settle();
     if (this.year % 10 === 0) this.pruneProvinces();
+    // Conquest moves capitals: their districts follow (0.2+ worlds)
+    if (changed) refreshProvinceTypes(w);
     this.history.record(this.year, this.owner, w.nations);
     return changed;
   }
@@ -1045,6 +1058,146 @@ export class Simulation {
     return { taken, place };
   }
 
+  // An offensive ordered along a drawn front line: like commandBattle, but
+  // the level's budget is split across up to 8 prongs, one per point along
+  // the line, so the advance is broad and shallow rather than one deep
+  // thrust. Each prong starts from the defender's front cell nearest its
+  // point and pushes toward a spot just past the line (along its normal,
+  // into the defender's side): the line is where the army means to stand.
+  // Only `defender` is attacked; points with none of its land nearby are
+  // skipped. All prongs resolve together, as one battle in the chronicle.
+  public commandFront(attacker: number, defender: number, level: number, line: LinePoint[]): { taken: number; place: string; prongs: number } | null {
+    const w = this.world;
+    const W = this.W;
+    const H = this.H;
+    if (attacker === defender || !w.nations[attacker] || !w.nations[defender] || !line.length) return null;
+    // Points with the defender's land nearby (read from the grid, which edits
+    // keep current); the rest of the line is ignored
+    const { samples, near } = frontSamples(line, W);
+    const points = samples.filter((s) => {
+      const m = new Map<number, number>();
+      landNear(w, s.x, s.y, near, m);
+      return (m.get(defender) ?? 0) > 0;
+    });
+    if (!points.length) return null;
+    if (this.needsSync) {
+      this.sync();
+      this.needsSync = false;
+    }
+    if (!this.history.length) this.history.record(this.year, this.owner, w.nations);
+    w.year = this.year;
+    const A = w.nations[attacker];
+    const D = w.nations[defender];
+
+    // Where prongs can start: the defender's land touching the attacker's,
+    // else its coast (a landing)
+    const N = W * H;
+    let front: number[] = [];
+    const coast: number[] = [];
+    let defLand = 0;
+    for (let i = 0; i < N; i++) {
+      if (!this.land[i] || this.owner[i] !== defender) continue;
+      defLand++;
+      const x = i % W;
+      const y = (i / W) | 0;
+      const nb = [y * W + ((x + 1) % W), y * W + ((x - 1 + W) % W), y > 0 ? i - W : -1, y < H - 1 ? i + W : -1];
+      if (nb.some((j) => j >= 0 && this.land[j] && this.owner[j] === attacker)) front.push(i);
+      else if (nb.some((j) => j >= 0 && !this.land[j])) coast.push(i);
+    }
+    if (!defLand) return null;
+    const landing = !front.length;
+    if (landing) front = coast;
+    if (!front.length) return null;
+
+    this.syncWars();
+    // War is declared first (vassal bonds between the two break)
+    if (relation(w, attacker, defender) !== "War") {
+      if (A.overlord === defender) releaseVassal(w, attacker);
+      if (D.overlord === attacker) releaseVassal(w, defender);
+      this.startWar(attacker, defender, this.measure().land);
+      this.log("war", `${A.name} declares war on ${D.name}`, D.capitalX, D.capitalY);
+    }
+    const war = this.wars.get(this.pair(attacker, defender));
+    if (war) war.mom = attacker === war.a ? 1 : -1;
+
+    this.offensives = [];
+    // The same total as a battle of this level, shared out between the prongs
+    const [share, cap] = [[0.015, 45], [0.035, 120], [0.08, 320]][Math.max(0, Math.min(2, Math.round(level) - 1))];
+    const rs = W / 800;
+    const budget = Math.round(Math.min(defLand * share + 6, cap * rs * rs));
+    const quota = Math.max(1, Math.ceil(budget / points.length));
+    const depth = 1.7 * Math.sqrt(quota) + 3; // how far one prong can get (see thrust)
+    const dist = (i: number, x: number, y: number) => {
+      let dx = Math.abs((i % W) + 0.5 - x);
+      dx %= W;
+      if (dx > W / 2) dx = W - dx;
+      return Math.hypot(dx, ((i / W) | 0) + 0.5 - y);
+    };
+    // Defender land minus attacker land along the normal, on one side
+    const side = (s: LineSample, sign: number) => {
+      let score = 0;
+      for (let r = 1; r <= depth; r++) {
+        const y = Math.floor(s.y + s.ny * sign * r);
+        if (y < 0 || y >= H) continue;
+        const i = y * W + (((Math.floor(s.x + s.nx * sign * r) % W) + W) % W);
+        if (!this.land[i]) continue;
+        if (this.owner[i] === defender) score++;
+        else if (this.owner[i] === attacker) score--;
+      }
+      return score;
+    };
+    let taken = 0;
+    const prongs: { seed: number; dx: number; dy: number; n: number }[] = [];
+    for (const s of points) {
+      // The front cell nearest this point, still the defender's
+      let seed = -1;
+      let sd = Infinity;
+      for (const i of front) {
+        if (this.owner[i] !== defender) continue;
+        const d = dist(i, s.x, s.y);
+        if (d < sd) {
+          sd = d;
+          seed = i;
+        }
+      }
+      if (seed < 0) break;
+      // Past the line, on the defender's side of it (or straight at the
+      // point when the line has no direction)
+      let sign = Math.sign(side(s, 1) - side(s, -1));
+      if (!sign) {
+        let fx = s.x - ((seed % W) + 0.5);
+        fx -= Math.round(fx / W) * W;
+        sign = fx * s.nx + (s.y - (((seed / W) | 0) + 0.5)) * s.ny >= 0 ? 1 : -1;
+      }
+      const aim = { x: s.x + s.nx * sign * depth, y: s.y + s.ny * sign * depth };
+      taken += this.thrust(attacker, defender, [seed], quota, aim, 1);
+      prongs.push(...this.prongs);
+    }
+    this.prongs = prongs;
+    if (!taken) return null;
+    let best: { seed: number; dx: number; dy: number; n: number } | null = null;
+    for (const p of prongs) {
+      if (p.n < 1) continue;
+      const sx = (p.seed % W) + 0.5;
+      const sy = Math.floor(p.seed / W) + 0.5;
+      const k2 = 1.7 / p.n;
+      this.offensives.push({ x0: sx, y0: sy, x1: sx + p.dx * k2, y1: sy + p.dy * k2, size: p.n });
+      if (!best || p.n > best.n) best = p;
+    }
+    const seed = best?.seed ?? front[0];
+    const bx = (seed % W) + 0.5;
+    const by = Math.floor(seed / W) + 0.5;
+    const place = this.placeName(seed);
+    this.battles.push({ year: this.year, x: bx, y: by, winner: A.name, loser: D.name, size: taken });
+    this.log("battle", `${landing ? "Landings along" : "Offensive along"} the ${place} front: ${A.name} defeats ${D.name}`, bx, by);
+    this.settle();
+    this.history.record(this.year, this.owner, w.nations);
+    // Like a commanded battle, it can't be replayed: keep its outcome as a checkpoint
+    this.editedSinceRecord = false;
+    this.checkpoint();
+    return { taken, place, prongs: prongs.filter((p) => p.n > 0).length };
+  }
+
   // Wars follow the relations matrix (generation, the diplomacy editor or
   // the user may declare or end them)
   private syncWars(land?: Float64Array) {
@@ -1093,6 +1246,57 @@ export class Simulation {
     this.gainedAt.fill(0);
     this.gainedBy.fill(-1);
     this.gainCache = null;
+    this.conquestCache = null;
+  }
+
+  private marksKey() {
+    return `${this.year}|${this.history.total}|${this.battles.length}|${this.world.nations.length}|${[...this.wars.keys()].join(",")}`;
+  }
+
+  // Land taken in battle and still held by occupation (255) or not (0),
+  // per cell (see conquest.ts). The same array comes back until it changes.
+  public conquestMask(): Uint8Array {
+    const key = this.marksKey();
+    if (this.conquestCache?.key === key) return this.conquestCache.mask;
+    const mask = conquestMask({
+      land: this.land,
+      owner: this.owner,
+      prov: this.prov,
+      provOwner: this.po,
+      gainedBy: this.gainedBy,
+    });
+    this.conquestCache = { key, mask };
+    return mask;
+  }
+
+  // Front lines: where land held by two realms at war meets, traced along
+  // cell edges
+  public warFronts(): FrontLine[] {
+    const key = this.marksKey();
+    if (this.frontCache?.key === key) return this.frontCache.lines;
+    const W = this.W;
+    const H = this.H;
+    const owner = this.owner;
+    const edges: number[] = [];
+    if (this.wars.size)
+      for (let y = 0; y < H; y++)
+        for (let x = 0; x < W; x++) {
+          const i = y * W + x;
+          const o = owner[i];
+          if (!this.land[i] || o < 0) continue;
+          const r = y * W + ((x + 1) % W);
+          const pr = owner[r];
+          if (this.land[r] && pr >= 0 && pr !== o && this.wars.has(this.pair(o, pr)))
+            edges.push(y * W + ((x + 1) % W), (y + 1) * W + ((x + 1) % W));
+          if (y + 1 < H) {
+            const d = i + W;
+            const pd = owner[d];
+            if (this.land[d] && pd >= 0 && pd !== o && this.wars.has(this.pair(o, pd))) edges.push((y + 1) * W + x, (y + 1) * W + ((x + 1) % W));
+          }
+        }
+    const lines: FrontLine[] = edges.length ? [{ a: -1, b: -1, chains: traceChains(edges, W) }] : [];
+    this.frontCache = { key, lines };
+    return lines;
   }
 
   // Outline of land won in battle during the last `maxAge` years and still
@@ -1421,11 +1625,12 @@ export class Simulation {
       color: "#000000",
       capitalX: seat ? seat.x : (r0 % W) + 0.5,
       capitalY: seat ? seat.y : Math.floor(r0 / W) + 0.5,
-      cultureId: culture,
+      cultureId: culture >= 0 ? culture : w.nations[parent].cultureId, // -1: the realm's land is all empty
       religionId: w.nations[parent].religionId,
       government: rand() < 0.5 ? "Republic" : lang ? lang.government(0.15, false) : "Kingdom",
     });
-    w.nations[idx].color = colorForNewNation(w, [parent]);
+    // Seeded from the world, realm and year (not the sim's stream), so a replay paints it the same
+    w.nations[idx].color = colorForNewNation(w, [parent], mulberry((w.seed ^ Math.imul(idx + 1, 0x9e3779b1) ^ Math.imul(this.year + 1, 0x85ebca6b)) >>> 0));
     for (const i of region) this.setOwner(i, idx);
     for (const c of cities) {
       c.nationIndex = idx;

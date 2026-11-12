@@ -3,7 +3,11 @@ import { distanceTransform } from "../game/util/grid";
 import { VERTEX_SHADER_SOURCE, FRAGMENT_SHADER_SOURCE } from "./MapShader";
 
 export type MapTheme = "Realistic" | "Historical" | "Atlas";
-export type ThematicMode = "none" | "off" | "cultures" | "races" | "religions" | "diplomacy" | "wealth";
+export type ThematicMode = "none" | "off" | "cultures" | "races" | "religions" | "diplomacy" | "wealth" | "coalitions";
+
+// A thematic texel for land nobody lives on (cultures and races layers): its
+// low alpha tells the shader to draw a faint, sparse hatch instead of a fill
+export const UNINHABITED_TEXEL: [number, number, number, number] = [95, 85, 70, 16];
 
 const THEME_INDEX: Record<MapTheme, number> = { Realistic: 0, Historical: 1, Atlas: 2 };
 const THEMATIC_INDEX: Record<ThematicMode, number> = {
@@ -13,6 +17,7 @@ const THEMATIC_INDEX: Record<ThematicMode, number> = {
   religions: 2,
   diplomacy: 3,
   wealth: 4,
+  coalitions: 1,
   off: 5, // no layer: no nation fill either (the texture stays empty)
 };
 
@@ -31,6 +36,11 @@ export interface RenderLayers {
   season?: boolean; // month comes from GPURenderer.season
   night?: boolean;
   weather?: boolean; // clouds drift with GPURenderer.time
+  flagmap?: boolean; // nations filled with their flags (see FlagMapRenderer)
+  provinceShade?: number; // brightness spread between a realm's provinces (default 0.14)
+  fillMin?: number; // least opacity of the realm fill (posters that are about the realms)
+  provinceFill?: boolean; // realm fill colors are per province (see paintNationColors)
+  conquest?: boolean; // recently conquered land in a lighter shade (see updateConquestTexture)
 }
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -45,7 +55,16 @@ export class GPURenderer {
   private provincesTexture: WebGLTexture | null = null;
   private thematicTexture: WebGLTexture | null = null;
   private thematicTexture2: WebGLTexture | null = null; // a second, overlapping layer
+  // Per-cell second color of the main thematic layer, drawn as diagonal stripes
+  // inside its regions (realms in two coalitions, mixed cultures...). Shown while
+  // thematicStripes is set; alpha 0 = no stripes in that cell.
+  private thematicStripeTexture: WebGLTexture | null = null;
+  public thematicStripes = false;
+  public thematicStrength = 0.55; // how strongly a thematic fill covers the map
+  // The overlay layer (slot 2): drawn as dots with colored outlines, or as
+  // stripes while it only highlights a hovered culture or race
   public thematic2: ThematicMode = "none";
+  public thematic2Highlight = false;
   private buffer: WebGLBuffer | null = null;
   private vao: WebGLVertexArrayObject | null = null;
   private biomeColors: Float32Array;
@@ -56,6 +75,7 @@ export class GPURenderer {
   private nearestLandWorld: WorldData | null = null;
   private texSize = { w: 0, h: 0 };
   public hoverBloc: number[] = []; // nations highlighted with the hovered one
+  public hoverFaint = false; // hovered realm only lifted faintly (thematic maps)
   public hoverBlocColor: [number, number, number] = [1, 1, 1]; // the overlord's color, for the bloc's stripes
   public season = 0; // 0..1 through the year (0 = mid-January), when layers.season
   public time = 0; // seconds, when layers.weather
@@ -65,6 +85,18 @@ export class GPURenderer {
   // the whole image (null = the frame is the whole image)
   public pixelRatio = 1;
   public frame: Rect | null = null;
+  // "Nations as flags" (see FlagMapRenderer): a flag atlas, the flag copies
+  // (center and size in cells, atlas rect) and, per cell, the copy covering it
+  private flagAtlas: WebGLTexture | null = null;
+  private flagPlaces: WebGLTexture | null = null;
+  private flagCells: WebGLTexture | null = null;
+  // Recently conquered land on the History map: one byte per cell (tint
+  // strength), and a copy of what the texture holds to upload only changes
+  private conquestTexture: WebGLTexture | null = null;
+  private conquestData: Uint8Array | null = null;
+  // Bumped by every nations texture update, with what it was built from
+  public nationsVersion = 0;
+  public nationsSource: { world: WorldData; owner?: Int16Array } | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     const gl = canvas.getContext("webgl2", {
@@ -153,6 +185,31 @@ export class GPURenderer {
     return colors;
   }
 
+  public get maxTextureSize(): number {
+    return this.gl.getParameter(this.gl.MAX_TEXTURE_SIZE) as number;
+  }
+
+  public setFlagAtlas(img: TexImageSource) {
+    const gl = this.gl;
+    this.flagAtlas ??= this.makeTexture(gl.LINEAR);
+    gl.bindTexture(gl.TEXTURE_2D, this.flagAtlas);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+  }
+
+  public setFlagPlaces(data: Float32Array, w: number, h: number) {
+    const gl = this.gl;
+    this.flagPlaces ??= this.makeTexture(gl.NEAREST);
+    gl.bindTexture(gl.TEXTURE_2D, this.flagPlaces);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, w, h, 0, gl.RGBA, gl.FLOAT, data);
+  }
+
+  public setFlagCells(data: Uint8Array, w: number, h: number) {
+    this.flagCells ??= this.makeTexture(this.gl.NEAREST);
+    this.upload(this.flagCells, w, h, data);
+  }
+
   private makeTexture(filter: number): WebGLTexture {
     const gl = this.gl;
     const t = gl.createTexture()!;
@@ -186,9 +243,12 @@ export class GPURenderer {
     const W = world.width;
     const H = world.height;
     if (this.texSize.w !== W || this.texSize.h !== H) {
-      for (const t of [this.texture, this.coastTexture, this.nationsTexture, this.nationIdxTexture, this.provincesTexture, this.thematicTexture, this.thematicTexture2])
+      for (const t of [this.texture, this.coastTexture, this.nationsTexture, this.nationIdxTexture, this.provincesTexture, this.thematicTexture, this.thematicTexture2, this.thematicStripeTexture])
         if (t) this.gl.deleteTexture(t);
-      this.texture = this.coastTexture = this.nationsTexture = this.nationIdxTexture = this.provincesTexture = this.thematicTexture = this.thematicTexture2 = null;
+      this.texture = this.coastTexture = this.nationsTexture = this.nationIdxTexture = this.provincesTexture = this.thematicTexture = this.thematicTexture2 = this.thematicStripeTexture = null;
+      if (this.conquestTexture) this.gl.deleteTexture(this.conquestTexture);
+      this.conquestTexture = null;
+      this.conquestData = null;
       this.texSize = { w: W, h: H };
     }
     if (!this.texture) this.texture = this.makeTexture(this.gl.LINEAR);
@@ -234,7 +294,8 @@ export class GPURenderer {
       out[o] = pIdx & 0xff;
       out[o + 1] = (pIdx >> 8) & 0xff;
       out[o + 2] = (pIdx >> 16) & 0xff;
-      out[o + 3] = 255;
+      // Alpha 240 marks an autonomous region (the shader outlines it inside)
+      out[o + 3] = world.provinces[pIdx]?.type === "autonomous" ? 240 : 255;
     } else {
       out[o] = out[o + 1] = out[o + 2] = out[o + 3] = 0;
     }
@@ -277,6 +338,8 @@ export class GPURenderer {
   // `owner` (flat, y * width + x) skips reading the grid when the caller has it
   public updateNationsDataTexture(world: WorldData, dirtyRect?: Rect, owner?: Int16Array) {
     if (!world || !world.grid) return;
+    this.nationsVersion++;
+    this.nationsSource = { world, owner };
     let fresh = false;
     if (!this.nationsTexture || !this.nationIdxTexture) {
       this.nationsTexture = this.makeTexture(this.gl.NEAREST);
@@ -349,6 +412,38 @@ export class GPURenderer {
     });
   }
 
+  // Repaints the realm fill colors only (ids, borders and hover stay): with
+  // colorOf(cell index) -> 0xRRGGBB, or -1 for the realm's own color; water
+  // takes the color of its nearest land when that land has the same owner.
+  // Without colorOf it puts the realms' colors back.
+  public paintNationColors(colorOf: ((i: number) => number) | null) {
+    const src = this.nationsSource;
+    if (!src || !this.nationsTexture) return;
+    const { world, owner } = src;
+    const W = world.width;
+    const ownerAt = (i: number) => (owner ? owner[i] : (world.grid[i % W][(i - (i % W)) / W].nationIndex ?? -1));
+    const near = colorOf ? this.getNearestLand(world) : null;
+    const count = world.nations.length;
+    this.writeRegion(this.nationsTexture, world, undefined, (x, y, out, o) => {
+      const i = y * W + x;
+      const n = ownerAt(i);
+      if (n < 0 || n >= count) {
+        out[o] = out[o + 1] = out[o + 2] = out[o + 3] = 0;
+        return;
+      }
+      let v = -1;
+      if (colorOf && near) {
+        const j = world.waterType[i] === 0 ? i : near[i];
+        if (j >= 0 && ownerAt(j) === n) v = colorOf(j);
+      }
+      if (v < 0) v = parseInt(world.nations[n].color.slice(1, 7), 16);
+      out[o] = (v >> 16) & 255;
+      out[o + 1] = (v >> 8) & 255;
+      out[o + 2] = v & 255;
+      out[o + 3] = 255;
+    });
+  }
+
   public updateProvincesDataTexture(world: WorldData, dirtyRect?: Rect) {
     if (!world || !world.grid) return;
     if (!this.provincesTexture) {
@@ -366,13 +461,15 @@ export class GPURenderer {
   public updateThematicTexture(
     world: WorldData,
     colorOf: (x: number, y: number) => [number, number, number, number] | null,
-    slot: 1 | 2 = 1, // 2 is the overlapping layer, drawn as stripes
+    slot: 1 | 2 | 3 = 1, // 2: the overlapping layer, drawn as stripes; 3: stripes of the main layer (see thematicStripeTexture)
   ) {
     if (slot === 2) this.thematicTexture2 ??= this.makeTexture(this.gl.NEAREST);
+    else if (slot === 3) this.thematicStripeTexture ??= this.makeTexture(this.gl.NEAREST);
     else this.thematicTexture ??= this.makeTexture(this.gl.NEAREST);
     const near = this.getNearestLand(world);
     const W = world.width;
-    this.writeRegion((slot === 2 ? this.thematicTexture2 : this.thematicTexture)!, world, undefined, (x, y, out, o) => {
+    const tex = slot === 2 ? this.thematicTexture2 : slot === 3 ? this.thematicStripeTexture : this.thematicTexture;
+    this.writeRegion(tex!, world, undefined, (x, y, out, o) => {
       let i = y * W + x;
       if (world.waterType[i] !== 0) i = near[i];
       const c = i >= 0 ? colorOf(i % W, (i - (i % W)) / W) : null;
@@ -383,6 +480,42 @@ export class GPURenderer {
         out[o + 3] = c[3];
       } else out[o] = out[o + 1] = out[o + 2] = out[o + 3] = 0;
     });
+  }
+
+  // Recently conquered land: `mask` holds a tint strength (0-255) per cell,
+  // drawn as a lighter shade of the holder's color. Water takes its nearest
+  // land's value so coasts keep the shade. Only the rows that changed since
+  // the last call are uploaded.
+  public updateConquestTexture(world: WorldData, mask: Uint8Array) {
+    const gl = this.gl;
+    const W = world.width;
+    const H = world.height;
+    const near = this.getNearestLand(world);
+    const next = new Uint8Array(W * H);
+    for (let i = 0; i < next.length; i++) {
+      const j = world.waterType[i] === 0 ? i : near[i];
+      if (j >= 0) next[i] = mask[j];
+    }
+    const prev = this.conquestData;
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    if (!this.conquestTexture || !prev || prev.length !== next.length) {
+      this.conquestTexture ??= this.makeTexture(gl.NEAREST);
+      gl.bindTexture(gl.TEXTURE_2D, this.conquestTexture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, W, H, 0, gl.RED, gl.UNSIGNED_BYTE, next);
+    } else {
+      let y0 = -1;
+      let y1 = -1;
+      for (let i = 0; i < next.length; i++)
+        if (next[i] !== prev[i]) {
+          const y = (i / W) | 0;
+          if (y0 < 0) y0 = y;
+          y1 = y;
+        }
+      if (y0 < 0) return;
+      gl.bindTexture(gl.TEXTURE_2D, this.conquestTexture);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, y0, W, y1 - y0 + 1, gl.RED, gl.UNSIGNED_BYTE, next.subarray(y0 * W, (y1 + 1) * W));
+    }
+    this.conquestData = next;
   }
 
   // Night lights as soft Gaussian splats into a low-res texture, built once per
@@ -491,6 +624,11 @@ export class GPURenderer {
     bind(5, this.nationIdxTexture, "u_nationIdxTex");
     bind(6, this.lightsTexture, "u_lightsTex");
     bind(7, this.thematicTexture2, "u_thematicTex2");
+    bind(8, this.thematicStripeTexture, "u_thematicStripeTex");
+    bind(9, this.conquestTexture, "u_conquestTex");
+    bind(13, this.flagAtlas, "u_flagAtlas");
+    bind(14, this.flagPlaces, "u_flagPlaceTex");
+    bind(15, this.flagCells, "u_flagCellTex");
 
     // Split the camera into an integer cell near the screen center plus a
     // small local offset so the shader keeps sub-meter precision.
@@ -526,7 +664,9 @@ export class GPURenderer {
     gl.uniform1i(this.u("u_showProvinces"), layers.provinces ? 1 : 0);
     gl.uniform1i(this.u("u_theme"), THEME_INDEX[theme]);
     gl.uniform1i(this.u("u_thematic"), this.thematicTexture ? THEMATIC_INDEX[thematic] : 0);
-    gl.uniform1i(this.u("u_thematic2"), this.thematicTexture2 && this.thematic2 !== "none" ? 1 : 0);
+    gl.uniform1i(this.u("u_thematic2"), this.thematicTexture2 && this.thematic2 !== "none" ? (this.thematic2Highlight ? 2 : 1) : 0);
+    gl.uniform1i(this.u("u_thematicStripes"), this.thematicStripeTexture && this.thematicStripes ? 1 : 0);
+    gl.uniform1f(this.u("u_thematicStrength"), this.thematicStrength);
 
     gl.uniform3fv(this.u("u_biomeColors"), this.biomeColors);
     gl.uniform1f(this.u("u_hoverNationIndex"), hoverNationIndex);
@@ -551,6 +691,15 @@ export class GPURenderer {
     gl.uniform1f(this.u("u_pixelRatio"), this.pixelRatio);
     const f = this.frame ?? { x: 0, y: 0, w: width, h: height };
     gl.uniform4f(this.u("u_frame"), f.x, f.y, f.w, f.h);
+    // Nations as flags: the realm fill becomes each realm's flag
+    const flags = !!layers.flagmap && !!this.flagAtlas && !!this.flagPlaces && !!this.flagCells;
+    gl.uniform1i(this.u("u_flagMap"), flags ? 1 : 0);
+    gl.uniform1i(this.u("u_hoverFaint"), this.hoverFaint ? 1 : 0);
+    if (flags) gl.uniform1i(this.u("u_showNations"), 1);
+    gl.uniform1f(this.u("u_provShade"), layers.provinceShade ?? 0.14);
+    gl.uniform1f(this.u("u_fillMin"), layers.fillMin ?? 0);
+    gl.uniform1i(this.u("u_provFill"), layers.provinceFill ? 1 : 0);
+    gl.uniform1i(this.u("u_conquest"), layers.conquest && this.conquestTexture ? 1 : 0);
 
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     gl.bindVertexArray(null);

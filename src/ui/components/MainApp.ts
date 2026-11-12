@@ -1,6 +1,8 @@
 // use vscode extension 'es6-string-html' for your mental health :D
 
 import { DEFAULT_SETTINGS } from "../../game/generators/types";
+import { APP_VERSION } from "../../game/version";
+import type { ThematicMode } from "../../core/GPURenderer";
 
 const icon = (d: string) =>
   /* html */ `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
@@ -9,10 +11,12 @@ const ICONS = {
   world: icon(`<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>`),
   layers: icon(`<path d="m12 3 9 5-9 5-9-5 9-5z"/><path d="m3 13 9 5 9-5"/>`),
   nations: icon(`<path d="M5 21V4"/><path d="M5 4h11l-2 4 2 4H5"/>`),
+  coalitions: icon(`<circle cx="9" cy="12" r="5"/><circle cx="15" cy="12" r="5"/>`),
   cultures: icon(`<circle cx="8" cy="8" r="3"/><circle cx="16.5" cy="9.5" r="2.5"/><path d="M2.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5M14 18.5c.5-2 2-3.4 4-3.4 2 0 3.5 1.4 3.5 3.9"/>`),
   races: icon(`<circle cx="12" cy="7" r="3"/><path d="M5 20c0-4 3-6 7-6s7 2 7 6"/><path d="M3.5 11.5c1-.7 2-.8 3-.3M20.5 11.5c-1-.7-2-.8-3-.3"/>`),
   file: icon(`<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/>`),
   close: icon(`<path d="M6 6l12 12M18 6 6 18"/>`),
+  chevronDown: icon(`<path d="m6 9 6 6 6-6"/>`),
   dice: icon(`<rect x="4" y="4" width="16" height="16" rx="3"/><circle cx="9" cy="9" r="1" fill="currentColor"/><circle cx="15" cy="15" r="1" fill="currentColor"/><circle cx="15" cy="9" r="1" fill="currentColor"/><circle cx="9" cy="15" r="1" fill="currentColor"/>`),
   plus: icon(`<path d="M12 5v14M5 12h14"/>`),
   minus: icon(`<path d="M5 12h14"/>`),
@@ -94,15 +98,55 @@ export function formatOption(o: (typeof OPTIONS)[number], v: number) {
   return String(v);
 }
 
+// The thematic map layers (values are ThematicModes; "none" is the political
+// map). The overlay picker offers the same list, minus the political map.
+const THEMATIC_LAYERS: { value: ThematicMode; label: string }[] = [
+  { value: "none", label: "Political" },
+  { value: "cultures", label: "Cultures" },
+  { value: "races", label: "Races" },
+  { value: "diplomacy", label: "Diplomacy" },
+  { value: "coalitions", label: "Coalitions" },
+  { value: "wealth", label: "Wealth" },
+];
+
 export function refreshPickers() {
   document.querySelectorAll<HTMLElement>(".picker").forEach((p) => {
     const sel = document.getElementById(p.dataset.for!) as HTMLSelectElement | null;
     if (!sel) return;
     p.querySelectorAll<HTMLElement>(".pick").forEach((b) => {
       b.classList.toggle("active", b.dataset.value === sel.value);
-      b.classList.toggle("overlay", !!sel.dataset.secondary && b.dataset.value === sel.dataset.secondary);
     });
   });
+  // The overlay can't repeat the base map, and the swap needs two thematic layers
+  const base = (document.getElementById("thematic") as HTMLSelectElement | null)?.value ?? "none";
+  const overlay = (document.getElementById("thematic-overlay") as HTMLSelectElement | null)?.value ?? "none";
+  document.querySelectorAll<HTMLButtonElement>('.picker[data-for="thematic-overlay"] .pick').forEach((b) => {
+    const same = b.dataset.value !== "none" && b.dataset.value === base;
+    b.disabled = same;
+    b.title = same ? "This is the base map" : "";
+  });
+  const swap = document.getElementById("thematic-swap") as HTMLButtonElement | null;
+  if (swap) {
+    const canSwap = overlay !== "none" && base !== "none" && base !== "off";
+    swap.disabled = !canSwap;
+    swap.title = canSwap ? "Swap base map and overlay" : overlay === "none" ? "Pick an overlay to swap" : "Political can't be an overlay";
+  }
+}
+
+// Sets the thematic base map and/or its overlay through their hidden selects,
+// keeping the two different, then tells the app (one 'change' on the base select)
+export function setThematicLayers(base?: string, overlay?: string) {
+  const b = document.getElementById("thematic") as HTMLSelectElement | null;
+  const o = document.getElementById("thematic-overlay") as HTMLSelectElement | null;
+  if (!b || !o) return;
+  if (base !== undefined) {
+    if (!b.querySelector('option[value="off"]')) b.add(new Option("None", "off"));
+    b.value = base;
+  }
+  if (overlay !== undefined) o.value = overlay;
+  if (o.value === b.value || o.value === "off" || !o.value) o.value = "none";
+  b.dispatchEvent(new Event("change"));
+  refreshPickers();
 }
 
 export default function renderMainApp() {
@@ -111,14 +155,17 @@ export default function renderMainApp() {
         <div class="rail-logo" title="Procedural World Generator">
           <img src="${import.meta.env.BASE_URL}favicon.svg" width="34" height="34" alt="Map Generator logo" />
         </div>
+        <span class="rail-version" title="App version: worlds remember the version that made them">v${APP_VERSION}</span>
         <button id="tab-generate" class="rail-btn active" title="World">${ICONS.world}<span>World</span></button>
         <button id="tab-layers" class="rail-btn" title="Layers">${ICONS.layers}<span>Layers</span></button>
         <button id="tab-nations" class="rail-btn" title="Nations">${ICONS.nations}<span>Nations</span></button>
+        <button id="tab-coalitions" class="rail-btn" title="Coalitions">${ICONS.coalitions}<span>Coalitions</span></button>
         <button id="tab-cultures" class="rail-btn" title="Cultures">${ICONS.cultures}<span>Cultures</span></button>
         <button id="tab-races" class="rail-btn" title="Races">${ICONS.races}<span>Races</span></button>
         <button id="tab-build" class="rail-btn" title="Build">${ICONS.build}<span>Build</span></button>
         <button id="tab-history" class="rail-btn" title="History">${ICONS.history}<span>History</span></button>
         <button id="tab-file" class="rail-btn" title="File">${ICONS.file}<span>File</span></button>
+        <button id="rail-expand" class="rail-expand" title="More tabs" aria-label="More tabs" aria-expanded="false">${ICONS.chevronDown}</button>
       </nav>
 
       <aside id="ui-panel" class="panel">
@@ -238,20 +285,23 @@ export default function renderMainApp() {
             </div>
 
             <div class="field">
-              <div class="field-label" title="Click a layer to show it. Ctrl+click another to overlay it as stripes.">Thematic map</div>
+              <div class="field-label" title="The layer that colors the land">Thematic map</div>
+              ${picker("thematic", "grid-2 chips", THEMATIC_LAYERS, "none")}
+            </div>
+
+            <div class="field">
+              <div class="field-label overlay-head">
+                <span title="A second thematic layer drawn over the first">Overlay</span>
+                <button type="button" id="thematic-swap" class="overlay-swap" disabled>${ICONS.swap}<span>Swap</span></button>
+              </div>
               ${picker(
-                "thematic",
-                "grid-2 chips",
-                [
-                  { value: "none", label: "Political" },
-                  { value: "cultures", label: "Cultures" },
-                  { value: "races", label: "Races" },
-                  { value: "diplomacy", label: "Diplomacy" },
-                  { value: "wealth", label: "Wealth" },
-                ],
+                "thematic-overlay",
+                "grid-3 chips",
+                // Every thematic layer but the political map can be an overlay
+                [{ value: "none", label: "None" }, ...THEMATIC_LAYERS.filter((o) => o.value !== "none")],
                 "none",
               )}
-              <p class="muted">Ctrl+click a layer to overlay it as stripes.</p>
+              <p class="muted overlay-note"><span class="overlay-edge" aria-hidden="true"></span>Shown as colored borders between its regions, over the base map</p>
             </div>
 
             <div class="group">
@@ -260,7 +310,9 @@ export default function renderMainApp() {
               ${toggle("layer-borders", "Borders", true)}
               ${toggle("layer-provinces", "Provinces", true)}
               ${toggle("layer-flags", "Flags", true, "above nation names")}
-              ${toggle("layer-wars", "Wars & battles", true, "fronts, offensives, battles")}
+              ${toggle("layer-flagmap", "Nations as flags", false, "fill each realm with its flag")}
+              ${toggle("layer-hoverrealm", "Highlight hovered realm", true, "a faint lift on thematic maps")}
+              ${toggle("layer-wars", "Wars & conquests", true, "fronts and recently taken land")}
             </div>
             <div class="group">
               <div class="group-title">Nature</div>
@@ -312,6 +364,14 @@ export default function renderMainApp() {
             <div id="nations-list" class="nations-list">
               <!-- Dynamically populated -->
             </div>
+          </section>
+
+          <!-- Coalitions -->
+          <section id="content-coalitions" class="tab-content">
+            <div class="nations-sticky">
+              <div id="coalitions-head" class="nations-head"></div>
+            </div>
+            <div id="coalitions-list" class="nations-list"></div>
           </section>
 
           <!-- Cultures -->
@@ -399,7 +459,16 @@ export default function renderMainApp() {
                 ],
                 "2",
               )}
-              <button id="war-clear" class="btn-ghost war-clear" title="Remove battle marks, arrows and conquest borders; conquered land stays">Clear battle marks</button>
+              ${picker(
+                "war-aim",
+                "segmented",
+                [
+                  { value: "point", label: "Point attack" },
+                  { value: "line", label: "Attack line" },
+                ],
+                "point",
+              )}
+              <button id="war-clear" class="btn-ghost war-clear" title="Remove battle marks, arrows and the conquest shading; conquered land stays">Clear war marks</button>
               <p class="muted sim-note" id="war-hint">Pick an army, then click enemy land to attack. It always wins.</p>
             </details>
             <div class="field">
@@ -453,6 +522,7 @@ export default function renderMainApp() {
               ${ICONS.poster}
               <span><strong>Export poster</strong><small>High-resolution map with title, legend and frame</small></span>
             </button>
+            <p class="muted file-version">Version ${APP_VERSION}. Saved worlds, links and exports record the version that made them; opening one from an older version reuses its rules and may not behave exactly as before.</p>
           </section>
         </div>
       </aside>
@@ -509,30 +579,68 @@ export default function renderMainApp() {
       const btn = (e.target as HTMLElement).closest<HTMLElement>(".pick");
       const sel = document.getElementById(p.dataset.for!) as HTMLSelectElement | null;
       if (!btn || !sel) return;
-      if (p.dataset.for === "thematic") {
-        // A plain click picks the main layer. Ctrl+click overlays a second one as
-        // stripes (click it again to remove it)
+      if (p.dataset.for === "thematic" || p.dataset.for === "thematic-overlay") {
+        // The base map and its overlay. Clicking the picked base again shows
+        // none; Ctrl+click on a base chip toggles it as the overlay (a shortcut)
         const val = btn.dataset.value!;
         const ev = e as MouseEvent;
-        let primary = sel.value;
-        let secondary = sel.dataset.secondary ?? "";
-        if (ev.ctrlKey || ev.metaKey) {
-          if (val === "none" || val === primary) return;
-          secondary = val === secondary ? "" : val;
-        } else {
-          primary = val === primary ? "off" : val; // clicking the picked layer again picks none
-          if (secondary === primary) secondary = "";
-        }
-        if (!sel.querySelector('option[value="off"]')) sel.add(new Option("None", "off"));
-        sel.value = primary;
-        sel.dataset.secondary = secondary;
-      } else sel.value = btn.dataset.value!;
+        if (p.dataset.for === "thematic-overlay") setThematicLayers(undefined, val);
+        else if (ev.ctrlKey || ev.metaKey) {
+          const overlay = (document.getElementById("thematic-overlay") as HTMLSelectElement | null)?.value;
+          if (val !== "none" && val !== sel.value) setThematicLayers(undefined, val === overlay ? "none" : val);
+        } else setThematicLayers(val === sel.value ? "off" : val);
+        return;
+      }
+      sel.value = btn.dataset.value!;
       sel.dispatchEvent(new Event("change"));
       refreshPickers();
     });
   });
+  // Base map <-> overlay
+  document.getElementById("thematic-swap")?.addEventListener("click", () => {
+    const base = (document.getElementById("thematic") as HTMLSelectElement).value;
+    const overlay = (document.getElementById("thematic-overlay") as HTMLSelectElement).value;
+    if (overlay !== "none" && base !== "none" && base !== "off") setThematicLayers(overlay, base);
+  });
+  installRailToggle();
+
   document.getElementById("seed-random")?.addEventListener("click", () => {
     const seed = document.getElementById("seed") as HTMLInputElement;
     seed.value = String(Math.floor(Math.random() * 999999));
+  });
+}
+
+// The rail shows its first six tabs; the arrow at its foot reveals the rest.
+// An open tab among the hidden ones stays visible. Remembered per browser.
+const RAIL_KEY = "rail-expanded";
+const RAIL_VISIBLE = 6;
+function installRailToggle() {
+  const rail = document.querySelector<HTMLElement>(".rail");
+  const btn = document.getElementById("rail-expand");
+  if (!rail || !btn) return;
+  const tabs = rail.querySelectorAll<HTMLElement>(".rail-btn");
+  tabs.forEach((t, i) => t.classList.toggle("rail-extra", i >= RAIL_VISIBLE));
+  btn.hidden = tabs.length <= RAIL_VISIBLE;
+  const set = (open: boolean) => {
+    rail.classList.toggle("expanded", open);
+    btn.setAttribute("aria-expanded", String(open));
+    btn.title = open ? "Fewer tabs" : "More tabs";
+    btn.setAttribute("aria-label", btn.title);
+  };
+  let open = false;
+  try {
+    open = localStorage.getItem(RAIL_KEY) === "1";
+  } catch {
+    /* storage blocked: start collapsed */
+  }
+  set(open);
+  btn.addEventListener("click", () => {
+    open = !open;
+    set(open);
+    try {
+      localStorage.setItem(RAIL_KEY, open ? "1" : "0");
+    } catch {
+      /* not remembered */
+    }
   });
 }
