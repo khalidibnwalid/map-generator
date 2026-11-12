@@ -1,19 +1,27 @@
 import type { GeneratorContext } from "./types";
 import { Language, familyCount, familyIndexOf, mulberry, randomRaceName, religionName, hslHex } from "../names";
-import { growRegions, fillUnreached, pickSpacedSeeds, warpOwnerArray } from "../util/regionGrow";
+import { growRegions, growRegionsSparse, buildCostField, fillUnreached, pickSpacedSeeds, warpOwnerArray, type GrowOptions } from "../util/regionGrow";
 import { yieldFrame } from "../util/grid";
+import { APP_VERSION, atLeast } from "../version";
+import { emptyLand, settlePeoples, type Peoples } from "./settlePeoples";
 
 // Cultures and religions are independent of political borders: they grow from
 // their own hearths over the terrain, so a nation can be multi-ethnic and a
-// faith can span several states.
+// faith can span several states. From 0.2 (see settlePeoples.ts) deserts,
+// peaks and ice stay empty, minorities hold pockets inside other peoples'
+// land, and some places hold two peoples at once.
 export async function generateCultures(ctx: GeneratorContext): Promise<void> {
   const { world, noise, width: W, height: H, onProgress } = ctx;
   const N = W * H;
   const resScale = W / 800;
+  const ethnographic = atLeast(ctx.version ?? APP_VERSION, "0.2");
   let landCells = 0;
   for (let i = 0; i < N; i++) if (world.waterType[i] === 0) landCells++;
 
+  // 0.2+: land nobody lives on; hearths avoid it and peoples spread across it slowly
+  const empty = ethnographic ? emptyLand(ctx) : null;
   const density = (c: number) => {
+    if (empty?.[c]) return 0.02;
     const x = c % W;
     return world.grid[x][(c - x) / W].populationDensity + 0.15;
   };
@@ -21,19 +29,23 @@ export async function generateCultures(ctx: GeneratorContext): Promise<void> {
   // --- Cultures ---
   const cultureCount = Math.max(3, Math.round(landCells / (9000 * resScale * resScale)));
   const cultureSeeds = pickSpacedSeeds(world, noise.random, cultureCount, 55 * resScale, density);
-  const cultureOwner = growRegions(
-    world,
-    noise,
-    cultureSeeds.map((cell) => ({ cell, weight: 0.8 + noise.random() * 0.6 })),
-    {
-      mountainCost: 3,
-      slopeCost: 1.5,
-      riverCost: 0.3,
-      noiseAmp: 0.45,
-      noiseScale: 0.012,
-      noiseOffset: 3100,
-    },
-  );
+  const cultureGrow: GrowOptions = {
+    mountainCost: 3,
+    slopeCost: 1.5,
+    riverCost: 0.3,
+    noiseAmp: 0.45,
+    noiseScale: 0.012,
+    noiseOffset: 3100,
+  };
+  const cultureGrowSeeds = cultureSeeds.map((cell) => ({ cell, weight: 0.8 + noise.random() * 0.6 }));
+  let cultureOwner: Int32Array;
+  if (empty) {
+    // Empty land is a barrier, like high mountains: frontiers settle in deserts
+    const field = buildCostField(world, noise, cultureGrow);
+    for (let i = 0; i < N; i++) if (empty[i]) field.rough[i] += 2.5;
+    const owner = (cultureOwner = new Int32Array(N).fill(-1));
+    growRegionsSparse(world, field, cultureGrowSeeds, (c, o) => (owner[c] = o));
+  } else cultureOwner = growRegions(world, noise, cultureGrowSeeds, cultureGrow);
   fillUnreached(world, cultureOwner);
   warpOwnerArray(world, noise, cultureOwner, 7 * resScale);
   onProgress?.(45);
@@ -43,6 +55,7 @@ export async function generateCultures(ctx: GeneratorContext): Promise<void> {
   world.languages = [];
   // Neighboring hearths often share a language family
   const families: number[] = [];
+  const cultureNames = new Set<string>();
   cultureSeeds.forEach((cell, id) => {
     const x = cell % W;
     const y = (cell - x) / W;
@@ -56,9 +69,17 @@ export async function generateCultures(ctx: GeneratorContext): Promise<void> {
     families.push(fam);
     const lang = new Language(noise.random, fam);
     world.languages.push(lang);
+    let name = lang.cultureName();
+    if (ethnographic) {
+      // 0.2+: no two cultures share a name. Retries speak the same language
+      // but draw from their own stream, so the world's stream is untouched
+      const again = Language.revive(lang.spec, mulberry((world.seed ^ Math.imul(id + 1, 0x9e3779b1)) >>> 0));
+      for (let k = 0; k < 12 && cultureNames.has(name); k++) name = again.cultureName();
+      cultureNames.add(name);
+    }
     world.cultures.push({
       id,
-      name: lang.cultureName(),
+      name,
       color: hslHex((id * 137.508 + 20) % 360, 0.45, 0.62),
       centerX: x + 0.5,
       centerY: y + 0.5,
@@ -113,12 +134,22 @@ export async function generateCultures(ctx: GeneratorContext): Promise<void> {
   onProgress?.(90);
   await yieldFrame();
 
+  // 0.2+: empty land, pockets, mixed bands and races that wander off the cultures
+  const peoples: Peoples | null = empty ? settlePeoples(ctx, cultureOwner, empty) : null;
+  const id = (v: number) => (v >= 0 ? v : undefined);
   for (let x = 0; x < W; x++) {
     for (let y = 0; y < H; y++) {
       const i = y * W + x;
       const cell = world.grid[x][y];
-      cell.cultureIndex = cultureOwner[i] >= 0 ? cultureOwner[i] : undefined;
-      cell.raceIndex = cell.cultureIndex !== undefined ? world.cultures[cell.cultureIndex].raceId : undefined;
+      if (peoples) {
+        cell.cultureIndex = id(peoples.culture[i]);
+        cell.raceIndex = id(peoples.race[i]);
+        cell.culture2Index = id(peoples.culture2[i]);
+        cell.race2Index = id(peoples.race2[i]);
+      } else {
+        cell.cultureIndex = cultureOwner[i] >= 0 ? cultureOwner[i] : undefined;
+        cell.raceIndex = cell.cultureIndex !== undefined ? world.cultures[cell.cultureIndex].raceId : undefined;
+      }
       cell.religionIndex = religionOwner[i] >= 0 ? religionOwner[i] : undefined;
     }
   }

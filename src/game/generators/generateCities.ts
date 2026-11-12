@@ -2,6 +2,8 @@ import type { GeneratorContext } from "./types";
 import type { City, WorldData } from "../WorldData";
 import { hashU } from "../../core/FieldNoise";
 import { yieldFrame } from "../util/grid";
+import { APP_VERSION, atLeast } from "../version";
+import { cultureNear } from "../peoples";
 
 // Built-up density of a pre-industrial core, people per km²
 const CORE_DENSITY = 16000;
@@ -49,8 +51,7 @@ export function finalizeCity(world: WorldData, city: City, density: number) {
 }
 
 export function cityNameFor(world: WorldData, x: number, y: number, rand: () => number): string {
-  const cell = world.getCell(x, y);
-  const lang = world.languages[cell?.cultureIndex ?? 0];
+  const lang = world.languages[cultureNear(world, x, y) ?? 0];
   if (lang) return lang.townName();
   return `Settlement ${Math.floor(rand() * 1000)}`;
 }
@@ -60,12 +61,15 @@ export async function generateCities(ctx: GeneratorContext): Promise<void> {
   world.cities = [];
 
   // Bucket land cells by nation in a single pass
+  const peopled = atLeast(ctx.version ?? APP_VERSION, "0.2");
   const byNation: { x: number; y: number; density: number }[][] = world.nations.map(() => []);
   for (let x = 0; x < width; x++) {
     for (let y = 0; y < height; y++) {
       const cell = world.grid[x][y];
       const n = cell.nationIndex ?? -1;
       if (cell.isWater || n < 0 || n >= byNation.length) continue;
+      // 0.2+: no settlements on uninhabited land
+      if (peopled && cell.cultureIndex === undefined) continue;
       byNation[n].push({ x, y, density: cell.populationDensity });
     }
   }

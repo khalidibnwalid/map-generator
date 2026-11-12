@@ -1,6 +1,7 @@
 import { CELL_METERS } from "../../core/FieldNoise";
 import type { City, River, WorldData } from "../WorldData";
 import { sampleCurve } from "../util/curves";
+import { cultureNear } from "../peoples";
 import {
   type Poly,
   type Vec,
@@ -242,8 +243,7 @@ function climateStyle(world: WorldData, city: City): CityStyle {
 // Architecture follows the culture; climate supplies ground, trees and fields.
 function styleFor(world: WorldData, city: City): CityStyle {
   const base = climateStyle(world, city);
-  const cell = world.getCell(city.x, city.y);
-  const family = world.languages[cell?.cultureIndex ?? -1]?.family.key;
+  const family = world.languages[cultureNear(world, city.x, city.y, 24) ?? -1]?.family.key;
   const s: CityStyle = { ...base };
   switch (family) {
     case "Desert":
