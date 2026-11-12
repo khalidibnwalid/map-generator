@@ -2,9 +2,13 @@ import { WorldData, type City } from "../game/WorldData";
 import { nearestPoi, POI_LABELS } from "../game/generators/generatePOIs";
 import { RESOURCE_INFO, WEALTH_TIERS } from "../game/generators/generateEconomy";
 import { cityExports, cityTrade, tradeRole } from "../game/generators/generateTrade";
-import { nationFlagUrl } from "../game/flags";
+import { flagUrl, nationFlagUrl } from "../game/flags";
 import { rulerStyle } from "../game/sim/Rulers";
+import { coalitionFlag, coalitionsOf } from "../game/coalitions";
 import type { SnapNation } from "../game/sim/History";
+import type { ThematicMode } from "../core/GPURenderer";
+import { culturesOf, racesOf } from "../game/peoples";
+import { provinceTypeInfo } from "../game/provinceTypes";
 
 // What the map tooltip says about a point: the nearest resource, landmark or
 // settlement when zoomed in, else the sea or the realm and its land.
@@ -13,6 +17,7 @@ export interface TooltipContent {
   title: string;
   text: string;
   icon?: string;
+  badges?: { icon: string; text: string }[]; // flagged lines under the text (a realm's coalitions)
 }
 
 // People per km² for a normalized density value (rural + urban mix)
@@ -25,6 +30,49 @@ export interface PointOptions {
   resources: boolean; // resource layer shown
   pois: boolean; // landmark layer shown
   diplomacyFocus: number; // pinned realm on the diplomacy map, -1 none
+  layers?: { base: ThematicMode; overlay: ThematicMode }; // with an overlay, the tooltip names both layers' values
+}
+
+// Each province's settlement wealth per unit of land (the wealth map's measure)
+export function provinceWealthDensity(world: WorldData): number[] {
+  const pw = new Float32Array(world.provinces.length);
+  for (const c of world.cities) if ((c.provinceIndex ?? -1) >= 0) pw[c.provinceIndex!] += (c.wealth ?? 0) * (1 + c.size);
+  return world.provinces.map((p, i) => pw[i] / Math.max(1, (p.area ?? 25) / 25));
+}
+
+const WEALTH_WORDS = ["Poorest", "Poor", "Average", "Rich", "Richest"];
+
+// "Culture: Svetaguard", "Culture: Svetaguard & Orvani (mixed)" or "Culture: Uninhabited"
+function peoplesLine(world: WorldData, cell: WorldData["grid"][number][number], races: boolean): string | null {
+  if (cell.isWater) return null;
+  const list = (races ? racesOf(cell) : culturesOf(cell)).map((i) => (races ? world.races[i] : world.cultures[i])?.name).filter(Boolean);
+  const label = races ? "Race" : "Culture";
+  if (!list.length) return `${label}: Uninhabited`;
+  return list.length > 1 ? `${label}: ${list.join(" & ")} (mixed)` : `${label}: ${list[0]}`;
+}
+
+// What a thematic layer shows at a land cell, e.g. "Culture: Svetaguard"
+function layerValue(world: WorldData, x: number, y: number, nation: number, mode: ThematicMode, focus: number): string | null {
+  const cell = world.grid[x][y];
+  if (mode === "cultures" || mode === "races") return peoplesLine(world, cell, mode === "races");
+  if (nation < 0) return null;
+  if (mode === "none") return `Realm: ${world.nations[nation].name}`;
+  if (mode === "coalitions") {
+    const list = coalitionsOf(world, nation);
+    return `Coalition: ${list.length ? list.map((u) => u.name).join(", ") : "none"}`;
+  }
+  if (mode === "diplomacy") {
+    if (focus < 0) return null;
+    return focus === nation ? "Diplomacy: focus realm" : `Relation: ${world.relations[focus]?.[nation] ?? "Neutral"}`;
+  }
+  if (mode === "wealth") {
+    const p = cell.provinceIndex ?? -1;
+    if (p < 0) return null;
+    const dens = provinceWealthDensity(world);
+    const below = dens.filter((d) => d < dens[p]).length / Math.max(1, dens.length - 1);
+    return `Wealth: ${WEALTH_WORDS[Math.min(4, Math.floor(below * 5))]}`;
+  }
+  return null;
 }
 
 // A recorded year of history, as the timeline replays it
@@ -77,7 +125,7 @@ function describeCity(world: WorldData, city: City): TooltipContent {
   const exports = cityExports(city);
   if (exports.length) lines.push((trade && trade.volume > 0 ? "Exports " : "Produces ") + exports.join(", "));
   const prov = world.provinces[city.provinceIndex ?? -1];
-  if (prov) lines.push(`Province: ${prov.name}`);
+  if (prov) lines.push(`${provinceTypeInfo(prov).label}: ${prov.name}`);
   return { title: city.name, text: lines.join("\n") };
 }
 
@@ -147,14 +195,21 @@ export function describePoint(world: WorldData, fx: number, fy: number, o: Point
       lines.push(`Age ${world.year - r.born} · ${reign < 1 ? "newly crowned" : `${reign} year${reign === 1 ? "" : "s"} on the throne`}`);
     }
     const prov = world.provinces[cell.provinceIndex ?? -1];
-    if (prov) lines.push(`Province: ${prov.name}${prov.area ? ` (${prov.area.toLocaleString()} km²)` : ""}`);
+    // "Autonomous region: Vel Harrow (2,350 km²)"; ordinary ones read "Province: ..."
+    if (prov) lines.push(`${provinceTypeInfo(prov).label}: ${prov.name}${prov.area ? ` (${prov.area.toLocaleString()} km²)` : ""}`);
     const focus = o.diplomacyFocus;
     if (focus >= 0 && focus !== hovered) lines.push(`Relation with ${world.nations[focus]?.name}: ${world.relations[focus]?.[hovered] ?? "Neutral"}`);
   }
-  const culture = world.cultures[cell.cultureIndex ?? -1];
-  if (culture) lines.push(`Culture: ${culture.name}`);
+  const both = o.layers && o.layers.overlay !== "none" ? [o.layers.base, o.layers.overlay] : null;
+  const values = both?.map((m) => layerValue(world, x, wy, hovered, m, o.diplomacyFocus)).filter((v): v is string => !!v) ?? [];
+  if (values.length) lines.push(values.join(" · ")); // base · overlay, e.g. "Culture: X · Race: Y"
+  const culture = peoplesLine(world, cell, false);
+  if (culture && !both?.includes("cultures")) lines.push(culture);
+  const race = !both && o.layers?.base === "races" ? peoplesLine(world, cell, true) : null;
+  if (race) lines.push(race);
   lines.push(`${cell.biome} · ${WorldData.elevationMeters(cell.elevation).toLocaleString()} m · ${WorldData.temperatureC(cell.temperature)}°C`);
   lines.push(`Density ~${peoplePerKm2(cell.populationDensity)} /km²${cell.hasRiver ? " · River" : ""}`);
   if (nation) lines.push(touch() ? "Long press for the fact sheet" : "Alt+click for the fact sheet");
-  return { title: nation ? nation.name : "Unclaimed Land", text: lines.join("\n"), icon: nation ? nationFlagUrl(world, hovered, 24, 16) : "" };
+  const badges = nation ? coalitionsOf(world, hovered).map((u) => ({ icon: flagUrl(coalitionFlag(world, u), 18, 12), text: u.name })) : [];
+  return { title: nation ? nation.name : "Unclaimed Land", text: lines.join("\n"), icon: nation ? nationFlagUrl(world, hovered, 24, 16) : "", badges };
 }

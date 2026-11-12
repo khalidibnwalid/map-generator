@@ -4,6 +4,9 @@ import { CELL_KM2 } from "../WorldData";
 import type { NoiseEngine } from "../../core/NoiseEngine";
 import { buildCostField, growRegionsSparse, warpOwners, type CostField } from "../util/regionGrow";
 import { yieldFrame } from "../util/grid";
+import { assignProvinceTypes, provinceTypesApply } from "../provinceTypes";
+import { APP_VERSION, atLeast } from "../version";
+import { cultureNear } from "../peoples";
 
 // Land area (cells) of a typical province; densely settled land gets smaller
 // provinces, wilderness bigger ones.
@@ -39,7 +42,7 @@ function provinceName(world: WorldData, city: City | undefined, cells: number[],
   const n = cells.length || 1;
   const base = city
     ? city.name
-    : world.languages[world.grid[cells[0] % W][Math.floor(cells[0] / W)].cultureIndex ?? 0]?.word() ?? "Wild";
+    : world.languages[cultureNear(world, cells[0] % W, Math.floor(cells[0] / W)) ?? 0]?.word() ?? "Wild";
   const r = rand();
   if (high / n > 0.3) return r < 0.5 ? `${base} Highlands` : `Mountains of ${base}`;
   if (border / n > 0.12 && r < 0.6) return `${base} March`;
@@ -322,8 +325,11 @@ export function partitionNation(
   }
   world.provinces = others;
 
+  const cellsById = new Map<number, number[]>();
+  const kept = new Set<Province>();
   lists.forEach((cells, i) => {
     const id = world.provinces.length;
+    cellsById.set(id, cells);
     let sumSin = 0;
     let sumCos = 0;
     let sumY = 0;
@@ -362,6 +368,8 @@ export function partitionNation(
       area: cells.length * CELL_KM2,
       population: Math.round(cityPop + rural),
     };
+    if (old?.type) p.type = old.type;
+    if (old) kept.add(p);
     world.provinces.push(p);
   });
 
@@ -378,6 +386,8 @@ export function partitionNation(
       .sort((a, b) => b.population - a.population)[0];
     if (biggest) p.capitalCityId = biggest.id;
   }
+  // Types (0.2+): surviving provinces keep theirs, new ones take one from the land
+  if (provinceTypesApply(world)) assignProvinceTypes(world, { nation: nationId, keep: (p) => kept.has(p), cells: cellsById });
 }
 
 export async function generateProvinces(ctx: GeneratorContext): Promise<void> {
@@ -401,4 +411,11 @@ export async function generateProvinces(ctx: GeneratorContext): Promise<void> {
       await yieldFrame();
     }
   }
+}
+
+// 0.2+: once diplomacy has set relations (marches face rivals), every province
+// takes its type afresh. Derived from the world alone, so no stream shifts.
+export async function generateProvinceTypes(ctx: GeneratorContext): Promise<void> {
+  if (!atLeast(ctx.version ?? APP_VERSION, "0.2")) return;
+  assignProvinceTypes(ctx.world);
 }

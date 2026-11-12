@@ -10,16 +10,30 @@ import {
   colorForNewNation,
   refreshTerritorialWaters,
 } from "../game/generators";
-import type { City, Nation, RelationType } from "../game/WorldData";
-import { appendNation, blocOf, makeVassal, relation, releaseVassal, removeNation, setRelation } from "../game/politics";
+import type { City, Nation, Province, RelationType } from "../game/WorldData";
+import {
+  appendNation,
+  claimFoundingLand,
+  blocOf,
+  makeVassal,
+  mergeNation,
+  provinceIndependence,
+  relation,
+  releaseVassal,
+  removeNation,
+  setRelation,
+} from "../game/politics";
 import { RELATION_COLORS } from "../game/generators/generateDiplomacy";
 import { nationFlagUrl } from "../game/flags";
 import { FlagEditor } from "./FlagEditor";
 import { createDropdown } from "./components/Dropdown";
+import { coalitionPanel } from "./CoalitionPanel";
 import { CELL_KM2 } from "../game/WorldData";
+import { cultureNear } from "../game/peoples";
 import type { UIManager } from "./UIManager";
 import type { CityRenderer } from "./CityRenderer";
 import { background } from "./components/Toast";
+import { PROVINCE_TYPES, provinceType, provinceTypeInfo, refreshProvinceTypes, setProvinceType, type ProvinceType } from "../game/provinceTypes";
 
 type SortKey = "name" | "area" | "population" | "cities" | "wealth";
 interface NationStats {
@@ -37,6 +51,7 @@ const SORTS: { key: SortKey; label: string }[] = [
 ];
 
 const INFO_ICON = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.6v.1"/></svg>`;
+const FLAG_ICON = `<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 21V4"/><path d="M5 4h12l-2.5 4L17 12H5"/></svg>`;
 
 function compact(n: number): string {
   if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M";
@@ -59,6 +74,7 @@ export class NationsManager {
   public nationLandArea: number[] = []; // land cells only; water is never counted
   public onTerritoryChanged: (() => void) | null = null;
   public onShowFacts: ((nationIdx: number) => void) | null = null;
+  public onOpenCoalition: ((coalitionId: number) => void) | null = null; // shows it in the Coalitions tab
   public nationsStateDirty: boolean = true;
   public cityPlacementMode: number = -1; // Index of the nation being founded for
   public provincePlacementMode: number = -1; // Index of the nation for new province
@@ -568,8 +584,29 @@ export class NationsManager {
       });
 
       item.appendChild(toggleBtn);
+      // Capital district, autonomous region...: a glyph before the name (details when expanded)
+      const kind = provinceTypeInfo(province);
+      if (kind.icon) {
+        const badge = document.createElement("span");
+        badge.className = `province-type-badge pt-${kind.id}`;
+        badge.textContent = kind.icon;
+        badge.title = `${kind.label}: ${kind.description}`;
+        item.appendChild(badge);
+      }
       item.appendChild(nameInput);
       item.appendChild(locateBtn);
+      // A nation's only province cannot break away
+      if (nationProvinces.length > 1) {
+        const freeBtn = document.createElement("button");
+        freeBtn.className = "city-locate-btn";
+        freeBtn.innerHTML = FLAG_ICON;
+        freeBtn.title = "Make independent";
+        freeBtn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          background(this.confirmIndependence(pIdx), "Declaring independence");
+        });
+        item.appendChild(freeBtn);
+      }
       item.appendChild(deleteProvinceBtn);
 
       item.addEventListener("click", (e) => {
@@ -594,6 +631,8 @@ export class NationsManager {
       });
 
       container.appendChild(item);
+
+      if (this.expandedProvinces.has(pIdx)) container.appendChild(this.provinceTypeRow(province));
 
       const cityListContainer = document.createElement("div");
       cityListContainer.id = `city-list-container-p-${pIdx}`;
@@ -644,6 +683,33 @@ export class NationsManager {
       regenBtn.addEventListener("click", () => this.regenerateProvinces(nationIdx));
       container.appendChild(regenBtn);
     }
+  }
+
+  // Type picker of an expanded province: ordinary, capital district, autonomous region...
+  // (an edit like any other: the edit session records it for undo)
+  private provinceTypeRow(province: Province): HTMLElement {
+    const row = document.createElement("div");
+    row.className = "province-type-row";
+    const desc = document.createElement("span");
+    desc.className = "province-type-desc";
+    desc.textContent = provinceTypeInfo(province).description;
+    const dd = createDropdown<ProvinceType>({
+      className: "province-type-dd",
+      title: "What kind of province this is",
+      value: provinceType(province),
+      options: PROVINCE_TYPES.map((t) => ({ value: t.id, label: t.icon ? `${t.icon}  ${t.label}` : t.label })),
+      onChange: (v) => {
+        setProvinceType(province, v);
+        const world = this.generator.getWorld();
+        this.gpuRenderer.updateProvincesDataTexture(world);
+        this.renderList();
+        this.canvasManager.scheduleRender();
+      },
+    });
+    row.appendChild(dd);
+    row.appendChild(desc);
+    row.addEventListener("click", (e) => e.stopPropagation());
+    return row;
   }
 
   public regenerateProvinces(nationIdx: number) {
@@ -718,6 +784,8 @@ export class NationsManager {
       wrap.appendChild(vRow);
     }
 
+    wrap.appendChild(coalitionPanel(world, nationIdx, changed, (id) => this.onOpenCoalition?.(id)));
+
     // Relations: neighbors first, then everyone else
     const neighbors = this.neighborsOf(nationIdx);
     const options: RelationType[] = ["Alliance", "Friendly", "Neutral", "Rival", "War"];
@@ -759,6 +827,29 @@ export class NationsManager {
       list.appendChild(row);
     }
     wrap.appendChild(list);
+
+    // Merge: another nation takes everything this one holds (neighbors first)
+    const mergeRow = document.createElement("div");
+    mergeRow.className = "diplo-row diplo-merge";
+    mergeRow.innerHTML = `<span class="diplo-label">Merge into</span>`;
+    mergeRow.appendChild(
+      createDropdown({
+        className: "diplo-dd diplo-dd-wide",
+        title: `Hand all of ${nation.name} to another nation`,
+        value: "-1",
+        options: [
+          { value: "-1", label: "Choose a nation…" },
+          ...ordered.map((e) => ({
+            value: String(e.i),
+            label: e.n.name,
+            image: nationFlagUrl(world, e.i, 18, 12),
+            hint: neighbors.has(e.i) ? "border" : undefined,
+          })),
+        ],
+        onChange: (v) => background(this.confirmMerge(nationIdx, Number(v)), "Merging the nations"),
+      }),
+    );
+    wrap.appendChild(mergeRow);
     container.appendChild(wrap);
   }
 
@@ -856,6 +947,8 @@ export class NationsManager {
             nation.capitalX = city.x;
             nation.capitalY = city.y;
           }
+          // The capital district follows the capital
+          refreshProvinceTypes(world);
           this.updateNationUI(nationIdx);
           this.canvasManager.scheduleRender();
         });
@@ -1047,7 +1140,8 @@ export class NationsManager {
 
     // Name, culture and faith come from the people living at the founding spot
     const here = world.getCell(startX, startY);
-    const lang = world.languages[here?.cultureIndex ?? 0];
+    const people = cultureNear(world, startX, startY) ?? 0; // empty land: the nearest people
+    const lang = world.languages[people];
     const newNation: Nation = {
       id: 0,
       name: lang ? lang.nationName() : "New Nation",
@@ -1057,7 +1151,7 @@ export class NationsManager {
       ),
       capitalX: startX,
       capitalY: startY,
-      cultureId: here?.cultureIndex ?? 0,
+      cultureId: people,
       religionId: here?.religionIndex ?? 0,
       government: lang ? lang.government(0.1, false) : "Kingdom",
     };
@@ -1067,22 +1161,9 @@ export class NationsManager {
     this.nationSizes.push(0);
     this.nationLandArea.push(0);
 
-    // Paint circular starting territory
-    const radius = 12;
-    for (let dx = -radius; dx <= radius; dx++) {
-      for (let dy = -radius; dy <= radius; dy++) {
-        if (dx * dx + dy * dy <= radius * radius) {
-          const px = (startX + (dx % world.width) + world.width) % world.width;
-          const py = startY + dy;
-          if (py >= 0 && py < world.height) {
-            const cell = world.grid[px][py];
-            if (!cell.isWater) {
-              cell.nationIndex = newIdx;
-            }
-          }
-        }
-      }
-    }
+    // Starting territory spreads over the land from the founding spot, as an
+    // offensive would: stopped by rivers, ridges and the sea, not a circle
+    claimFoundingLand(world, newIdx, startX, startY);
 
     // The new realm's coast takes its territorial waters
     refreshTerritorialWaters(world);
@@ -1175,6 +1256,7 @@ export class NationsManager {
           nation.capitalX = newCapital.x;
           nation.capitalY = newCapital.y;
         }
+        refreshProvinceTypes(world);
       }
     }
 
@@ -1213,6 +1295,64 @@ export class NationsManager {
       this.selectedNationIndex--;
     }
 
+    this.nationsStateDirty = true;
+    this.buildCache();
+    this.renderList();
+    this.canvasManager.scheduleRender();
+  }
+
+  // Merge and independence change the map in one click; the edit session
+  // records them as one undo step once the confirmation click settles
+  private async confirmMerge(from: number, into: number) {
+    const world = this.generator.getWorld();
+    const A = world.nations[from];
+    const B = world.nations[into];
+    if (!A || !B) return;
+    const ok = await this.uiManager.confirm(
+      "MERGE NATION",
+      `Merge ${A.name} into ${B.name}? Its land, provinces, cities and vassals pass to ${B.name}, and ${A.name} disappears along with its relations.`,
+    );
+    // The world may have moved on while the dialog was open
+    if (!ok || this.generator.getWorld() !== world || world.nations[from] !== A || world.nations[into] !== B) {
+      this.renderList(); // resets the picker
+      return;
+    }
+    const idx = mergeNation(world, from, into);
+    if (idx >= 0) this.politicsChanged(idx, from);
+  }
+
+  private async confirmIndependence(provinceId: number) {
+    const world = this.generator.getWorld();
+    const P = world.provinces.find((p) => p.id === provinceId);
+    const owner = P ? world.nations[P.nationIndex] : undefined;
+    if (!P || !owner) return;
+    const capital = world.cities.some((c) => c.nationIndex === P.nationIndex && c.isCapital && c.provinceIndex === provinceId);
+    const ok = await this.uiManager.confirm(
+      "DECLARE INDEPENDENCE",
+      `${P.name} breaks away from ${owner.name} as a new nation, taking its land and cities.` +
+        (capital ? ` ${owner.name} loses its capital and moves its seat to its largest remaining city.` : ""),
+      "independence",
+    );
+    if (!ok || this.generator.getWorld() !== world || P.id !== provinceId || !world.provinces.includes(P)) return;
+    const idx = provinceIndependence(world, provinceId);
+    if (idx >= 0) this.politicsChanged(idx);
+  }
+
+  // Textures, caches and the list after nations were merged or founded;
+  // `removed` is the index of a nation that is gone
+  private politicsChanged(select: number, removed = -1) {
+    const world = this.generator.getWorld();
+    if (removed >= 0) {
+      this.nationSubTabs.clear();
+      this.expandedNations = new Set([...this.expandedNations].filter((i) => i !== removed).map((i) => (i > removed ? i - 1 : i)));
+    }
+    this.selectedNationIndex = select;
+    this.selectedProvinceIndex = -1;
+    this.hoveredNationIndex = -1;
+    this.hoveredProvinceIndex = -1;
+    this.expandedNations.add(select);
+    this.cityRenderer.invalidateAll(); // capitals and owners changed
+    this.gpuRenderer.updateProvincesDataTexture(world);
     this.nationsStateDirty = true;
     this.buildCache();
     this.renderList();
@@ -1356,6 +1496,7 @@ export class NationsManager {
     successor.isCapital = true;
     nation.capitalX = successor.x;
     nation.capitalY = successor.y;
+    refreshProvinceTypes(world);
     this.cityRenderer.invalidateCity(successor);
   }
 
@@ -1450,6 +1591,8 @@ export class NationsManager {
       const cell = world.getCell(city.x, city.y);
       if (cell) city.provinceIndex = cell.provinceIndex;
     }
+    // A capital painted over moves its capital district (0.2+ worlds)
+    refreshProvinceTypes(world);
     this.gpuRenderer.updateProvincesDataTexture(world);
   }
 

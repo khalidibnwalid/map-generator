@@ -1,9 +1,12 @@
+const SKIP_PREFIX = "confirm-skip:";
+
 export class UIManager {
   private loadingModal: HTMLElement | null;
   private confirmModal: HTMLElement | null;
   private generateBtn: HTMLButtonElement | null;
 
   private confirmResolve: ((value: boolean) => void) | null = null;
+  private skipKey: string | null = null;
 
   constructor() {
     this.loadingModal = document.getElementById("loading-modal");
@@ -20,6 +23,14 @@ export class UIManager {
     const btnCancel = this.confirmModal.querySelector("#confirm-cancel");
 
     btnOk?.addEventListener("click", () => {
+      const skip = this.confirmModal?.querySelector<HTMLInputElement>("#confirm-skip");
+      if (this.skipKey && skip?.checked) {
+        try {
+          localStorage.setItem(SKIP_PREFIX + this.skipKey, "1");
+        } catch {
+          /* storage blocked: it asks again next time */
+        }
+      }
       this.hideConfirm();
       if (this.confirmResolve) this.confirmResolve(true);
     });
@@ -30,8 +41,22 @@ export class UIManager {
     });
   }
 
-  public async confirm(title: string, message: string): Promise<boolean> {
+  // skipKey offers a "Don't ask me again" box; once ticked and confirmed,
+  // later confirmations with the same key pass without asking
+  public async confirm(title: string, message: string, skipKey?: string): Promise<boolean> {
+    if (skipKey) {
+      try {
+        if (localStorage.getItem(SKIP_PREFIX + skipKey) === "1") return true;
+      } catch {
+        /* storage blocked: ask */
+      }
+    }
     if (!this.confirmModal) return window.confirm(message);
+    this.skipKey = skipKey ?? null;
+    const skipRow = this.confirmModal.querySelector<HTMLElement>(".modal-skip");
+    const skip = this.confirmModal.querySelector<HTMLInputElement>("#confirm-skip");
+    if (skipRow) skipRow.hidden = !skipKey;
+    if (skip) skip.checked = false;
 
     const titleEl = this.confirmModal.querySelector(".modal-title");
     const messageEl = this.confirmModal.querySelector(".modal-message");

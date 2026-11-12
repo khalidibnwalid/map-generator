@@ -3,6 +3,7 @@ import { nationFlag, nationFlagUrl } from "../game/flags";
 import { RELATION_COLORS } from "../game/generators/generateDiplomacy";
 import { RESOURCE_INFO, WEALTH_TIERS, type ResourceKind } from "../game/generators/generateEconomy";
 import { relation } from "../game/politics";
+import { provinceTypeSummary } from "../game/provinceTypes";
 import type { SimEvent } from "../game/sim/Simulation";
 import type { ThematicMode } from "../core/GPURenderer";
 import { downloadBlob, escapeHtml, fileSlug, frameExtent, nationsExtent, type AtlasHost } from "./AtlasRender";
@@ -32,6 +33,7 @@ interface Facts {
   villages: number;
   topCities: City[];
   provinces: number;
+  provinceKinds: string; // "2 marches · 1 autonomous region"
   cultures: Share[];
   races: Share[];
   resources: { label: string; color: string; count: number }[];
@@ -136,6 +138,7 @@ function computeFacts(host: AtlasHost, idx: number): Facts {
     villages: own.filter((c) => c.size <= 0).length,
     topCities: [...own].sort((a, b) => b.population - a.population).slice(0, 5),
     provinces: world.provinces.filter((p) => p.nationIndex === idx).length,
+    provinceKinds: provinceTypeSummary(world.provinces.filter((p) => p.nationIndex === idx)),
     cultures: shares(cult, world.cultures),
     races: shares(racesOn, world.races),
     resources: [...res.entries()]
@@ -318,7 +321,7 @@ export class FactSheet {
             ${row("Area", `${num(f.areaKm2)} km² <small>${ordinal(f.areaRank)} of ${f.nations}</small>`)}
             ${row("Population", `${num(f.population)} <small>${ordinal(f.popRank)} of ${f.nations}</small>`)}
             ${row("Settlements", `${f.cities + f.towns + f.villages} <small>${settle}</small>`)}
-            ${row("Provinces", String(f.provinces))}
+            ${row("Provinces", `${f.provinces}${f.provinceKinds ? ` <small>${escapeHtml(f.provinceKinds)}</small>` : ""}`)}
             ${row("Wealth", `${f.wealthTier} <small>${ordinal(f.wealthRank)} richest</small>`)}
             ${f.overlord !== null && world.nations[f.overlord] ? row("Overlord", link(f.overlord)) : ""}
             ${f.vassals.length ? row("Vassals", `<span class="fs-links">${f.vassals.map(link).join("")}</span>`) : ""}
@@ -520,7 +523,7 @@ function paintSheet(ctx: CanvasRenderingContext2D, world: WorldData, f: Facts, m
     ["Area", `${num(f.areaKm2)} km²`, `${ordinal(f.areaRank)} of ${f.nations}`],
     ["Population", num(f.population), `${ordinal(f.popRank)} of ${f.nations}`],
     ["Settlements", String(f.cities + f.towns + f.villages), `${f.cities} cities · ${f.towns} towns · ${f.villages} villages`],
-    ["Provinces", String(f.provinces), ""],
+    ["Provinces", String(f.provinces), f.provinceKinds],
     ["Wealth", f.wealthTier, `${ordinal(f.wealthRank)} richest`],
   ];
   if (f.overlord !== null && world.nations[f.overlord]) facts.push(["Overlord", world.nations[f.overlord].name, ""]);

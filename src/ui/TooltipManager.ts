@@ -5,7 +5,7 @@ export class TooltipManager {
         this.tooltip = document.getElementById('nation-tooltip');
     }
 
-    public show(x: number, y: number, name: string, detail: string, flagUrl = "") {
+    public show(x: number, y: number, name: string, detail: string, flagUrl = "", badges: { icon: string; text: string }[] = []) {
         if (!this.tooltip) return;
 
         const nameEl = this.tooltip.querySelector('.tooltip-name');
@@ -21,6 +21,23 @@ export class TooltipManager {
             }
         }
         if (detailEl) detailEl.textContent = detail;
+
+        // Flagged lines under the detail (a realm's coalitions)
+        let badgeEl = this.tooltip.querySelector<HTMLElement>('.tooltip-badges');
+        if (!badgeEl) {
+            badgeEl = document.createElement('div');
+            badgeEl.className = 'tooltip-badges';
+            this.tooltip.appendChild(badgeEl);
+        }
+        badgeEl.replaceChildren(...badges.map((b) => {
+            const row = document.createElement('div');
+            const img = document.createElement('img');
+            img.className = 'tooltip-badge-flag';
+            img.src = b.icon;
+            row.append(img, b.text);
+            return row;
+        }));
+        badgeEl.style.display = badges.length ? '' : 'none';
 
         this.tooltip.style.display = 'block';
         this.tooltip.style.left = `${x + 16}px`;

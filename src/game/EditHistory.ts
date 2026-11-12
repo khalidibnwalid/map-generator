@@ -13,10 +13,10 @@ import { flagOf } from "./flags";
 // trade and the economy simulation key their state by object identity
 // (WeakMaps of nations and cities), and that must survive an undo.
 
-const CELL_FIELDS = ["nationIndex", "provinceIndex", "cultureIndex", "raceIndex"] as const;
+const CELL_FIELDS = ["nationIndex", "provinceIndex", "cultureIndex", "raceIndex", "culture2Index", "race2Index"] as const;
 type CellField = (typeof CELL_FIELDS)[number];
 
-const COLLECTIONS = ["nations", "provinces", "cities", "cultures", "races", "worldRoads", "pois"] as const;
+const COLLECTIONS = ["nations", "provinces", "cities", "cultures", "races", "worldRoads", "pois", "coalitions"] as const;
 type CollectionKey = (typeof COLLECTIONS)[number];
 type Obj = Record<string, unknown>;
 
@@ -28,6 +28,8 @@ const PART_NAMES: Record<CollectionKey | CellField | "relations", string> = {
   provinceIndex: "provinces",
   cultureIndex: "cultures",
   raceIndex: "races",
+  culture2Index: "cultures",
+  race2Index: "races",
   nations: "nations",
   provinces: "provinces",
   cities: "cities",
@@ -35,6 +37,7 @@ const PART_NAMES: Record<CollectionKey | CellField | "relations", string> = {
   races: "races",
   worldRoads: "roads",
   pois: "landmarks",
+  coalitions: "coalitions",
   relations: "diplomacy",
 };
 
@@ -110,7 +113,7 @@ export function captureWorld(world: WorldData): Snapshot {
   const N = W * H;
   const cells = {} as Snapshot["cells"];
   for (const f of CELL_FIELDS) cells[f] = new Int32Array(N);
-  const { nationIndex: ni, provinceIndex: pi, cultureIndex: ci, raceIndex: ri } = cells;
+  const { nationIndex: ni, provinceIndex: pi, cultureIndex: ci, raceIndex: ri, culture2Index: c2, race2Index: r2 } = cells;
   for (let x = 0; x < W; x++) {
     const col = world.grid[x];
     for (let y = 0; y < H; y++) {
@@ -120,6 +123,8 @@ export function captureWorld(world: WorldData): Snapshot {
       pi[i] = c.provinceIndex ?? -1;
       ci[i] = c.cultureIndex ?? -1;
       ri[i] = c.raceIndex ?? -1;
+      c2[i] = c.culture2Index ?? -1;
+      r2[i] = c.race2Index ?? -1;
     }
   }
   const order = {} as Snapshot["order"];
