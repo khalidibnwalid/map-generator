@@ -235,3 +235,134 @@ export function contours(v: Float32Array, n: number, res: number, o: number): Po
   }
   return loops;
 }
+
+// --- General (not only convex) polygons ---
+
+// Where segment a-b crosses segment c-d: t along a-b and u along c-d (both 0..1), or null
+export function segIntersect(a: Vec, b: Vec, c: Vec, d: Vec): { t: number; u: number } | null {
+  const rx = b.x - a.x;
+  const ry = b.y - a.y;
+  const sx = d.x - c.x;
+  const sy = d.y - c.y;
+  const den = rx * sy - ry * sx;
+  if (Math.abs(den) < 1e-9) return null;
+  const qx = c.x - a.x;
+  const qy = c.y - a.y;
+  const t = (qx * sy - qy * sx) / den;
+  const u = (qx * ry - qy * rx) / den;
+  if (t < 0 || t > 1 || u < 0 || u > 1) return null;
+  return { t, u };
+}
+
+// Inset of a simple polygon, each edge moved inward by its own distance
+// (d[i] for the edge from p[i] to p[i+1]). Works on mildly concave polygons:
+// corners are mitered (and clamped), and edges that collapse are dropped.
+// Null when the polygon vanishes.
+export function insetPoly(p: Poly, d: number | number[]): Poly | null {
+  if (p.length < 3) return null;
+  const s = area(p) > 0 ? 1 : -1;
+  // Each edge as an offset line: a point on it, its direction, and the original end points
+  type Line = { x: number; y: number; dx: number; dy: number; a: Vec; b: Vec; d: number };
+  let lines: Line[] = [];
+  for (let i = 0; i < p.length; i++) {
+    const a = p[i];
+    const b = p[(i + 1) % p.length];
+    const ex = b.x - a.x;
+    const ey = b.y - a.y;
+    const len = Math.hypot(ex, ey);
+    if (len < 1e-6) continue;
+    const di = typeof d === "number" ? d : d[i];
+    // Inward normal for this orientation (area() > 0 keeps the inside to the right)
+    const nx = (s * ey) / len;
+    const ny = (-s * ex) / len;
+    lines.push({ x: a.x + nx * di, y: a.y + ny * di, dx: ex / len, dy: ey / len, a, b, d: di });
+  }
+  for (let pass = 0; pass < p.length && lines.length >= 3; pass++) {
+    const n = lines.length;
+    const out: Poly = [];
+    for (let i = 0; i < n; i++) {
+      const L1 = lines[(i - 1 + n) % n];
+      const L2 = lines[i];
+      const den = L1.dx * L2.dy - L1.dy * L2.dx;
+      if (Math.abs(den) < 1e-6) {
+        out.push({ x: L2.x, y: L2.y });
+        continue;
+      }
+      const t = ((L2.x - L1.x) * L2.dy - (L2.y - L1.y) * L2.dx) / den;
+      const m = { x: L1.x + L1.dx * t, y: L1.y + L1.dy * t };
+      // Very sharp corners would shoot far out: clamp the miter
+      const base = L2.a;
+      const lim = 4 * Math.max(L1.d, L2.d, 1);
+      const mx = m.x - base.x;
+      const my = m.y - base.y;
+      const ml = Math.hypot(mx, my);
+      out.push(ml > lim ? { x: base.x + (mx / ml) * lim, y: base.y + (my / ml) * lim } : m);
+    }
+    // An edge whose inset runs backwards has collapsed: drop it, corners are re-mitered
+    const keep = lines.filter((L, i) => {
+      const a = out[i];
+      const b = out[(i + 1) % n];
+      return (b.x - a.x) * L.dx + (b.y - a.y) * L.dy > 0.01;
+    });
+    if (keep.length === n) {
+      if (Math.abs(area(out)) < 2 || Math.sign(area(out)) !== s || selfIntersects(out)) return null;
+      return out;
+    }
+    lines = keep;
+  }
+  return null;
+}
+
+// Whether any two non-adjacent edges of the polygon cross
+export function selfIntersects(p: Poly): boolean {
+  const n = p.length;
+  if (n < 4) return false;
+  for (let i = 0; i < n; i++) {
+    const a = p[i];
+    const b = p[(i + 1) % n];
+    for (let j = i + 2; j < n; j++) {
+      if (i === 0 && j === n - 1) continue;
+      if (segIntersect(a, b, p[j], p[(j + 1) % n])) return true;
+    }
+  }
+  return false;
+}
+
+// Drops vertices where the outline barely turns (keeps the per-edge data in step)
+export function simplifyPoly<T>(p: Poly, data: T[], minTurn = 0.06, minLen = 2): { poly: Poly; data: T[] } {
+  const poly = p.slice();
+  const dat = data.slice();
+  for (let changed = true; changed && poly.length > 3; ) {
+    changed = false;
+    for (let i = 0; i < poly.length && poly.length > 3; i++) {
+      const n = poly.length;
+      const a = poly[(i - 1 + n) % n];
+      const b = poly[i];
+      const c = poly[(i + 1) % n];
+      const l1 = Math.hypot(b.x - a.x, b.y - a.y);
+      const l2 = Math.hypot(c.x - b.x, c.y - b.y);
+      const cross = ((b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x)) / Math.max(1e-9, l1 * l2);
+      const dot = ((b.x - a.x) * (c.x - b.x) + (b.y - a.y) * (c.y - b.y)) / Math.max(1e-9, l1 * l2);
+      if (l1 < minLen || (Math.abs(cross) < minTurn && dot > 0)) {
+        // Vertex b goes: the edge before it takes over
+        poly.splice(i, 1);
+        dat.splice(i, 1);
+        changed = true;
+        i--;
+      }
+    }
+  }
+  return { poly, data: dat };
+}
+
+// Distance from (x, y) along direction (dx, dy) to the polygon's boundary (Infinity if none)
+export function rayToPoly(p: Poly, x: number, y: number, dx: number, dy: number): number {
+  let best = Infinity;
+  const far = { x: x + dx * 1e5, y: y + dy * 1e5 };
+  const o = { x, y };
+  for (let i = 0; i < p.length; i++) {
+    const r = segIntersect(o, far, p[i], p[(i + 1) % p.length]);
+    if (r && r.t * 1e5 > 0.01) best = Math.min(best, r.t * 1e5);
+  }
+  return best;
+}

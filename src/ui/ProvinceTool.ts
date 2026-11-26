@@ -1,8 +1,9 @@
 import type { CanvasManager } from "../core/CanvasManager";
-import type { Nation, Province, WorldData } from "../game/WorldData";
+import { CELL_KM2, type Nation, type Province, type WorldData } from "../game/WorldData";
 import { colorForNewNation } from "../game/generators/generateNations";
 import { nationFlagUrl } from "../game/flags";
-import { makeVassal, transferProvinces, type NewRealm, type TransferResult } from "../game/politics";
+import { makeVassal, mergeProvinces, pieceCells, pieceLabel, splitProvince, transferProvinces, type NewRealm, type TransferResult } from "../game/politics";
+import { rng } from "../game/city/geom";
 import { createDropdown } from "./components/Dropdown";
 import { toast } from "./components/Toast";
 import { copiesInView } from "./WarRenderer";
@@ -28,10 +29,14 @@ export interface ProvinceToolHost {
   toggled(open: boolean): void;
   // A peace is settled: the occupied land not handed over returns ("return"),
   // or history settles it the usual way ("history")
-  settle(war: PeaceTable, how: "return" | "history"): void;
+  settle(war: PeaceTable, how: Settlement): void;
   // The last peace on the table is settled (history may carry on)
   conferenceDone(): void;
 }
+
+// How a peace ends: land still occupied goes back ("return"), each side keeps
+// exactly what it occupies ("occupied"), or history settles it ("history")
+export type Settlement = "return" | "occupied" | "history";
 
 // A war that just ended in the History simulation, its peace left to the user
 export interface PeaceTable {
@@ -45,14 +50,17 @@ export interface Conference {
 }
 
 type Mode = "select" | "paint";
-type PickBy = "province" | "realm" | "region"; // what a click selects
+type PickBy = "area" | "province" | "realm" | "region"; // what a click selects
 const NEW = -2; // paint target: a new realm, formed by the first stroke
 
 const esc = (t: string) => t.replace(/[&<>"]/g, (ch) => `&#${ch.charCodeAt(0)};`);
 const km2 = (cells: number) => `${Math.round(cells).toLocaleString()} km²`;
 const PICK_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l5 15 2.5-6.5L19 9z"/><path d="m13 13 6 6"/></svg>`;
-const MAX_CHIPS = 10;
+const regionWord = (v: number) =>
+  v >= 0.95 ? "Largest" : v >= 0.75 ? "Large" : v >= 0.5 ? "A few provinces" : v >= 0.3 ? "Part of a province" : v > 0 ? "Smaller than an area" : "One cell";
+const MAX_CHIPS = 3; // chips shown before "+N more"
 const PICK_HINT: Record<PickBy, string> = {
+  area: "Click areas smaller than a province: each is shown in 3 to 10 natural areas, around its towns and between rivers and ridges.",
   province: "Click provinces to select them, or drag across many.",
   realm: "Click a realm to select all its provinces.",
   region: "Click to select a natural region: the provinces up to the nearest rivers, ridges and coasts.",
@@ -65,7 +73,9 @@ const PICK_HINT: Record<PickBy, string> = {
 // stays a region (a valley, a plain) rather than a continent. Realm borders
 // are no obstacle.
 const RIDGE = 0.67;
-export function naturalRegion(world: WorldData, start: Province): Province[] {
+export const REGION_MAX = 3.5; // travel budget of the largest regions
+const REGION_MIN = 0.9; // the smallest: the province alone (every crossing costs at least 1)
+export function naturalRegion(world: WorldData, start: Province, budget = REGION_MAX): Province[] {
   const W = world.width;
   const H = world.height;
   const shared = new Map<number, number>(); // pair key -> border cells
@@ -101,7 +111,7 @@ export function naturalRegion(world: WorldData, start: Province): Province[] {
     (next.get(b) ?? next.set(b, []).get(b)!).push({ to: a, cost });
   }
   // Cheapest spread from the start, within a budget
-  const BUDGET = 3.5;
+  const BUDGET = budget;
   const best = new Map<number, number>([[start.id, 0]]);
   const open = [start.id];
   while (open.length) {
@@ -135,8 +145,21 @@ export class ProvinceTool {
   private maskKey = 0; // bumped when land changes hands
   private world: WorldData | null = null;
   private conference: Conference | null = null;
+  private splitOn = true; // conferences cut large provinces into pieces
+  private splits = new Map<Province, Province[]>(); // province -> its pieces (itself first), this conference
   private pickBy: PickBy = "province";
-  private renaming: HTMLInputElement | null = null; // inline name editor on the map
+  private chipsOpen = false; // the whole list of chips, not just the first few
+  // Areas: provinces shown cut into natural pieces (nothing changes until an action)
+  private areaSel = new Map<Province, Set<number>>(); // province -> its selected pieces
+  private hoverArea: { p: Province; k: number } | null = null;
+  private areaStroke: boolean | null = null; // adding (true) or removing areas in this drag
+  private areaCache = new Map<string, { pieces: number[][]; of: Map<number, number> }>();
+  private regionCache = new Map<string, Province[]>(); // natural regions by province, this map state
+  private regionSize = 1; // 0 smallest .. 1 largest (the Region size slider)
+  // Below the middle of the slider a region is a patch of one province's land
+  // (smaller than the province, down to a single cell)
+  private patches: { p: Province; cells: number[] }[] = [];
+  private hoverPatch: { p: Province; cells: number[] } | null = null;
 
   constructor(host: ProvinceToolHost, el: HTMLElement) {
     this.host = host;
@@ -145,6 +168,15 @@ export class ProvinceTool {
     el.addEventListener("click", (e) => this.onPanelClick(e));
     el.addEventListener("input", (e) => {
       const t = e.target as HTMLInputElement;
+      if (t.classList.contains("pt-region-size")) {
+        // Live: the hovered region redraws while the slider moves (the panel stays put)
+        this.regionSize = Number(t.value) / 20;
+        this.hoverPatch = null;
+        const out = el.querySelector(".pt-region-value");
+        if (out) out.textContent = regionWord(this.regionSize);
+        this.host.canvas.scheduleRender();
+        return;
+      }
       if (t.classList.contains("pt-name")) this.newName = t.value;
       else if (t.classList.contains("pt-color")) {
         this.newColor = t.value;
@@ -189,6 +221,7 @@ export class ProvinceTool {
     this.syncWorld();
     this.conference = c;
     this.mode = "select";
+    this.pickBy = "province"; // the conference panel has no pick choice: one province at a time
     if (!this.nextWar()) return;
     if (this.active) this.refresh();
     else this.open();
@@ -206,6 +239,14 @@ export class ProvinceTool {
       return false;
     }
     const war = c.wars[0];
+    if (this.splitOn) this.splitTable(war);
+    this.selectHeld(war);
+    return true;
+  }
+
+  // On the table: the loser's provinces (or pieces) the victor holds at least half of
+  private selectHeld(war: PeaceTable) {
+    const world = this.host.world();
     const wi = world.nations.indexOf(war.winner);
     const li = world.nations.indexOf(war.loser);
     this.target = wi;
@@ -224,7 +265,6 @@ export class ProvinceTool {
     }
     this.selected.clear();
     for (const [p, n] of held) if (n / all.get(p)! >= 0.5) this.selected.add(world.provinces[p]);
-    return true;
   }
 
   private get war(): PeaceTable | null {
@@ -239,20 +279,107 @@ export class ProvinceTool {
     return [world.nations.indexOf(w.winner), world.nations.indexOf(w.loser)].filter((i) => i >= 0);
   }
 
-  private settle(how: "return" | "history") {
+  private settle(how: Settlement) {
     const w = this.war;
     if (!w) return;
+    // Keeping the occupied land cuts provinces along the front itself: whole provinces first
+    if (how === "occupied") this.unsplit();
     this.host.settle(w, how);
+    // Pieces still with the same owner join up again
+    this.unsplit();
     this.maskKey++;
     this.conference!.wars.shift();
     if (this.nextWar()) this.refresh();
   }
 
+  // Cuts the large provinces in play into pieces: the provinces of either
+  // side holding land the other occupies, and the loser's provinces next to
+  // them. Pieces keep the province's outline; they are named by where they lie.
+  private splitTable(war: PeaceTable) {
+    const world = this.host.world();
+    const a = world.nations.indexOf(war.winner);
+    const b = world.nations.indexOf(war.loser);
+    if (a < 0 || b < 0) return;
+    const W = world.width;
+    const cells = new Map<number, number>();
+    const touched = new Set<number>();
+    for (let x = 0; x < W; x++)
+      for (let y = 0; y < world.height; y++) {
+        const c = world.grid[x][y];
+        const pi = c.provinceIndex;
+        if (c.isWater || pi === undefined || pi < 0) continue;
+        cells.set(pi, (cells.get(pi) ?? 0) + 1);
+        const p = world.provinces[pi];
+        if (!p || (p.nationIndex !== a && p.nationIndex !== b)) continue;
+        if (c.nationIndex !== p.nationIndex && (c.nationIndex === a || c.nationIndex === b)) touched.add(pi);
+      }
+    // The loser's provinces bordering those
+    const near = new Set(touched);
+    for (let x = 0; x < W; x++)
+      for (let y = 0; y < world.height; y++) {
+        const pi = world.grid[x][y].provinceIndex;
+        if (pi === undefined || !touched.has(pi)) continue;
+        for (const [nx, ny] of [[(x + 1) % W, y], [x, y + 1]]) {
+          if (ny >= world.height) continue;
+          const q = world.grid[nx][ny].provinceIndex;
+          if (q !== undefined && q >= 0 && world.provinces[q]?.nationIndex === b) near.add(q);
+        }
+      }
+    // 3 to 10 pieces a province, about a quarter of a typical province each
+    const sizes = [...cells.values()].sort((x, y) => x - y);
+    const median = sizes[sizes.length >> 1] ?? 40;
+    const piece = Math.max(4, Math.min(40, Math.round(median / 4)));
+    const provs = [...near].map((i) => world.provinces[i]).filter((p): p is Province => !!p && !this.splits.has(p));
+    let any = false;
+    for (const p of provs) {
+      const n = cells.get(p.id) ?? 0;
+      if (n < 9) continue; // too small to cut in three
+      const parts = splitProvince(world, p, Math.max(3, Math.min(10, Math.round(n / piece))));
+      if (parts.length > 1) {
+        this.splits.set(p, parts);
+        any = true;
+      }
+    }
+    if (any) {
+      this.maskKey++;
+      this.host.changed(Math.max(0, a));
+    }
+  }
+
+  // Pieces that still share an owner become one province again; pieces that
+  // changed hands stay provinces of their own
+  private unsplit() {
+    if (!this.splits.size) return;
+    const world = this.host.world();
+    for (const [orig, parts] of this.splits) {
+      const live = parts.filter((q) => world.provinces.includes(q));
+      const byOwner = new Map<number, Province[]>();
+      for (const q of live) (byOwner.get(q.nationIndex) ?? byOwner.set(q.nationIndex, []).get(q.nationIndex)!).push(q);
+      for (const group of byOwner.values()) {
+        const keep = group.includes(orig) ? orig : group[0];
+        mergeProvinces(world, keep, group.filter((q) => q !== keep));
+      }
+    }
+    this.splits.clear();
+    this.maskKey++;
+    this.host.changed(Math.max(0, world.nations.indexOf(this.war?.winner ?? world.nations[0])));
+  }
+
+  private setSplit(on: boolean) {
+    this.splitOn = on;
+    const w = this.war;
+    if (!w) return;
+    if (on) this.splitTable(w);
+    else this.unsplit();
+    this.selectHeld(w); // drawn again, piece by piece (or whole)
+    this.refresh();
+  }
+
   // The selection becomes a realm of its own, bound to the victor
   private vassal() {
     const w = this.war;
-    if (!w || !this.selected.size) return;
-    const res = this.apply([...this.selected], this.newRealm());
+    if (!w || !this.hasPick()) return;
+    const res = this.apply(this.materialize(), this.newRealm());
     if (!res) return;
     const world = this.host.world();
     const lord = world.nations.indexOf(w.winner);
@@ -288,6 +415,8 @@ export class ProvinceTool {
     if (world === this.world) return;
     this.world = world;
     this.selected.clear();
+    this.areaSel.clear();
+    this.patches = [];
     this.pending.clear();
     this.target = -1;
     this.maskKey++;
@@ -296,6 +425,8 @@ export class ProvinceTool {
   // Undo or redo restored the world: the selection is re-checked, the overlay redrawn
   public invalidate() {
     this.maskKey++;
+    this.areaSel.clear(); // areas are drawn afresh from the restored land
+    this.patches = [];
     if (this.active) this.refresh();
   }
 
@@ -307,6 +438,11 @@ export class ProvinceTool {
   // --- Map input (screen coordinates) ---
 
   private provinceAt(clientX: number, clientY: number): Province | null {
+    return this.hitAt(clientX, clientY)?.p ?? null;
+  }
+
+  // The province under the pointer, and the cell
+  private hitAt(clientX: number, clientY: number): { p: Province; cell: number } | null {
     const world = this.host.world();
     const cm = this.host.canvas;
     const rect = cm.canvas.getBoundingClientRect();
@@ -317,7 +453,205 @@ export class ProvinceTool {
     const c = world.grid[x][y];
     if (c.isWater || c.provinceIndex === undefined || c.provinceIndex < 0) return null;
     const p = world.provinces[c.provinceIndex];
-    return p && p.id === c.provinceIndex && world.nations[p.nationIndex] && this.belongs(p, c.nationIndex) ? p : null;
+    return p && p.id === c.provinceIndex && world.nations[p.nationIndex] && this.belongs(p, c.nationIndex) && this.inPlay(p) ? { p, cell: y * world.width + x } : null;
+  }
+
+  // A province's natural areas (cached; the same every time for the same land)
+  private areasOf(p: Province): { pieces: number[][]; of: Map<number, number> } {
+    const world = this.host.world();
+    const key = `${this.maskKey}|${world.provinces.length}|${p.id}`;
+    let a = this.areaCache.get(key);
+    if (a) return a;
+    if (this.areaCache.size > 128) this.areaCache.clear();
+    // About a quarter of a typical province each, 3 to 10 a province
+    let size = 0;
+    for (let x = 0; x < world.width; x++) for (let y = 0; y < world.height; y++) if (!world.grid[x][y].isWater && world.grid[x][y].provinceIndex === p.id) size++;
+    const typical = this.typicalProvince(world);
+    const parts = size < 9 ? 1 : Math.max(3, Math.min(10, Math.round(size / Math.max(4, typical / 4))));
+    const pieces = parts > 1 ? pieceCells(world, p, parts, rng((world.seed ^ (p.id * 7919) ^ size) >>> 0)) : [[]];
+    if (parts <= 1 || pieces.length < 2) {
+      // Too small to cut: one area, the province itself
+      const all: number[] = [];
+      for (let x = 0; x < world.width; x++) for (let y = 0; y < world.height; y++) if (!world.grid[x][y].isWater && world.grid[x][y].provinceIndex === p.id) all.push(y * world.width + x);
+      a = { pieces: [all], of: new Map(all.map((c) => [c, 0])) };
+    } else {
+      const of = new Map<number, number>();
+      pieces.forEach((cells, k) => cells.forEach((c) => of.set(c, k)));
+      a = { pieces, of };
+    }
+    this.areaCache.set(key, a);
+    return a;
+  }
+
+  private typicalCache: { key: string; n: number } | null = null;
+  private typicalProvince(world: WorldData): number {
+    const key = `${this.maskKey}|${world.provinces.length}`;
+    if (this.typicalCache?.key === key) return this.typicalCache.n;
+    const n = new Map<number, number>();
+    for (let x = 0; x < world.width; x++)
+      for (let y = 0; y < world.height; y++) {
+        const pi = world.grid[x][y].provinceIndex;
+        if (!world.grid[x][y].isWater && pi !== undefined && pi >= 0) n.set(pi, (n.get(pi) ?? 0) + 1);
+      }
+    const sizes = [...n.values()].sort((a, b) => a - b);
+    this.typicalCache = { key, n: sizes[sizes.length >> 1] ?? 40 };
+    return this.typicalCache.n;
+  }
+
+  private areaAt(clientX: number, clientY: number): { p: Province; k: number } | null {
+    const hit = this.hitAt(clientX, clientY);
+    if (!hit) return null;
+    const k = this.areasOf(hit.p).of.get(hit.cell);
+    return k === undefined ? null : { p: hit.p, k };
+  }
+
+  private areaSelected(a: { p: Province; k: number }): boolean {
+    return this.areaSel.get(a.p)?.has(a.k) ?? false;
+  }
+
+  private setArea(a: { p: Province; k: number }, on: boolean) {
+    let set = this.areaSel.get(a.p);
+    if (on) {
+      if (!set) this.areaSel.set(a.p, (set = new Set()));
+      set.add(a.k);
+    } else if (set) {
+      set.delete(a.k);
+      if (!set.size) this.areaSel.delete(a.p);
+    }
+  }
+
+  // Anything selected: provinces, areas or patches
+  private hasPick(): boolean {
+    return this.selected.size > 0 || this.areaSel.size > 0 || this.patches.length > 0;
+  }
+
+  private get areaCount(): number {
+    let n = 0;
+    for (const s of this.areaSel.values()) n += s.size;
+    return n;
+  }
+
+  // Selected areas made real: a province picked whole is itself; otherwise
+  // it is cut into its areas, the picked ones returned, and the rest joined
+  // again as one province that keeps its name. Clears the area selection.
+  private materialize(): Province[] {
+    const world = this.host.world();
+    const W = world.width;
+    const out = [...this.selected].filter((p) => world.provinces.includes(p));
+    // Land picked inside each province: its areas and patches
+    const picked = new Map<Province, Set<number>>();
+    const add = (p: Province, cells: number[]) => {
+      if (!world.provinces.includes(p) || out.includes(p)) return;
+      const set = picked.get(p) ?? picked.set(p, new Set()).get(p)!;
+      for (const c of cells) set.add(c);
+    };
+    for (const [p, ks] of this.areaSel) {
+      const { pieces } = this.areasOf(p);
+      for (const k of ks) add(p, pieces[k] ?? []);
+    }
+    for (const b of this.patches) add(b.p, b.cells);
+    for (const [p, set] of picked) {
+      const all: number[] = [];
+      for (let x = 0; x < W; x++)
+        for (let y = 0; y < world.height; y++) {
+          const c = world.grid[x][y];
+          if (!c.isWater && c.provinceIndex === p.id) all.push(y * W + x);
+        }
+      const rest = all.filter((c) => !set.has(c));
+      if (!rest.length) {
+        out.push(p); // all of it
+        continue;
+      }
+      // Each connected piece of picked land becomes a province; the rest keeps the old one
+      const groups: number[][] = [];
+      const seen = new Set<number>();
+      for (const start of set) {
+        if (seen.has(start)) continue;
+        const g = [start];
+        seen.add(start);
+        for (let h = 0; h < g.length; h++) {
+          const c = g[h];
+          const x = c % W;
+          const y = Math.floor(c / W);
+          for (const nb of [y * W + ((x + 1) % W), y * W + ((x - 1 + W) % W), y > 0 ? c - W : -1, y < world.height - 1 ? c + W : -1])
+            if (nb >= 0 && set.has(nb) && !seen.has(nb)) {
+              seen.add(nb);
+              g.push(nb);
+            }
+        }
+        groups.push(g);
+      }
+      const parts = splitProvince(world, p, groups.length + 1, Math.random, [rest, ...groups]);
+      out.push(...parts.slice(1));
+    }
+    this.areaSel.clear();
+    this.patches = [];
+    this.maskKey++;
+    return out;
+  }
+
+  // A patch of province `p` around `cell`: the `size` cells nearest by travel
+  // (rivers and ridges are dear, so patches end at them)
+  private patchAt(p: Province, cell: number, size: number): number[] {
+    const world = this.host.world();
+    const W = world.width;
+    const H = world.height;
+    const inP = (c: number) => {
+      const g = world.grid[c % W][Math.floor(c / W)];
+      return !g.isWater && g.provinceIndex === p.id;
+    };
+    const best = new Map<number, number>([[cell, 0]]);
+    const done = new Set<number>();
+    const open = [cell];
+    const out: number[] = [];
+    while (open.length && out.length < size) {
+      let bi = 0;
+      for (let i = 1; i < open.length; i++) if (best.get(open[i])! < best.get(open[bi])!) bi = i;
+      const c = open.splice(bi, 1)[0];
+      if (done.has(c)) continue;
+      done.add(c);
+      out.push(c);
+      const a = world.grid[c % W][Math.floor(c / W)];
+      const x = c % W;
+      const y = Math.floor(c / W);
+      for (const nb of [y * W + ((x + 1) % W), y * W + ((x - 1 + W) % W), y > 0 ? c - W : -1, y < H - 1 ? c + W : -1]) {
+        if (nb < 0 || done.has(nb) || !inP(nb)) continue;
+        const b = world.grid[nb % W][Math.floor(nb / W)];
+        let cost = 1;
+        if (a.hasRiver !== b.hasRiver || (a.hasRiver && b.hasRiver)) cost += 5;
+        cost += Math.abs(b.elevation - a.elevation) * 60;
+        if (Math.max(a.elevation, b.elevation) > 0.67) cost += 3;
+        const v = best.get(c)! + cost;
+        if (v < (best.get(nb) ?? Infinity)) {
+          best.set(nb, v);
+          open.push(nb);
+        }
+      }
+    }
+    return out;
+  }
+
+  // The patch a click at this spot takes, at the slider's size (null above the middle)
+  private patchFor(clientX: number, clientY: number): { p: Province; cells: number[] } | null {
+    if (this.mode !== "select" || this.pickBy !== "region" || this.regionSize >= 0.5) return null;
+    const hit = this.hitAt(clientX, clientY);
+    if (!hit) return null;
+    const { pieces } = this.areasOf(hit.p);
+    const total = pieces.reduce((n, q) => n + q.length, 0);
+    // From one cell up to the whole province, finer at the small end
+    const f = Math.pow(this.regionSize / 0.5, 2);
+    return { p: hit.p, cells: this.patchAt(hit.p, hit.cell, Math.max(1, Math.round(total * f))) };
+  }
+
+  // At a peace conference only the two sides' land is on the table (with
+  // their vassals'); other realms can't be hovered or picked
+  private inPlay(p: Province): boolean {
+    const w = this.war;
+    if (!w) return true;
+    const world = this.host.world();
+    const sides = new Set([world.nations.indexOf(w.winner), world.nations.indexOf(w.loser)]);
+    const n = world.nations[p.nationIndex];
+    return sides.has(p.nationIndex) || (n?.overlord !== undefined && sides.has(n.overlord));
   }
 
   // A cell is part of province P when P's realm holds it, or (at a peace
@@ -344,10 +678,37 @@ export class ProvinceTool {
       toast("Pick the realm to paint into first");
       return true;
     }
+    // Areas: a drag selects (or clears) the areas it crosses
+    if (this.mode === "select" && this.pickBy === "area") {
+      const a = this.areaAt(e.clientX, e.clientY);
+      this.areaStroke = !a || !this.areaSelected(a);
+      if (a) this.setArea(a, this.areaStroke);
+      this.refresh();
+      try {
+        this.host.canvas.canvas.setPointerCapture(e.pointerId);
+      } catch {
+        /* pointer already gone */
+      }
+      return true;
+    }
+    // A patch of a province: a click takes it, or a click inside one drops it
+    if (this.mode === "select" && this.pickBy === "region" && this.regionSize < 0.5) {
+      const hit = this.hitAt(e.clientX, e.clientY);
+      if (hit) {
+        const inside = this.patches.findIndex((b) => b.p === hit.p && b.cells.includes(hit.cell));
+        if (inside >= 0) this.patches.splice(inside, 1);
+        else {
+          const b = this.patchFor(e.clientX, e.clientY);
+          if (b) this.patches.push(b);
+        }
+        this.refresh();
+      }
+      return true;
+    }
     // A whole realm or natural region at once (no stroke)
     if (this.mode === "select" && this.pickBy !== "province") {
       if (p) {
-        const group = this.pickBy === "realm" ? this.host.world().provinces.filter((q) => q.nationIndex === p.nationIndex) : naturalRegion(this.host.world(), p);
+        const group = this.pickGroup(p);
         const add = !this.selected.has(p);
         for (const q of group) {
           if (add) this.selected.add(q);
@@ -371,6 +732,30 @@ export class ProvinceTool {
   public pointerMove(e: PointerEvent): boolean {
     if (!this.active) return false;
     this.host.canvas.canvas.style.cursor = this.picking ? "pointer" : "crosshair";
+    if (this.mode === "select" && this.pickBy === "area") {
+      const a = this.areaAt(e.clientX, e.clientY);
+      if (a?.p !== this.hoverArea?.p || a?.k !== this.hoverArea?.k) {
+        this.hoverArea = a;
+        this.host.canvas.scheduleRender();
+      }
+      if (this.areaStroke === null) return false;
+      if (a && this.areaSelected(a) !== this.areaStroke) {
+        this.setArea(a, this.areaStroke);
+        this.refresh();
+      }
+      return true;
+    }
+    this.hoverArea = null;
+    if (this.mode === "select" && this.pickBy === "region" && this.regionSize < 0.5) {
+      const hit = this.hitAt(e.clientX, e.clientY);
+      const same = hit && this.hoverPatch?.p === hit.p && this.hoverPatch.cells.includes(hit.cell);
+      if (!same) {
+        this.hoverPatch = this.patchFor(e.clientX, e.clientY);
+        this.host.canvas.scheduleRender();
+      }
+      return false;
+    }
+    this.hoverPatch = null;
     const p = this.provinceAt(e.clientX, e.clientY);
     if (p !== this.hover) {
       this.hover = p;
@@ -383,6 +768,10 @@ export class ProvinceTool {
 
   // The stroke ends: a paint stroke hands its provinces over at once
   public pointerUp(): boolean {
+    if (this.areaStroke !== null) {
+      this.areaStroke = null;
+      return true;
+    }
     if (!this.stroke) return false;
     this.stroke = null;
     if (this.mode === "paint" && this.pending.size) {
@@ -395,50 +784,10 @@ export class ProvinceTool {
     return true;
   }
 
-  // Double-click a province: rename it right there on the map
-  public dblClick(e: MouseEvent): boolean {
-    if (!this.active || this.mode !== "select") return false;
-    const p = this.provinceAt(e.clientX, e.clientY);
-    if (p) this.rename(p, e.clientX, e.clientY);
-    return true;
-  }
-
-  private rename(p: Province, clientX: number, clientY: number) {
-    this.renaming?.remove();
-    const host = this.el.parentElement ?? document.body;
-    const box = host.getBoundingClientRect();
-    const input = document.createElement("input");
-    input.type = "text";
-    input.className = "pt-rename";
-    input.value = p.name;
-    input.maxLength = 48;
-    input.setAttribute("aria-label", "Province name");
-    input.style.left = `${clientX - box.left}px`;
-    input.style.top = `${clientY - box.top}px`;
-    host.appendChild(input);
-    this.renaming = input;
-    input.focus();
-    input.select();
-    let done = false;
-    const finish = (keep: boolean) => {
-      if (done) return;
-      done = true;
-      const name = input.value.trim();
-      input.remove();
-      if (this.renaming === input) this.renaming = null;
-      if (keep && name && name !== p.name && this.host.world().provinces.includes(p)) {
-        p.name = name;
-        toast(`Province renamed ${name}`);
-        this.host.changed(p.nationIndex);
-      }
-      this.refresh();
-    };
-    input.addEventListener("keydown", (ev) => {
-      ev.stopPropagation(); // Esc and shortcuts stay with the field
-      if (ev.key === "Enter") finish(true);
-      else if (ev.key === "Escape") finish(false);
-    });
-    input.addEventListener("blur", () => finish(true));
+  // Double-click: nothing of its own (its two clicks already toggled), kept
+  // from the map's other double-click actions
+  public dblClick(_e: MouseEvent): boolean {
+    return this.active && this.mode === "select";
   }
 
   private strokeOver(p: Province) {
@@ -483,8 +832,8 @@ export class ProvinceTool {
   }
 
   private form() {
-    if (!this.selected.size) return;
-    const res = this.apply([...this.selected], this.newRealm());
+    if (!this.hasPick()) return;
+    const res = this.apply(this.materialize(), this.newRealm());
     if (!res) return;
     this.selected.clear();
     this.newName = "";
@@ -495,16 +844,16 @@ export class ProvinceTool {
 
   private annex() {
     const world = this.host.world();
-    if (!this.selected.size || !world.nations[this.target]) return;
-    if (this.apply([...this.selected], this.target)) this.selected.clear();
+    if (!this.hasPick() || !world.nations[this.target]) return;
+    if (this.apply(this.materialize(), this.target)) this.selected.clear();
     this.refresh();
   }
 
   // Each selected province becomes a realm of its own
   private release() {
-    const list = [...this.selected];
-    if (!list.length) return;
     const world = this.host.world();
+    const list = this.materialize();
+    if (!list.length) return;
     let made = 0;
     let last = -1;
     const gone: string[] = [];
@@ -536,6 +885,20 @@ export class ProvinceTool {
       return;
     }
     const rm = t.closest<HTMLElement>("[data-rm]");
+    const rma = t.closest<HTMLElement>("[data-rma]");
+    const rmp = t.closest<HTMLElement>("[data-rmp]");
+    if (rmp) {
+      this.patches.splice(Number(rmp.dataset.rmp), 1);
+      this.refresh();
+      return;
+    }
+    if (rma) {
+      const [pid, k] = rma.dataset.rma!.split(":").map(Number);
+      const p = [...this.areaSel.keys()].find((q) => q.id === pid);
+      if (p) this.setArea({ p, k }, false);
+      this.refresh();
+      return;
+    }
     if (mode && mode !== this.mode) {
       this.mode = mode;
       this.picking = false;
@@ -558,10 +921,19 @@ export class ProvinceTool {
         return this.settle("return");
       case "history":
         return this.settle("history");
+      case "occupied":
+        return this.settle("occupied");
+      case "split":
+        return this.setSplit(!this.splitOn);
       case "vassal":
         return this.vassal();
       case "clear":
         this.selected.clear();
+        this.areaSel.clear();
+        this.patches = [];
+        return this.refresh();
+      case "chips":
+        this.chipsOpen = !this.chipsOpen;
         return this.refresh();
       case "pick":
         this.picking = !this.picking;
@@ -611,30 +983,62 @@ export class ProvinceTool {
     if (this.mode === "select") {
       const owners = new Map<number, number>();
       let area = 0;
-      for (const p of sel) {
+      // Whole provinces, then areas (named by their town or where they lie)
+      const items: { name: string; owner: number; rm: string }[] = [];
+      sel.forEach((p, k) => {
         owners.set(p.nationIndex, (owners.get(p.nationIndex) ?? 0) + 1);
         area += p.area ?? 0;
+        items.push({ name: p.name, owner: p.nationIndex, rm: `data-rm="${k}"` });
+      });
+      const taken = new Set<string>();
+      for (const [p, ks] of this.areaSel) {
+        if (!world.provinces.includes(p)) continue;
+        const { pieces } = this.areasOf(p);
+        for (const k of ks) {
+          const cells = pieces[k];
+          if (!cells) continue;
+          owners.set(p.nationIndex, (owners.get(p.nationIndex) ?? 0) + 1);
+          area += cells.length * CELL_KM2;
+          items.push({ name: pieces.length > 1 ? pieceLabel(world, p, cells, taken) : p.name, owner: p.nationIndex, rm: `data-rma="${p.id}:${k}"` });
+        }
       }
+      this.patches.forEach((b, i) => {
+        if (!world.provinces.includes(b.p)) return;
+        owners.set(b.p.nationIndex, (owners.get(b.p.nationIndex) ?? 0) + 1);
+        area += b.cells.length * CELL_KM2;
+        items.push({ name: `Part of ${b.p.name}`, owner: b.p.nationIndex, rm: `data-rmp="${i}"` });
+      });
+      const areas = this.areaCount + this.patches.length;
+      const count = sel.length + areas;
       // A new realm's suggested color, unlike its neighbors'
-      if (!this.colorTouched && (!this.newColor || !sel.length)) this.newColor = colorForNewNation(world, [...owners.keys()]);
-      const none = sel.length ? "" : "disabled";
-      const chips = sel
-        .slice(0, MAX_CHIPS)
-        .map((p, k) => `<span class="pt-chip" title="${esc(p.name)} · ${esc(world.nations[p.nationIndex].name)}">${flag(p.nationIndex)}<span>${esc(p.name)}</span><button type="button" data-rm="${k}" title="Deselect" aria-label="Deselect ${esc(p.name)}">✕</button></span>`)
+      if (!this.colorTouched && (!this.newColor || !count)) this.newColor = colorForNewNation(world, [...owners.keys()]);
+      const none = count ? "" : "disabled";
+      const chips = items
+        .slice(0, this.chipsOpen ? items.length : MAX_CHIPS)
+        .map((it) => `<span class="pt-chip" title="${esc(it.name)} · ${esc(world.nations[it.owner]?.name ?? "")}">${flag(it.owner)}<span>${esc(it.name)}</span><button type="button" ${it.rm} title="Deselect" aria-label="Deselect ${esc(it.name)}">✕</button></span>`)
         .join("");
+      const what = [sel.length ? `<strong>${sel.length}</strong> province${sel.length === 1 ? "" : "s"}` : "", areas ? `<strong>${areas}</strong> area${areas === 1 ? "" : "s"}` : ""].filter(Boolean).join(" + ") || "<strong>0</strong> provinces";
       body = `
         <div class="pt-pickby">
           <span class="pt-label">Click picks</span>
-          <div class="picker segmented pt-mode">${(["province", "realm", "region"] as PickBy[])
+          <div class="picker segmented pt-mode">${(["area", "province", "realm", "region"] as PickBy[])
             .map((b) => `<button type="button" class="pick ${b === this.pickBy ? "active" : ""}" data-pick="${b}" title="${PICK_HINT[b]}"><span class="pick-label">${b[0].toUpperCase() + b.slice(1)}</span></button>`)
             .join("")}</div>
+          ${
+            this.pickBy === "region"
+              ? `<label class="pt-region">
+                  <span class="pt-region-head"><span>Region size</span><span class="pt-region-value">${regionWord(this.regionSize)}</span></span>
+                  <input type="range" class="pt-region-size" min="0" max="20" step="1" value="${Math.round(this.regionSize * 20)}" aria-label="Region size" />
+                </label>`
+              : ""
+          }
         </div>
-        <p class="pt-hint">${this.picking ? "Click a realm on the map to hand the provinces to." : `${PICK_HINT[this.pickBy]} Double-click a province to rename it. Right-drag or Shift+drag moves the map.`}</p>
+        <p class="pt-hint">${this.picking ? "Click a realm on the map to hand the provinces to." : `${this.pickBy === "region" && this.regionSize < 0.5 ? "Click to take a patch of a province around that spot, ending at rivers and ridges; click inside a patch to drop it." : PICK_HINT[this.pickBy]} Right-drag or Shift+drag moves the map.`}</p>
         <div class="pt-sel-head">
-          <span><strong>${sel.length}</strong> province${sel.length === 1 ? "" : "s"}${area ? ` · ${km2(area)}` : ""}</span>
+          <span>${what}${area ? ` · ${km2(area)}` : ""}</span>
           <button type="button" class="btn-ghost pd-mini" data-act="clear" ${none}>Clear</button>
         </div>
-        ${sel.length ? `<div class="pt-chips">${chips}${sel.length > MAX_CHIPS ? `<span class="pt-more">+${sel.length - MAX_CHIPS} more</span>` : ""}</div>` : ""}
+        ${items.length ? `<div class="pt-chips">${chips}${items.length > MAX_CHIPS ? `<button type="button" class="pt-more" data-act="chips">${this.chipsOpen ? "Show fewer" : `+${items.length - MAX_CHIPS} more`}</button>` : ""}</div>` : ""}
         ${owners.size ? `<div class="pt-owners">From ${[...owners].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([o, n]) => `${flag(o)} ${esc(world.nations[o].name)} (${n})`).join(" · ")}${owners.size > 6 ? ` and ${owners.size - 6} more` : ""}</div>` : ""}
         <div class="pt-section">
           <div class="pt-label">Form a new realm</div>
@@ -648,7 +1052,7 @@ export class ProvinceTool {
           <div class="pt-label">Hand to a realm</div>
           <div class="pt-row">
             <div class="pt-target"></div>${pickBtn}
-            <button type="button" class="btn-primary pt-go" data-act="annex" ${sel.length && world.nations[this.target] ? "" : "disabled"}>Annex</button>
+            <button type="button" class="btn-primary pt-go" data-act="annex" ${count && world.nations[this.target] ? "" : "disabled"}>Annex</button>
           </div>
         </div>
         <button type="button" class="btn-ghost pt-release" data-act="release" ${none} title="Every selected province becomes a realm of its own">Release each as its own realm</button>`;
@@ -685,7 +1089,7 @@ export class ProvinceTool {
       for (const p of sel) area += p.area ?? 0;
       if (!this.colorTouched && (!this.newColor || !sel.length)) this.newColor = colorForNewNation(world, [wi, li]);
       const chips = sel
-        .slice(0, MAX_CHIPS)
+        .slice(0, this.chipsOpen ? sel.length : MAX_CHIPS)
         .map((p, k) => `<span class="pt-chip" title="${esc(p.name)} · ${esc(world.nations[p.nationIndex].name)}">${flag(p.nationIndex)}<span>${esc(p.name)}</span><button type="button" data-rm="${k}" title="Take off the table" aria-label="Deselect ${esc(p.name)}">✕</button></span>`)
         .join("");
       const more = c.wars.length > 1 ? `<small>${c.wars.length - 1} more peace${c.wars.length > 2 ? "s" : ""} after this one.</small>` : "";
@@ -696,11 +1100,15 @@ export class ProvinceTool {
           <small>The map is as the war left it, occupied land shaded. The provinces ${W} holds most of are selected; click provinces to change that.</small>
           ${more}
         </div>
+        <button type="button" class="pt-toggle ${this.splitOn ? "on" : ""}" data-act="split" role="switch" aria-checked="${this.splitOn}" title="Cut large provinces into smaller pieces for this peace; pieces left with the same owner join up again">
+          <span class="pt-toggle-text">Split large provinces<small>Smaller pieces to hand out, inside the province borders</small></span>
+          <span class="pt-toggle-knob" aria-hidden="true"></span>
+        </button>
         <div class="pt-sel-head">
           <span><strong>${sel.length}</strong> province${sel.length === 1 ? "" : "s"} on the table${area ? ` · ${km2(area)}` : ""}</span>
           <button type="button" class="btn-ghost pd-mini" data-act="clear" ${none}>Clear</button>
         </div>
-        ${sel.length ? `<div class="pt-chips">${chips}${sel.length > MAX_CHIPS ? `<span class="pt-more">+${sel.length - MAX_CHIPS} more</span>` : ""}</div>` : ""}
+        ${sel.length ? `<div class="pt-chips">${chips}${sel.length > MAX_CHIPS ? `<button type="button" class="pt-more" data-act="chips">${this.chipsOpen ? "Show fewer" : `+${sel.length - MAX_CHIPS} more`}</button>` : ""}</div>` : ""}
         <div class="pt-section">
           <div class="pt-label">Their fate</div>
           <div class="pt-actions">
@@ -716,6 +1124,7 @@ export class ProvinceTool {
         <div class="pt-section">
           <button type="button" class="btn-primary pt-sign" data-act="sign" title="Close the conference: land still occupied returns to its owner">Sign · keep the rest</button>
           <small class="pt-hint">Signing keeps every border as you left it: land still occupied goes back to its owner.</small>
+          <button type="button" class="btn-ghost pt-release" data-act="occupied" title="Each side keeps exactly the land it holds; provinces are cut along the front">Keep the occupied land</button>
           <button type="button" class="btn-ghost pt-release" data-act="history" title="Settle it the way history would have">Let history decide</button>
         </div>`;
     }
@@ -775,6 +1184,12 @@ export class ProvinceTool {
       [...this.selected].map((p) => p.id).join(","),
       [...this.pending].map((p) => p.id).join(","),
       this.hover?.id ?? -1,
+      this.pickBy,
+      this.regionSize,
+      this.hoverArea ? `${this.hoverArea.p.id}:${this.hoverArea.k}` : "",
+      [...this.areaSel].map(([q, ks]) => `${q.id}:${[...ks].join(".")}`).join(","),
+      this.patches.map((b) => `${b.p.id}:${b.cells[0]}:${b.cells.length}`).join(","),
+      this.hoverPatch ? `${this.hoverPatch.p.id}:${this.hoverPatch.cells[0]}:${this.hoverPatch.cells.length}` : "",
     ].join("|");
     if (this.shapes?.key !== key) this.shapes = { key, layers: this.buildShapes(world, paintColor) };
     const layers = this.shapes.layers;
@@ -800,19 +1215,58 @@ export class ProvinceTool {
     ctx.restore();
   }
 
+  // The provinces a click on `p` takes in the current mode
+  private pickGroup(p: Province): Province[] {
+    if (this.mode !== "select" || this.pickBy === "province") return [p];
+    const world = this.host.world();
+    if (this.pickBy === "realm") return world.provinces.filter((q) => q.nationIndex === p.nationIndex);
+    const budget = REGION_MIN + (REGION_MAX - REGION_MIN) * Math.max(0, (this.regionSize - 0.5) / 0.5);
+    const key = `${this.maskKey}|${world.provinces.length}|${p.id}|${budget}`;
+    let r = this.regionCache.get(key);
+    if (!r) {
+      if (this.regionCache.size > 64) this.regionCache.clear();
+      this.regionCache.set(key, (r = naturalRegion(world, p, budget)));
+    }
+    // A region reaching into other realms stops at the conference's sides
+    return this.war ? r.filter((q) => this.inPlay(q)) : r;
+  }
+
   private buildShapes(world: WorldData, paintColor: string) {
     const rgba = (hex: string, a: number) => {
       const v = parseInt(hex.slice(1, 7), 16);
       return `rgba(${(v >> 16) & 255}, ${(v >> 8) & 255}, ${v & 255}, ${a})`;
     };
-    const groups: { ids: Set<number>; fill: string; rim: string; casing: string; width: number }[] = [];
-    const hov = this.hover && !this.selected.has(this.hover) && !this.pending.has(this.hover) ? this.hover : null;
-    if (hov)
+    // A group is a set of provinces, or (areas) a list of cells
+    const groups: { ids: Set<number>; cells?: number[]; key?: string; fill: string; rim: string; casing: string; width: number }[] = [];
+    const areaMode = this.mode === "select" && this.pickBy === "area";
+    const hov = !areaMode && this.hover && !this.pending.has(this.hover) ? this.hover : null;
+    if (areaMode && this.hoverArea) {
+      const { p, k } = this.hoverArea;
+      groups.push({ ids: new Set(), cells: this.areasOf(p).pieces[k] ?? [], key: `a${p.id}:${k}`, fill: "rgba(255,248,226,0.42)", rim: "#ffffff", casing: "rgba(20,16,11,0.75)", width: 2.5 });
+    }
+    if (this.hoverPatch) {
+      const b = this.hoverPatch;
+      groups.push({ ids: new Set(), cells: b.cells, key: `h${b.p.id}:${b.cells[0]}:${b.cells.length}`, fill: "rgba(255,248,226,0.42)", rim: "#ffffff", casing: "rgba(20,16,11,0.75)", width: 2.5 });
+    }
+    if (this.areaSel.size || this.patches.length) {
+      const cells: number[] = [];
+      for (const b of this.patches) cells.push(...b.cells);
+      for (const [q, ks] of this.areaSel) {
+        const { pieces } = this.areasOf(q);
+        for (const k of ks) cells.push(...(pieces[k] ?? []));
+      }
+      const key = `s${[...this.areaSel].map(([q, ks]) => `${q.id}:${[...ks].sort().join(".")}`).join(",")}|${this.patches.map((b) => `${b.p.id}:${b.cells[0]}:${b.cells.length}`).join(",")}`;
+      groups.push({ ids: new Set(), cells, key, fill: "rgba(255,206,64,0.5)", rim: "#ffe58a", casing: "rgba(40,26,6,0.9)", width: 2.5 });
+    }
+    if (hov) {
+      // What a click would take: the province, its realm, or its natural region
+      const ids = new Set(this.pickGroup(hov).filter((p) => this.mode === "select" || !this.pending.has(p)).map((p) => p.id));
       groups.push(
         this.mode === "paint"
-          ? { ids: new Set([hov.id]), fill: rgba(paintColor, 0.5), rim: "#ffffff", casing: "rgba(20,16,11,0.75)", width: 2.5 }
-          : { ids: new Set([hov.id]), fill: "rgba(255,248,226,0.42)", rim: "#ffffff", casing: "rgba(20,16,11,0.75)", width: 2.5 },
+          ? { ids, fill: rgba(paintColor, 0.5), rim: "#ffffff", casing: "rgba(20,16,11,0.75)", width: 2.5 }
+          : { ids, fill: "rgba(255,248,226,0.42)", rim: "#ffffff", casing: "rgba(20,16,11,0.75)", width: 2.5 },
       );
+    }
     if (this.selected.size)
       groups.push({ ids: new Set([...this.selected].map((p) => p.id)), fill: "rgba(255,206,64,0.5)", rim: "#ffe58a", casing: "rgba(40,26,6,0.9)", width: 2.5 });
     if (this.pending.size)
@@ -821,8 +1275,8 @@ export class ProvinceTool {
     const cache = new Map<string, Path2D>();
     const out = groups.map((g) => {
       const occ = this.occupiers();
-      const k = `${this.maskKey}|${occ.join(",")}|${[...g.ids].sort((a, b) => a - b).join(",")}`;
-      const path = this.outlines.get(k) ?? outlinePath(world, g.ids, occ);
+      const k = `${this.maskKey}|${occ.join(",")}|${g.key ?? [...g.ids].sort((a, b) => a - b).join(",")}`;
+      const path = this.outlines.get(k) ?? outlinePath(world, g.ids, occ, g.cells);
       cache.set(k, path);
       return { path, fill: g.fill, rim: g.rim, casing: g.casing, width: g.width };
     });
@@ -834,11 +1288,12 @@ export class ProvinceTool {
 // The land of provinces `ids` (cells their realm holds) as closed, rounded
 // loops in cell coordinates: boundary edges chained clockwise, their
 // midpoints joined, then corners cut twice (staircases become curves)
-function outlinePath(world: WorldData, ids: Set<number>, occupiers: number[] = []): Path2D {
+function outlinePath(world: WorldData, ids: Set<number>, occupiers: number[] = [], cells?: number[]): Path2D {
   const W = world.width;
   const H = world.height;
   const inside = new Uint8Array(W * H);
-  for (let x = 0; x < W; x++) {
+  if (cells) for (const c of cells) inside[c] = 1; // areas: exactly these cells
+  else for (let x = 0; x < W; x++) {
     const col = world.grid[x];
     for (let y = 0; y < H; y++) {
       const c = col[y];

@@ -63,3 +63,47 @@ test("a natural region stops at rivers, ridges and the sea", async () => {
   // A region is a few provinces, not a continent
   expect(region.length).toBeLessThan(40);
 }, 120_000);
+
+test("a province splits into 3-10 contiguous pieces inside its outline, and merges back whole", async () => {
+  const { splitProvince, mergeProvinces, keepOccupied } = await import("../src/game/politics");
+  const w = await world();
+  const W = w.width;
+  const sizeOf = (id: number) => {
+    let n = 0;
+    for (let x = 0; x < W; x++) for (let y = 0; y < w.height; y++) if (!w.grid[x][y].isWater && w.grid[x][y].provinceIndex === id) n++;
+    return n;
+  };
+  const p = [...w.provinces].sort((a, b) => sizeOf(b.id) - sizeOf(a.id))[0];
+  const total = sizeOf(p.id);
+  const count = w.provinces.length;
+  const parts = splitProvince(w, p, 6);
+  expect(parts.length).toBeGreaterThanOrEqual(3);
+  expect(parts.length).toBeLessThanOrEqual(10);
+  expect(parts[0]).toBe(p);
+  // Together they are the old province exactly; each is in one piece
+  expect(parts.reduce((s, q) => s + sizeOf(q.id), 0)).toBe(total);
+  for (const q of parts) {
+    const cells: number[] = [];
+    for (let x = 0; x < W; x++) for (let y = 0; y < w.height; y++) if (!w.grid[x][y].isWater && w.grid[x][y].provinceIndex === q.id) cells.push(y * W + x);
+    const set = new Set(cells);
+    const seen = new Set([cells[0]]);
+    const queue = [cells[0]];
+    for (let h = 0; h < queue.length; h++) {
+      const c = queue[h];
+      const x = c % W;
+      const y = Math.floor(c / W);
+      for (const nb of [y * W + ((x + 1) % W), y * W + ((x - 1 + W) % W), c - W, c + W])
+        if (set.has(nb) && !seen.has(nb)) {
+          seen.add(nb);
+          queue.push(nb);
+        }
+    }
+    // Land cut off inside the province (islands) may sit apart; the bulk is one piece
+    expect(seen.size).toBeGreaterThan(cells.length * 0.8);
+  }
+  mergeProvinces(w, p, parts.slice(1));
+  expect(w.provinces.length).toBe(count);
+  expect(sizeOf(p.id)).toBe(total);
+  // Keeping occupied land: nothing occupied, nothing changes
+  expect(keepOccupied(w, 0, 1)).toBe(0);
+}, 120_000);

@@ -424,10 +424,15 @@ export class PosterDialog {
     const keep = scopeNations(world, this.picked, this.vassals);
     $("pd-count").textContent = `${this.picked.size} picked${keep.size > this.picked.size ? ` · ${keep.size - this.picked.size} vassal${keep.size - this.picked.size === 1 ? "" : "s"}` : ""}`;
     const spec = this.spec(this.size);
-    $("pd-dims").textContent = spec ? (() => {
-      const L = posterLayout(spec);
-      return `${L.W.toLocaleString()} × ${L.H.toLocaleString()} px`;
-    })() : "";
+    const L = spec ? posterLayout(spec) : null;
+    $("pd-dims").textContent = L ? `${L.W.toLocaleString()} × ${L.H.toLocaleString()} px` : "";
+    // Square and tall posters get a tall dialog, so their preview is as large as it can be
+    const tall = !!L && L.H / L.W > 0.75;
+    const dialog = this.root.querySelector<HTMLElement>(".poster-dialog")!;
+    if (dialog.classList.contains("tall") !== tall) {
+      dialog.classList.toggle("tall", tall);
+      this.schedulePreview(); // the preview box changed size
+    }
     const t = $<HTMLInputElement>("pd-title-text");
     const s = $<HTMLInputElement>("pd-subtitle-text");
     const d = this.defaults();

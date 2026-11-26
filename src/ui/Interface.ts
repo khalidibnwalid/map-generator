@@ -22,7 +22,7 @@ import { DEFAULT_SETTINGS } from "../game/generators/types";
 import { OPTIONS, autoNations, formatOption, setThematicLayers } from "./components/MainApp";
 import { WorldData } from "../game/WorldData";
 import { RELATION_COLORS } from "../game/generators/generateDiplomacy";
-import { blocOf } from "../game/politics";
+import { blocOf, keepOccupied } from "../game/politics";
 import { membersOf, coalitionById, coalitionsOf } from "../game/coalitions";
 import { nationFlagUrl } from "../game/flags";
 import { familyLabel } from "../game/names";
@@ -166,7 +166,13 @@ export class Interface {
   private provinceTool!: ProvinceTool; // redraw borders by province (Nations and History tabs)
   private peaceConferences = false; // a war's end pauses history and opens the province tool on it
   private resumeAfterPeace = false; // history was playing when a conference opened
-  private peaceRealm: Nation | null = null; // only this realm's wars open a conference
+  // Only this realm's wars open a peace conference: the army commanded in
+  // "Command a battle", else the realm selected on the map
+  private get peaceRealm(): Nation | null {
+    const world = this.generator.getWorld();
+    if (this.warAttacker && world.nations.includes(this.warAttacker)) return this.warAttacker;
+    return world.nations[this.nationsManager.selectedNationIndex] ?? null;
+  }
   private climateBase = 0; // the Climate slider, -1 ice age .. +1 warm
   private climateDrift = false; // cold and warm spells follow the years of history
 
@@ -350,9 +356,17 @@ export class Interface {
           settle: (war, how) => {
             const sim = this.sim;
             if (!sim) return;
-            const done = how === "history" ? sim.settlePeace(war.winner, war.loser, war.capitulated) : sim.returnOccupied(war.winner, war.loser);
-            if (!done) return;
             const world = this.generator.getWorld();
+            let done: boolean;
+            if (how === "history") done = sim.settlePeace(war.winner, war.loser, war.capitulated);
+            else if (how === "return") done = sim.returnOccupied(war.winner, war.loser);
+            else {
+              // Each side keeps what it holds: provinces are cut along the front
+              const a = world.nations.indexOf(war.winner);
+              const b = world.nations.indexOf(war.loser);
+              done = a >= 0 && b >= 0 && keepOccupied(world, a, b) >= 0;
+            }
+            if (!done) return;
             sim.markEdited();
             this.nationsManager.politicsChanged(Math.max(0, world.nations.indexOf(war.winner)));
             this.gpuRenderer.updateNationsDataTexture(world);
@@ -707,6 +721,7 @@ export class Interface {
         if (owner >= 0 && owner !== this.nationsManager.selectedNationIndex) {
           this.nationsManager.selectedNationIndex = owner;
           this.nationsManager.selectedProvinceIndex = -1;
+          this.renderPeaceRealm();
           if (this.activeTab === "nations") {
             this.nationsManager.renderList();
             this.nationsManager.revealSelected();
@@ -1005,11 +1020,6 @@ export class Interface {
     }
     document.getElementById("sim-peace")?.addEventListener("change", (e) => {
       this.peaceConferences = (e.target as HTMLInputElement).checked;
-      // Starts with the realm selected on the map (or the army commanded)
-      if (this.peaceConferences && !this.peaceRealm) {
-        const world = this.generator.getWorld();
-        this.peaceRealm = world.nations[this.nationsManager.selectedNationIndex] ?? this.warAttacker ?? null;
-      }
       this.renderPeaceRealm();
     });
     document.getElementById("sim-interactive")?.addEventListener("change", (e) => {
@@ -1547,6 +1557,8 @@ export class Interface {
   }
 
   // "Wars of [realm]" under the Peace conferences switch
+  // "Wars of [realm]" under the Peace conferences switch: the army commanded
+  // in "Command a battle" (else the realm selected on the map)
   private renderPeaceRealm() {
     const row = document.getElementById("sim-peace-row");
     const host = document.getElementById("sim-peace-realm");
@@ -1554,24 +1566,14 @@ export class Interface {
     row.style.display = this.peaceConferences ? "" : "none";
     if (!this.peaceConferences) return;
     const world = this.generator.getWorld();
-    if (this.peaceRealm && !world.nations.includes(this.peaceRealm)) this.peaceRealm = null;
-    const idx = this.peaceRealm ? world.nations.indexOf(this.peaceRealm) : -1;
-    const key = `${world.seed}|${idx}|${world.nations.length}|${world.nations.map((n) => n.name).join()}`;
-    if (host.dataset.key === key) return;
-    host.dataset.key = key;
-    const byName = world.nations.map((n, i) => ({ n, i })).sort((a, b) => a.n.name.localeCompare(b.n.name));
-    host.replaceChildren(
-      createDropdown({
-        className: "war-dd",
-        title: "Only this realm's wars open a peace conference",
-        value: String(idx),
-        options: [{ value: "-1", label: "Choose a realm" }, ...byName.map((e) => ({ value: String(e.i), label: e.n.name, image: nationFlagUrl(world, e.i, 18, 12) }))],
-        onChange: (v) => {
-          this.peaceRealm = world.nations[Number(v)] ?? null;
-          this.renderPeaceRealm();
-        },
-      }),
-    );
+    const r = this.peaceRealm;
+    const i = r ? world.nations.indexOf(r) : -1;
+    row.classList.toggle("empty", i < 0);
+    host.innerHTML =
+      i >= 0
+        ? `<span class="sim-peace-name"><img src="${nationFlagUrl(world, i, 18, 12)}" alt="" />${r!.name.replace(/[&<>]/g, "")}</span>`
+        : `<small class="muted">Click a realm on the map, or pick an army below</small>`;
+    host.title = "The realm commanded under Command a battle; its wars open a peace conference";
   }
 
   // Peace conferences: a war that just ended pauses history and opens the
@@ -2573,7 +2575,8 @@ export class Interface {
         replay ? replay.sizes : this.nationsManager.nationSizes,
         replay ? replay.centroids : this.nationsManager.nationCentroids,
         theme,
-        this.activeLayers.provinces && !replay,
+        // Province names would crowd the map while provinces are being picked (and cut into pieces)
+        this.activeLayers.provinces && !replay && !this.provinceTool?.active,
         replay ? replay.land : this.nationsManager.nationLandArea,
         this.activeLayers.flags,
       );

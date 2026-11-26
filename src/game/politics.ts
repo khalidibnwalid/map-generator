@@ -1,4 +1,4 @@
-import type { Nation, RelationType, WorldData } from "./WorldData";
+import { CELL_KM2, type Nation, type Province, type RelationType, type WorldData } from "./WorldData";
 import { NATION_PALETTE, colorForNewNation, refreshTerritorialWaters } from "./generators/generateNations";
 import { defaultFlagFor } from "./flags";
 import { foundHouse } from "./sim/Rulers";
@@ -523,6 +523,346 @@ export function transferProvinces(world: WorldData, ids: number[], to: number | 
     if (toNew) assignProvinceTypes(world, { nation: t });
   }
   return { nation: t, moved: provs.length, removed };
+}
+
+// --- Splitting and merging provinces (peace conferences) ---
+
+const COMPASS = ["East", "South-East", "South", "South-West", "West", "North-West", "North", "North-East"];
+// "North Kvstad March": a part of a province named by where it lies in it
+function partName(base: string, dx: number, dy: number, taken: Set<string>): string {
+  const word = Math.hypot(dx, dy) < 0.5 ? "Inner" : COMPASS[((Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) % 8) + 8) % 8];
+  let name = `${word} ${base}`;
+  for (let k = 2; taken.has(name); k++) name = `${word} ${base} ${k}`;
+  taken.add(name);
+  return name;
+}
+
+// Province records refreshed from the cells: area, centroid, a share of the people
+function remeasure(world: WorldData, provs: Province[], pop0: Map<Province, number>, cells0: Map<Province, number>) {
+  const W = world.width;
+  const ids = new Map(provs.map((p) => [p.id, p]));
+  const n = new Map<Province, number>();
+  const sx = new Map<Province, number>();
+  const sy = new Map<Province, number>();
+  for (let x = 0; x < W; x++)
+    for (let y = 0; y < world.height; y++) {
+      const c = world.grid[x][y];
+      const p = c.isWater || c.provinceIndex === undefined ? undefined : ids.get(c.provinceIndex);
+      if (!p) continue;
+      n.set(p, (n.get(p) ?? 0) + 1);
+      sx.set(p, (sx.get(p) ?? 0) + x + 0.5);
+      sy.set(p, (sy.get(p) ?? 0) + y + 0.5);
+    }
+  for (const p of provs) {
+    const k = n.get(p) ?? 0;
+    if (!k) continue;
+    p.area = Math.round(k * CELL_KM2);
+    p.centroidX = sx.get(p)! / k;
+    p.centroidY = sy.get(p)! / k;
+    const total = pop0.get(p);
+    if (total !== undefined) p.population = Math.round((total * k) / Math.max(1, cells0.get(p) ?? k));
+  }
+}
+
+// Splits province `p` into `parts` contiguous pieces inside its outline,
+// following the land: its towns are the pieces' centers (the largest first,
+// then seeds spread over what is left), and pieces grow outward by travel
+// cost, so crossing a river or climbing a ridge is dear and the cuts fall
+// along them. The piece holding the seat keeps the name, seat and type; a
+// piece with a town is named after it ("Lands of Kvstad"), the rest by
+// where they lie ("North …"). Returns every piece, `p` first.
+export function splitProvince(world: WorldData, p: Province, parts: number, rand: () => number = Math.random, given?: number[][]): Province[] {
+  const pieces = given ?? pieceCells(world, p, parts, rand);
+  if (pieces.length < 2) return [p];
+  return applyPieces(world, p, pieces);
+}
+
+// The land of province `p` cut into up to `parts` pieces (cells, flat
+// indices), its seat's piece first; nothing in the world changes. See
+// splitProvince for how the land is cut.
+export function pieceCells(world: WorldData, p: Province, parts: number, rand: () => number = Math.random): number[][] {
+  const W = world.width;
+  const H = world.height;
+  const cells: number[] = [];
+  for (let x = 0; x < W; x++)
+    for (let y = 0; y < H; y++) {
+      const c = world.grid[x][y];
+      if (!c.isWater && c.provinceIndex === p.id) cells.push(y * W + x);
+    }
+  const k = Math.max(1, Math.min(parts, Math.floor(cells.length / 3)));
+  if (k < 2) return [cells];
+  const inP = new Set(cells);
+  const dist = (i: number, j: number) => {
+    let dx = Math.abs((i % W) - (j % W));
+    if (dx > W / 2) dx = W - dx;
+    return Math.hypot(dx, Math.floor(i / W) - Math.floor(j / W));
+  };
+  const cellOf = (x: number, y: number) => Math.floor(y) * W + ((Math.floor(x) % W) + W) % W;
+  // Seeds: the seat, then the province's towns by size (spread apart), then farthest points
+  const spacing = Math.sqrt(cells.length / k) * 0.8;
+  const seeds: number[] = [];
+  const seatCell = p.seatX !== undefined && p.seatY !== undefined ? cellOf(p.seatX, p.seatY) : -1;
+  seeds.push(inP.has(seatCell) ? seatCell : cells[Math.floor(rand() * cells.length)]);
+  const towns = world.cities
+    .filter((c) => inP.has(cellOf(c.x, c.y)))
+    .sort((a, b) => b.population - a.population);
+  for (const t of towns) {
+    if (seeds.length >= k) break;
+    const c = cellOf(t.x, t.y);
+    if (seeds.every((s0) => dist(s0, c) >= spacing)) seeds.push(c);
+  }
+  const near = cells.map((i) => Math.min(...seeds.map((s0) => dist(i, s0))));
+  while (seeds.length < k) {
+    let best = 0;
+    for (let c = 1; c < cells.length; c++) if (near[c] > near[best]) best = c;
+    if (near[best] < 1) break;
+    seeds.push(cells[best]);
+    for (let c = 0; c < cells.length; c++) near[c] = Math.min(near[c], dist(cells[c], cells[best]));
+  }
+  // Growth by travel cost (Dijkstra over the province's land, a little noise for ragged borders)
+  const cost = (from: number, to: number) => {
+    const a = world.grid[from % W][Math.floor(from / W)];
+    const b = world.grid[to % W][Math.floor(to / W)];
+    let c = 1 + rand() * 0.35;
+    if (a.hasRiver !== b.hasRiver || (a.hasRiver && b.hasRiver)) c += 5; // rivers part the land
+    c += Math.abs(b.elevation - a.elevation) * 60; // slopes
+    if (Math.max(a.elevation, b.elevation) > 0.67) c += 3; // ridges
+    return c;
+  };
+  const owner = new Map<number, number>();
+  const best = new Map<number, number>();
+  const heap: [number, number, number][] = []; // [cost, cell, piece]
+  const push = (e: [number, number, number]) => {
+    heap.push(e);
+    let i = heap.length - 1;
+    while (i > 0) {
+      const j = (i - 1) >> 1;
+      if (heap[j][0] <= heap[i][0]) break;
+      [heap[i], heap[j]] = [heap[j], heap[i]];
+      i = j;
+    }
+  };
+  const pop = (): [number, number, number] => {
+    const top = heap[0];
+    const last = heap.pop()!;
+    if (heap.length) {
+      heap[0] = last;
+      for (let i = 0; ; ) {
+        const l = i * 2 + 1;
+        const r = l + 1;
+        let m = i;
+        if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+        if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+        if (m === i) break;
+        [heap[i], heap[m]] = [heap[m], heap[i]];
+        i = m;
+      }
+    }
+    return top;
+  };
+  seeds.forEach((s0, i) => {
+    best.set(s0, 0);
+    push([0, s0, i]);
+  });
+  while (heap.length) {
+    const [c0, cell, piece] = pop();
+    if (owner.has(cell) || c0 > (best.get(cell) ?? Infinity)) continue;
+    owner.set(cell, piece);
+    const x = cell % W;
+    const y = Math.floor(cell / W);
+    for (const nb of [y * W + ((x + 1) % W), y * W + ((x - 1 + W) % W), y > 0 ? cell - W : -1, y < H - 1 ? cell + W : -1]) {
+      if (nb < 0 || !inP.has(nb) || owner.has(nb)) continue;
+      const c1 = c0 + cost(cell, nb);
+      if (c1 < (best.get(nb) ?? Infinity)) {
+        best.set(nb, c1);
+        push([c1, nb, piece]);
+      }
+    }
+  }
+  // Land cut off from every seed goes to the nearest one
+  for (const c of cells)
+    if (!owner.has(c)) {
+      let b = 0;
+      for (let i = 1; i < seeds.length; i++) if (dist(c, seeds[i]) < dist(c, seeds[b])) b = i;
+      owner.set(c, b);
+    }
+  const out: number[][] = seeds.map(() => []);
+  for (const [c, i] of owner) out[i].push(c);
+  return out.filter((q, i) => i === 0 || q.length > 0);
+}
+
+// Where a piece lies in its province, and its largest town (for its name)
+export function pieceLabel(world: WorldData, p: Province, cells: number[], taken = new Set<string>()): string {
+  const W = world.width;
+  const inside = new Set(cells);
+  const town = world.cities
+    .filter((c) => inside.has(Math.floor(c.y) * W + ((Math.floor(c.x) % W) + W) % W))
+    .sort((a, b) => b.population - a.population)[0];
+  if (town && !taken.has(`Lands of ${town.name}`)) {
+    taken.add(`Lands of ${town.name}`);
+    return `Lands of ${town.name}`;
+  }
+  let sx = 0;
+  let sy = 0;
+  const ref = cells[0];
+  for (const c of cells) {
+    let dx = (c % W) - (ref % W);
+    if (dx > W / 2) dx -= W;
+    if (dx < -W / 2) dx += W;
+    sx += (ref % W) + dx + 0.5;
+    sy += Math.floor(c / W) + 0.5;
+  }
+  sx /= cells.length;
+  sy /= cells.length;
+  let dx = sx - (p.centroidX ?? sx);
+  if (dx > W / 2) dx -= W;
+  if (dx < -W / 2) dx += W;
+  const span = Math.sqrt((p.area ?? cells.length * CELL_KM2) / CELL_KM2 / Math.PI) || 1;
+  return partName(p.name, dx / span, (sy - (p.centroidY ?? sy)) / span, taken);
+}
+
+// Turns pieces of `p` (its seat's piece first) into provinces of their own
+function applyPieces(world: WorldData, p: Province, pieces: number[][]): Province[] {
+  const W = world.width;
+  const total = pieces.reduce((s0, q) => s0 + q.length, 0);
+  const pop0 = p.population ?? 0;
+  const taken = new Set(world.provinces.map((q) => q.name));
+  const out: Province[] = [p];
+  for (let i = 1; i < pieces.length; i++) {
+    const cells = pieces[i];
+    const mid = cells[cells.length >> 1];
+    out.push({
+      id: world.provinces.length,
+      name: pieceLabel(world, p, cells, taken),
+      color: p.color,
+      nationIndex: p.nationIndex,
+      capitalCityId: -1,
+      seatX: (mid % W) + 0.5,
+      seatY: Math.floor(mid / W) + 0.5,
+    });
+    world.provinces.push(out[i]);
+    for (const c of cells) world.grid[c % W][Math.floor(c / W)].provinceIndex = out[i].id;
+  }
+  // Cities follow the land they stand on; a piece takes its largest town as seat and name
+  for (const city of world.cities) {
+    if (city.provinceIndex !== p.id) continue;
+    const c = world.getCell(city.x, city.y);
+    if (c?.provinceIndex !== undefined && c.provinceIndex !== p.id) city.provinceIndex = c.provinceIndex;
+  }
+  for (const q of out.slice(1)) {
+    const seat = world.cities.filter((c) => c.provinceIndex === q.id).sort((a, b) => b.population - a.population)[0];
+    if (!seat) continue;
+    q.capitalCityId = seat.id;
+    q.seatX = seat.x;
+    q.seatY = seat.y;
+  }
+  remeasure(world, out, new Map(out.map((q) => [q, pop0])), new Map(out.map((q) => [q, total])));
+  return out;
+}
+
+// Removes provinces, re-indexing what refers to the rest (their land is
+// expected to belong to another province already)
+function dropProvinces(world: WorldData, gone: Set<Province>) {
+  if (!gone.size) return;
+  const remap = new Map<number, number>();
+  const kept = world.provinces.filter((p) => !gone.has(p));
+  const goneIds = new Set([...gone].map((p) => p.id));
+  kept.forEach((p, i) => {
+    remap.set(p.id, i);
+    p.id = i;
+  });
+  world.provinces = kept;
+  const fix = (v: number | undefined) => (v === undefined || v < 0 ? v : goneIds.has(v) ? -1 : (remap.get(v) ?? -1));
+  for (let x = 0; x < world.width; x++) {
+    const col = world.grid[x];
+    for (let y = 0; y < world.height; y++) col[y].provinceIndex = fix(col[y].provinceIndex);
+  }
+  for (const c of world.cities) c.provinceIndex = fix(c.provinceIndex);
+}
+
+// Pieces join `into` again: their land, towns and people
+export function mergeProvinces(world: WorldData, into: Province, others: Province[]) {
+  const gone = new Set(others.filter((o) => o !== into && world.provinces.includes(o)));
+  if (!gone.size) return;
+  const ids = new Set([...gone].map((o) => o.id));
+  for (let x = 0; x < world.width; x++) {
+    const col = world.grid[x];
+    for (let y = 0; y < world.height; y++) if (col[y].provinceIndex !== undefined && ids.has(col[y].provinceIndex!)) col[y].provinceIndex = into.id;
+  }
+  for (const c of world.cities) if (c.provinceIndex !== undefined && ids.has(c.provinceIndex)) c.provinceIndex = into.id;
+  const pop = (into.population ?? 0) + [...gone].reduce((s, o) => s + (o.population ?? 0), 0);
+  dropProvinces(world, gone);
+  into.population = pop;
+  remeasure(world, [into], new Map(), new Map());
+}
+
+// A peace that keeps the war's lines: each side keeps exactly the land it
+// occupies of the other's provinces, which becomes a province of its own
+// ("West Kvstad March"); a province occupied whole simply changes hands.
+// Returns the number of provinces that changed or were made.
+export function keepOccupied(world: WorldData, a: number, b: number): number {
+  const W = world.width;
+  const occupied = new Map<Province, number[]>(); // province -> its cells held by the other side
+  const sizes = new Map<Province, number>();
+  for (let x = 0; x < W; x++)
+    for (let y = 0; y < world.height; y++) {
+      const c = world.grid[x][y];
+      const p = c.isWater || c.provinceIndex === undefined ? undefined : world.provinces[c.provinceIndex];
+      if (!p || (p.nationIndex !== a && p.nationIndex !== b)) continue;
+      sizes.set(p, (sizes.get(p) ?? 0) + 1);
+      const other = p.nationIndex === a ? b : a;
+      if (c.nationIndex === other) (occupied.get(p) ?? occupied.set(p, []).get(p)!).push(y * W + x);
+    }
+  const taken = new Set(world.provinces.map((q) => q.name));
+  let changed = 0;
+  for (const [p, cells] of occupied) {
+    const other = p.nationIndex === a ? b : a;
+    const color = world.provinces.find((q) => q.nationIndex === other)?.color ?? world.nations[other]?.color ?? p.color;
+    if (cells.length >= (sizes.get(p) ?? 0)) {
+      p.nationIndex = other;
+      p.color = color;
+      changed++;
+      continue;
+    }
+    let sx = 0;
+    let sy = 0;
+    for (const c of cells) {
+      sx += (c % W) + 0.5;
+      sy += Math.floor(c / W) + 0.5;
+    }
+    sx /= cells.length;
+    sy /= cells.length;
+    let dx = sx - (p.centroidX ?? sx);
+    if (dx > W / 2) dx -= W;
+    if (dx < -W / 2) dx += W;
+    const span = Math.sqrt((sizes.get(p) ?? 1) / Math.PI) || 1;
+    const q: Province = {
+      id: world.provinces.length,
+      name: partName(p.name, dx / span, (sy - (p.centroidY ?? sy)) / span, taken),
+      color,
+      nationIndex: other,
+      capitalCityId: -1,
+      seatX: sx,
+      seatY: sy,
+    };
+    world.provinces.push(q);
+    for (const c of cells) world.grid[c % W][Math.floor(c / W)].provinceIndex = q.id;
+    for (const city of world.cities) {
+      const cc = world.getCell(city.x, city.y);
+      if (city.provinceIndex === p.id && cc?.provinceIndex === q.id) city.provinceIndex = q.id;
+    }
+    const seat = world.cities.filter((c) => c.provinceIndex === q.id).sort((x, y) => y.population - x.population)[0];
+    if (seat) {
+      q.capitalCityId = seat.id;
+      q.seatX = seat.x;
+      q.seatY = seat.y;
+    }
+    const pop = p.population ?? 0;
+    remeasure(world, [p, q], new Map([[p, pop], [q, pop]]), new Map([[p, sizes.get(p)!], [q, sizes.get(p)!]]));
+    changed++;
+  }
+  if (provinceTypesApply(world)) refreshProvinceTypes(world);
+  return changed;
 }
 
 // Land for a realm founded in the editor at (x, y): it spreads from there the
