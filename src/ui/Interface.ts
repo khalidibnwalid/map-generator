@@ -43,9 +43,11 @@ import { FlagMapRenderer } from "./FlagMapRenderer";
 import { drawProvinceLabels, hatchAutonomous, provinceColors, shadowOutside, styledLayers } from "./ProvincePoster";
 import { ImportDialog, paintGuide } from "./ImportDialog";
 import { FactSheet } from "./FactSheet";
-import { drawAttackLine, drawBattles, drawFronts } from "./WarRenderer";
+import { copiesInView, drawAttackLine, drawBattles, drawFronts } from "./WarRenderer";
 import { frontSamples, lineLength, lineTarget, simplifyLine, type LinePoint } from "../game/sim/frontLine";
 import { exportHistoryGif } from "./GifExport";
+import { installSimBarDrag } from "./SimBar";
+import { ProvinceTool } from "./ProvinceTool";
 import type { Nation } from "../game/WorldData";
 
 // A recorded year shown in place of the live borders (History timeline)
@@ -143,6 +145,10 @@ export class Interface {
   private exportingGif = false;
   private activeTab: "generate" | "layers" | "nations" | "coalitions" | "cultures" | "races" | "build" | "history" | "file" = "generate";
   private buildTool!: BuildTool;
+  private provinceTool!: ProvinceTool; // redraw borders by province (Nations and History tabs)
+  private peaceConferences = false; // a war's end pauses history and opens the province tool on it
+  private resumeAfterPeace = false; // history was playing when a conference opened
+  private peaceRealm: Nation | null = null; // only this realm's wars open a conference
   private sim: Simulation | null = null;
   private simTimer = 0;
   private simSpeed = 2;
@@ -289,6 +295,53 @@ export class Interface {
         if (this.activeTab === "nations") this.nationsManager.renderList();
         this.canvasManager.scheduleRender();
       };
+      this.provinceTool = new ProvinceTool(
+        {
+          world: () => this.generator.getWorld(),
+          canvas: this.canvasManager,
+          selectedNation: () => this.nationsManager.selectedNationIndex,
+          changed: (nation) => {
+            this.nationsManager.politicsChanged(nation);
+            this.vectorState = null;
+            this.lightsKey = "";
+            this.thematicFocus = -2;
+            this.updateLegend();
+            this.renderWarRoom();
+          },
+          toggled: (open) => {
+            if (open) {
+              // One editor at a time, on the live map
+              this.pauseSim();
+              this.backToPresent();
+              if (this.nationsManager.isEditingNations) document.getElementById("btn-edit-nations")?.click();
+            }
+            this.canvasManager.panningLocked = open || this.nationsManager.isEditingNations;
+            this.canvasManager.canvas.style.cursor = open ? "crosshair" : "grab";
+            document.getElementById("btn-province-tool")?.classList.toggle("active", open);
+            document.getElementById("sim-province-tool")?.classList.toggle("active", open);
+          },
+          settle: (war, how) => {
+            const sim = this.sim;
+            if (!sim) return;
+            const done = how === "history" ? sim.settlePeace(war.winner, war.loser, war.capitulated) : sim.returnOccupied(war.winner, war.loser);
+            if (!done) return;
+            const world = this.generator.getWorld();
+            sim.markEdited();
+            this.nationsManager.politicsChanged(Math.max(0, world.nations.indexOf(war.winner)));
+            this.gpuRenderer.updateNationsDataTexture(world);
+            this.vectorState = null;
+            this.updateLegend();
+            this.renderSimPanel();
+          },
+          conferenceDone: () => {
+            if (this.resumeAfterPeace) this.playSim();
+            this.resumeAfterPeace = false;
+          },
+        },
+        document.getElementById("province-tool")!,
+      );
+      document.getElementById("btn-province-tool")?.addEventListener("click", () => this.provinceTool.toggle());
+      document.getElementById("sim-province-tool")?.addEventListener("click", () => this.provinceTool.toggle());
       this.nationsManager.onShowFacts = (idx) => this.showFacts(idx);
       this.nationsManager.onTerritoryChanged = () => {
         this.thematicFocus = -2;
@@ -339,6 +392,7 @@ export class Interface {
         this.nationsManager.provincePlacementMode !== -1 ||
         this.nationsManager.cityPlacementMode !== -1 ||
         !!this.peopleEditor() ||
+        !!this.provinceTool?.active ||
         (this.activeTab === "coalitions" && this.coalitionsManager.isPicking) ||
         this.activeTab === "build",
       afterRestore: (r) => this.afterRestore(r),
@@ -377,6 +431,7 @@ export class Interface {
     this.vectorState = null;
     this.lightsKey = "";
     this.thematicFocus = -2;
+    this.provinceTool?.invalidate();
     if (this.activeTab === "nations") nm.renderList();
     if (this.activeTab === "cultures") this.culturesManager.renderList();
     if (this.activeTab === "races") this.racesManager.renderList();
@@ -394,6 +449,7 @@ export class Interface {
     this.pauseSim();
     this.warAttacker = null;
     this.warPicking = false;
+    this.provinceTool?.worldReplaced();
     this.renderWarRoom();
     if (this.buildTool) {
       this.buildTool.selected = null;
@@ -490,6 +546,8 @@ export class Interface {
       this.lastMouseX = e.clientX;
       this.lastMouseY = e.clientY;
       const touch = e.pointerType !== "mouse";
+      // Redrawing by province: a stroke selects or paints; hovering lights the province
+      if (this.provinceTool.pointerMove(e)) return;
       if (this.warLine?.drawing) {
         this.extendWarLine(e.clientX, e.clientY);
         return;
@@ -548,6 +606,8 @@ export class Interface {
         }
       }
 
+      // The province tool handled the press itself (pointerdown/up)
+      if (this.provinceTool.active) return;
       const dragged = Math.hypot(e.clientX - this.pointerDown.x, e.clientY - this.pointerDown.y) > 5;
       if (this.activeTab === "coalitions" && this.coalitionsManager.isPicking) {
         // Picking coalition members: a click adds or removes the realm, nothing else
@@ -638,8 +698,11 @@ export class Interface {
       }
       this.pointerDown = { x: e.clientX, y: e.clientY };
       cancelPress();
+      if (this.provinceTool.pointerDown(e)) return;
       // Attack line: the finger or the left button draws the front (Shift pans)
       if (this.warLineArmed() && e.button === 0 && !e.shiftKey) {
+        // Whatever else set the pan lock, this drag draws: the map must not move under it
+        this.canvasManager.holdPan = true;
         this.warLine = { pts: [], drawing: true, fade: 0, shift: 0 };
         this.extendWarLine(e.clientX, e.clientY);
         try {
@@ -673,6 +736,7 @@ export class Interface {
     });
 
     canvas.addEventListener("dblclick", (e) => {
+      if (this.provinceTool.dblClick(e)) return;
       if (this.activeTab === "nations" && this.nationsManager.isEditingNations && e.button === 0) {
         isAttemptingPaint = false;
         this.nationsManager.isPainting = false;
@@ -708,6 +772,7 @@ export class Interface {
     window.addEventListener("pointerup", (e) => {
       cancelPress();
       stopAllPainting();
+      if (this.provinceTool.pointerUp()) return;
       if (this.warLine?.drawing) {
         this.finishWarLine();
         return;
@@ -721,6 +786,7 @@ export class Interface {
     window.addEventListener("pointercancel", () => {
       cancelPress();
       stopAllPainting();
+      this.provinceTool.pointerUp();
       this.cancelWarLine();
     });
 
@@ -836,7 +902,7 @@ export class Interface {
           if (tab === "nations") {
             this.nationsManager.renderList();
             this.nationsManager.revealSelected();
-          }
+          } else if (!this.provinceTool.inConference) this.provinceTool.close(); // a peace on the table stays until settled
           if (tab === "coalitions") this.coalitionsManager.renderList();
           else {
             this.coalitionsManager.hovered = -1;
@@ -855,6 +921,9 @@ export class Interface {
           if (tab === "history") {
             this.renderWarRoom();
             this.renderSimPanel();
+          } else if (!this.sim) {
+            const bar = document.getElementById("sim-bar");
+            if (bar) bar.style.display = "none";
           }
           else if (this.buildTool.tool || this.buildTool.selected) {
             this.buildTool.tool = null;
@@ -868,6 +937,17 @@ export class Interface {
     // --- History simulation ---
     document.getElementById("sim-play")?.addEventListener("click", () => this.toggleSim());
     document.getElementById("sim-bar-play")?.addEventListener("click", () => this.toggleSim());
+    // The bar over the map steps and advances like the panel's buttons
+    document.getElementById("sim-bar-step")?.addEventListener("click", () => {
+      this.pauseSim();
+      this.stepSim();
+    });
+    document.getElementById("sim-bar-jump")?.addEventListener("click", () => {
+      this.pauseSim();
+      void this.jumpYears(this.jumpSize(), true);
+    });
+    document.getElementById("sim-jump-years")?.addEventListener("change", () => this.renderSimPanel());
+    installSimBarDrag();
     document.getElementById("war-pick")?.addEventListener("click", () => {
       this.warPicking = !this.warPicking;
       if (this.warPicking) this.setWarHint("Click a realm on the map to command its army.");
@@ -892,11 +972,19 @@ export class Interface {
     installSteppers(document.getElementById("content-history") ?? document);
     for (const [id, simulate] of [["sim-jump", true], ["sim-skip", false]] as const) {
       document.getElementById(id)?.addEventListener("click", () => {
-        const input = document.getElementById("sim-jump-years") as HTMLInputElement | null;
         this.pauseSim();
-        void this.jumpYears(Math.max(1, Math.min(1000, Math.floor(Number(input?.value)) || 1)), simulate);
+        void this.jumpYears(this.jumpSize(), simulate);
       });
     }
+    document.getElementById("sim-peace")?.addEventListener("change", (e) => {
+      this.peaceConferences = (e.target as HTMLInputElement).checked;
+      // Starts with the realm selected on the map (or the army commanded)
+      if (this.peaceConferences && !this.peaceRealm) {
+        const world = this.generator.getWorld();
+        this.peaceRealm = world.nations[this.nationsManager.selectedNationIndex] ?? this.warAttacker ?? null;
+      }
+      this.renderPeaceRealm();
+    });
     document.getElementById("sim-interactive")?.addEventListener("change", (e) => {
       this.interactive = (e.target as HTMLInputElement).checked;
       this.pauseSim();
@@ -1088,6 +1176,7 @@ export class Interface {
     if (btnEditNations) {
       btnEditNations.addEventListener("click", () => {
         this.nationsManager.isEditingNations = !this.nationsManager.isEditingNations;
+        if (this.nationsManager.isEditingNations) this.provinceTool.close();
         btnEditNations.parentElement?.classList.toggle(
           "edit-mode-active",
           this.nationsManager.isEditingNations,
@@ -1348,13 +1437,26 @@ export class Interface {
     void paintGuide(document.getElementById("guide-thumb") as HTMLCanvasElement, guide);
   }
 
+  // Years the Advance buttons simulate (the panel's field)
+  private jumpSize(): number {
+    const input = document.getElementById("sim-jump-years") as HTMLInputElement | null;
+    return Math.max(1, Math.min(1000, Math.floor(Number(input?.value)) || 1));
+  }
+
   private toggleSim() {
     if (this.simTimer) this.pauseSim();
     else this.playSim();
   }
 
+  // A peace on the table must be settled before history moves on
+  private peacePending(): boolean {
+    if (!this.provinceTool?.inConference) return false;
+    toast("Settle the peace first: sign it or let history decide");
+    return true;
+  }
+
   private playSim() {
-    if (this.simTimer || this.generator.isGenerating || this.exportingGif) return;
+    if (this.simTimer || this.generator.isGenerating || this.exportingGif || this.peacePending()) return;
     // Replays are view-only: history always continues from the present
     this.backToPresent();
     // Chained timeouts: a slow year delays the next instead of piling up
@@ -1376,10 +1478,11 @@ export class Interface {
   }
 
   private stepSim() {
-    if (this.generator.isGenerating || this.exportingGif) return;
+    if (this.generator.isGenerating || this.exportingGif || this.peacePending()) return;
     this.backToPresent();
     const world = this.generator.getWorld();
     this.sim ??= new Simulation(world, this.generator.getNoise());
+    this.sim.holdPeace = (winner, loser) => this.peaceConferences && !!this.peaceRealm && (winner === this.peaceRealm || loser === this.peaceRealm);
     const nationsBefore = world.nations.length;
     const citiesBefore = world.cities.length;
     const colorsBefore = world.nations.map((n) => n.color).join();
@@ -1388,22 +1491,73 @@ export class Interface {
     this.applySimChanges(changed, nationsBefore, citiesBefore, colorsBefore);
     this.inSimStep = false;
     this.renderSimPanel();
+    this.maybePeaceConference();
+  }
+
+  // Wars the last year ended for the chosen realm, both sides still standing
+  // (a realm conquered whole leaves nothing to draw)
+  private endedWars() {
+    const world = this.generator.getWorld();
+    const r = this.peaceRealm;
+    if (!r) return [];
+    return (this.sim?.peaces ?? []).filter((p) => p.held && (p.winner === r || p.loser === r) && world.nations.includes(p.winner) && world.nations.includes(p.loser));
+  }
+
+  // "Wars of [realm]" under the Peace conferences switch
+  private renderPeaceRealm() {
+    const row = document.getElementById("sim-peace-row");
+    const host = document.getElementById("sim-peace-realm");
+    if (!row || !host) return;
+    row.style.display = this.peaceConferences ? "" : "none";
+    if (!this.peaceConferences) return;
+    const world = this.generator.getWorld();
+    if (this.peaceRealm && !world.nations.includes(this.peaceRealm)) this.peaceRealm = null;
+    const idx = this.peaceRealm ? world.nations.indexOf(this.peaceRealm) : -1;
+    const key = `${world.seed}|${idx}|${world.nations.length}|${world.nations.map((n) => n.name).join()}`;
+    if (host.dataset.key === key) return;
+    host.dataset.key = key;
+    const byName = world.nations.map((n, i) => ({ n, i })).sort((a, b) => a.n.name.localeCompare(b.n.name));
+    host.replaceChildren(
+      createDropdown({
+        className: "war-dd",
+        title: "Only this realm's wars open a peace conference",
+        value: String(idx),
+        options: [{ value: "-1", label: "Choose a realm" }, ...byName.map((e) => ({ value: String(e.i), label: e.n.name, image: nationFlagUrl(world, e.i, 18, 12) }))],
+        onChange: (v) => {
+          this.peaceRealm = world.nations[Number(v)] ?? null;
+          this.renderPeaceRealm();
+        },
+      }),
+    );
+  }
+
+  // Peace conferences: a war that just ended pauses history and opens the
+  // province tool on it, the victor as the receiving realm
+  private maybePeaceConference() {
+    if (!this.peaceConferences || this.provinceTool.inConference) return;
+    const ended = this.endedWars();
+    if (!ended.length) return;
+    this.resumeAfterPeace = !!this.simTimer;
+    this.pauseSim();
+    // The view stays where it is: the map shows the war's end as it stands
+    this.provinceTool.openConference({ year: ended[0].year, wars: ended.map((p) => ({ winner: p.winner, loser: p.loser, capitulated: p.capitulated })) });
   }
 
   // Runs `years` years back to back, yielding to the browser between slices
   private async jumpYears(years: number, simulate = true) {
-    if (this.jumping || this.generator.isGenerating || this.exportingGif) return;
+    if (this.jumping || this.generator.isGenerating || this.exportingGif || this.peacePending()) return;
     this.jumping = true;
     this.backToPresent();
     const world = this.generator.getWorld();
     this.sim ??= new Simulation(world, this.generator.getNoise());
+    this.sim.holdPeace = (winner, loser) => this.peaceConferences && !!this.peaceRealm && (winner === this.peaceRealm || loser === this.peaceRealm);
     const nationsBefore = world.nations.length;
     const citiesBefore = world.cities.length;
     const colorsBefore = world.nations.map((n) => n.color).join();
     const btn = document.getElementById(simulate ? "sim-jump" : "sim-skip") as HTMLButtonElement | null;
     const label = btn?.querySelector("span");
     const idle = label?.textContent ?? "";
-    for (const id of ["sim-jump", "sim-skip"]) (document.getElementById(id) as HTMLButtonElement | null)?.setAttribute("disabled", "");
+    for (const id of ["sim-jump", "sim-skip", "sim-bar-jump"]) (document.getElementById(id) as HTMLButtonElement | null)?.setAttribute("disabled", "");
     let changed = false;
     try {
       for (let done = 0; done < years; ) {
@@ -1413,6 +1567,8 @@ export class Interface {
           if (simulate) changed = this.sim.step() || changed;
           else this.sim.skipYear();
           done++;
+          // A peace conference ends the run here
+          if (simulate && this.peaceConferences && this.endedWars().length) years = done;
         }
         this.inSimStep = false;
         if (label) label.textContent = `${done}/${years}`;
@@ -1426,10 +1582,11 @@ export class Interface {
     } finally {
       this.inSimStep = false;
       this.jumping = false;
-      for (const id of ["sim-jump", "sim-skip"]) document.getElementById(id)?.removeAttribute("disabled");
+      for (const id of ["sim-jump", "sim-skip", "sim-bar-jump"]) document.getElementById(id)?.removeAttribute("disabled");
       if (label) label.textContent = idle;
       this.renderSimPanel();
     }
+    if (simulate && this.generator.getWorld() === world) this.maybePeaceConference();
   }
 
   // Uploads and caches after the simulation changed the world (a year or a
@@ -1500,6 +1657,7 @@ export class Interface {
       }),
     );
     document.getElementById("war-pick")?.classList.toggle("active", this.warPicking);
+    this.renderPeaceRealm();
     const history = this.activeTab === "history";
     this.syncWarLock();
     this.canvasManager.canvas.style.cursor = history && this.warPicking ? "pointer" : history && this.warAttacker ? "crosshair" : "grab";
@@ -1535,6 +1693,7 @@ export class Interface {
   }
 
   private cancelWarLine() {
+    this.canvasManager.holdPan = false;
     if (!this.warLine) return;
     this.warLine = null;
     this.canvasManager.scheduleRender();
@@ -1561,6 +1720,7 @@ export class Interface {
 
   // Release: simplify the line and attack all along it
   private finishWarLine() {
+    this.canvasManager.holdPan = false;
     const line = this.warLine;
     if (!line) return;
     const world = this.generator.getWorld();
@@ -1629,6 +1789,7 @@ export class Interface {
     this.pauseSim();
     this.backToPresent();
     this.sim ??= new Simulation(world, this.generator.getNoise());
+    this.sim.holdPeace = (winner, loser) => this.peaceConferences && !!this.peaceRealm && (winner === this.peaceRealm || loser === this.peaceRealm);
     const nationsBefore = world.nations.length;
     const citiesBefore = world.cities.length;
     const colorsBefore = world.nations.map((n) => n.color).join();
@@ -1805,7 +1966,16 @@ export class Interface {
         : `<svg viewBox="0 0 24 24" width="18" height="18"><path d="M7 4.5v15l12-7.5z" fill="currentColor"/></svg>`;
     }
     const bar = document.getElementById("sim-bar");
-    if (bar) bar.style.display = this.sim ? "flex" : "none";
+    // Shown once history has started, and on the History tab to start it
+    if (bar) bar.style.display = this.sim || this.activeTab === "history" ? "flex" : "none";
+    const barStep = document.getElementById("sim-bar-step") as HTMLButtonElement | null;
+    if (barStep) barStep.disabled = this.jumping || this.exportingGif;
+    const barJump = document.getElementById("sim-bar-jump");
+    if (barJump && !this.jumping) {
+      const n = this.jumpSize();
+      barJump.textContent = `+${n}`;
+      barJump.title = `Simulate ${n} year${n === 1 ? "" : "s"} at once (set in the History panel)`;
+    }
     const sim = this.sim;
     const world = this.generator.getWorld();
     const replay = this.replay;
@@ -2355,13 +2525,14 @@ export class Interface {
     }
 
     if (this.activeTab === "build") this.buildTool.drawOverlay(ctx, scale, offsetX, offsetY, width);
+    this.provinceTool.draw(ctx, scale, offsetX, offsetY, width);
 
     // --- City hovered in the nations list ---
     const hc = this.nationsManager.hoveredCityId >= 0 ? world.cities.find((c) => c.id === this.nationsManager.hoveredCityId) : undefined;
     if (hc) {
       const r = Math.max(9, Math.min(26, scale * 0.6));
       ctx.save();
-      for (let copy = -1; copy <= 1; copy++) {
+      for (const copy of copiesInView(hc.x, hc.x, world.width, scale, offsetX, width, 50)) {
         const sx = (hc.x + copy * world.width) * scale + offsetX;
         const sy = hc.y * scale + offsetY;
         if (sx < -50 || sx > width + 50 || sy < -50 || sy > height + 50) continue;
@@ -2615,7 +2786,12 @@ export class Interface {
       this.nationsManager.nationsStateDirty = false;
       this.thematicFocus = -2;
     }
-    if (L.flagmap) await this.flagMap.sharp(); // every flag at full size
+    if (L.flagmap) {
+      // Every flag at full size, and as detailed as the poster's own pixels
+      // (the atlas goes back to the live view's detail afterwards)
+      this.flagMap.exportPxPerCell = Math.max(6, Math.min(40, v.scale * 1.25));
+      await this.flagMap.sharp();
+    }
     // A provinces poster fills each province with its own shade of the realm
     const shades = v.style === "provinces" ? provinceColors(world) : null;
     // An export may ask for its own layers (a realm's cultures, races...)
@@ -2744,6 +2920,10 @@ export class Interface {
       this.gpuRenderer.pixelRatio = 1;
       this.gpuRenderer.frame = null;
       this.exporting = false;
+      if (this.flagMap.exportPxPerCell !== null) {
+        this.flagMap.exportPxPerCell = null;
+        if (this.activeLayers.flagmap) this.flagMap.sync();
+      }
       if (ovr) {
         // Hand the textures back to the live view
         this.thematicLocked = false;

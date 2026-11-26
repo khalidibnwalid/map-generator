@@ -268,6 +268,10 @@ export class FlagMapRenderer {
     if (placed) this.uploadTable(layout);
   }
 
+  // A poster export asks for flags as sharp as its own resolution (device
+  // pixels per cell); null is the live view's detail
+  public exportPxPerCell: number | null = null;
+
   // Rebuilds the atlas when a flag, an overlord (the canton) or a realm's size
   // tier changed. Returns whether it did.
   private refreshAtlas(world: WorldData, layout: FlagLayout): boolean {
@@ -276,7 +280,9 @@ export class FlagMapRenderer {
     const widest = new Float32Array(count);
     for (const p of layout.placements) if (p.nation < count) widest[p.nation] = Math.max(widest[p.nation], p.w);
     const tiers: number[] = [];
-    for (let i = 0; i < count; i++) tiers.push(widest[i] > 0 ? Math.min(MAX_FLAG_PX, Math.max(32, nextPow2(widest[i] * PX_PER_CELL))) : 0);
+    const ppc = this.exportPxPerCell ?? PX_PER_CELL;
+    const maxPx = this.exportPxPerCell ? Math.min(2048, this.gpu.maxTextureSize) : MAX_FLAG_PX;
+    for (let i = 0; i < count; i++) tiers.push(widest[i] > 0 ? Math.min(maxPx, Math.max(32, nextPow2(widest[i] * ppc))) : 0);
     let same = count === this.flags.length && this.atlasKey !== "" && !this.redraw;
     for (let i = 0; same && i < count; i++) {
       const n = world.nations[i];
@@ -297,7 +303,7 @@ export class FlagMapRenderer {
 
     // Shelf packing, tallest first; halve every flag until it fits
     const maxTex = Math.min(4096, this.gpu.maxTextureSize);
-    const AW = Math.min(maxTex, 2048);
+    const AW = Math.min(maxTex, this.exportPxPerCell ? 4096 : 2048);
     let scale = 1;
     let slots: { i: number; w: number; h: number; x: number; y: number }[];
     let AH: number;

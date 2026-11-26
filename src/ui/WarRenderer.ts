@@ -10,6 +10,20 @@ export const BATTLE_FADE_YEARS = 8;
 // At most this many marks per country (as winner or loser), newest first
 export const BATTLE_MARKS_PER_NATION = 8;
 
+// The copies k of the wrapping world (drawn shifted by k map widths) in which
+// something spanning x = minX..maxX (cells, may be unwrapped) shows on a
+// screen `width` pixels wide. The view's offset is never wrapped, so after a
+// long pan the visible copy can be any k, not just -1..1.
+export function copiesInView(minX: number, maxX: number, worldW: number, scale: number, offX: number, width: number, pad = 40): number[] {
+  const span = worldW * scale;
+  if (!(span > 0)) return [];
+  const k0 = Math.ceil((-pad - offX - maxX * scale) / span);
+  const k1 = Math.floor((width + pad - offX - minX * scale) / span);
+  const out: number[] = [];
+  for (let k = k0; k <= k1 && out.length < 64; k++) out.push(k);
+  return out;
+}
+
 // Crossed swords centered on (x, y), r = half the blade length in pixels
 export function drawSwords(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, alpha: number) {
   ctx.save();
@@ -70,7 +84,7 @@ export function drawBattles(
     shown.set(b.loser, (shown.get(b.loser) ?? 0) + 1);
     const alpha = Math.pow(1 - age / (BATTLE_FADE_YEARS + 1), 1.4) * (1 - (rank / BATTLE_MARKS_PER_NATION) * 0.7);
     const r = Math.min(15, 4 + Math.sqrt(b.size) * 0.7) * zoom;
-    for (let copy = -1; copy <= 1; copy++) {
+    for (const copy of copiesInView(b.x, b.x, worldW, scale, offX, width, 20)) {
       const sx = (b.x + copy * worldW) * scale + offX;
       const sy = b.y * scale + offY;
       if (sx < -20 || sx > width + 20 || sy < -20 || sy > height + 20) continue;
@@ -94,9 +108,9 @@ export function drawFronts(
   ctx.lineJoin = "round";
   ctx.lineCap = "butt";
   const span = worldW * scale;
-  for (let copy = -1; copy <= 1; copy++) {
+  // Front chains may run past the seam (unwrapped): allow half a map either side
+  for (const copy of copiesInView(-worldW * 0.5, worldW * 1.5, worldW, scale, offX, width, 0)) {
     const ox = offX + copy * span;
-    if (ox > width || ox + span * 1.5 < 0) continue;
     const path = new Path2D();
     for (const f of fronts)
       for (const c of f.chains) {
@@ -119,7 +133,7 @@ export function drawFronts(
 
   // Offensive arrows
   for (const o of offensives) {
-    for (let copy = -1; copy <= 1; copy++) {
+    for (const copy of copiesInView(Math.min(o.x0, o.x1), Math.max(o.x0, o.x1), worldW, scale, offX, width, 30)) {
       const x0 = (o.x0 + copy * worldW) * scale + offX;
       const y0 = o.y0 * scale + offY;
       const x1 = (o.x1 + copy * worldW) * scale + offX;
@@ -180,10 +194,15 @@ export function drawAttackLine(
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
   const span = worldW * scale;
-  for (let copy = -1; copy <= 1; copy++) {
+  let minX = Infinity;
+  let maxX = -Infinity;
+  for (const p of line) {
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+  }
+  for (const copy of copiesInView(minX, maxX, worldW, scale, offX, width)) {
     const ox = offX + copy * span;
     const xs = line.map((p) => p.x * scale + ox);
-    if (Math.max(...xs) < -40 || Math.min(...xs) > width + 40) continue;
     const path = new Path2D();
     path.moveTo(xs[0], line[0].y * scale + offY);
     for (let k = 1; k < line.length; k++) path.lineTo(xs[k], line[k].y * scale + offY);

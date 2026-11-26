@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { MapGenerator } from "../src/game/MapGenerator";
 import { Simulation } from "../src/game/sim/Simulation";
-import { bandCount, conquestPeriods, CORE, everyYears, expansionOf, expansionShades, lightness, LOST, NONE, normalizeBounds, type Expansion } from "../src/ui/ExpansionPoster";
+import { bandCount, conquestPeriods, CORE, everyYears, expansionOf, expansionShades, lightness, LOST, NONE, normalizeBounds, paletteColors, smartPalette, smartPeriods, SMART_MAX, type Expansion } from "../src/ui/ExpansionPoster";
 
 test("a realm's expansion: every land cell it ever held is classified once, periods in order, its own battles", async () => {
   const g = new MapGenerator(400, 225, 8080);
@@ -181,16 +181,16 @@ test("at today's year the poster holds exactly the realm's land on the live map,
   expect(after.peak.cells).toBeGreaterThanOrEqual(after.counts.atEnd);
 }, 300_000);
 
-test("period shades: one hue, evenly lighter, never black or white, for mid, pale and dark realm colors", () => {
+test("period shades: evenly lighter, never black or white, for mid, pale and dark realm colors", () => {
   for (const color of ["#b03a2e", "#f3d9e2", "#1d2a55", "#6f8f3a", "#808080"]) {
     for (const periods of [1, 2, 5, 6, 8, 12]) {
       const shades = expansionShades(color, periods);
       expect(shades.length).toBe(periods + 1);
       const L = shades.map(lightness);
-      expect(L[0]).toBeGreaterThan(0.34);
-      expect(L[L.length - 1]).toBeLessThan(0.93);
+      expect(L[0]).toBeGreaterThan(0.28);
+      expect(L[L.length - 1]).toBeLessThan(0.94);
       // A slightly smaller step is fine past 6 periods
-      for (let k = 1; k < L.length; k++) expect(L[k] - L[k - 1]).toBeGreaterThan(periods > 6 ? 0.04 : 0.06);
+      for (let k = 1; k < L.length; k++) expect(L[k] - L[k - 1]).toBeGreaterThan(periods > 6 ? 0.045 : 0.06);
       expect(shades.every((c) => c.some((v) => v < 250))).toBe(true);
     }
   }
@@ -318,3 +318,43 @@ test("every split classifies each conquest once: years, 12.5 years, bands of 1 a
   }
   expect(late).toBeGreaterThan(0);
 }, 300_000);
+
+test("every palette orders the core and periods from dark to light, the core its own color", () => {
+  for (const kind of ["realm", "spectrum", "distinct", "custom", "smart"] as const)
+    for (const periods of [1, 3, 6, 10]) {
+      const c = paletteColors({ kind, from: "#3a1c5c", to: "#f6e27a" }, "#b03a2e", periods);
+      expect(c.length).toBe(periods + 1);
+      const L = c.map(lightness);
+      for (let k = 1; k < L.length; k++) expect(L[k]).toBeGreaterThan(L[k - 1]);
+      // The land it started with never shares a color with a period
+      for (let k = 1; k < c.length; k++) expect(c[k].join()).not.toBe(c[0].join());
+    }
+  expect(smartPalette(3)).toBe("realm");
+  expect(smartPalette(6)).toBe("spectrum");
+  expect(smartPalette(12)).toBe("distinct");
+});
+
+test("smart periods follow the waves of conquest and cut in the quiet years", () => {
+  // Three waves: 10-20, 60-70 and 150-160, quiet between
+  const gains = new Map<number, number>();
+  for (const [a, b] of [[10, 20], [60, 70], [150, 160]]) for (let y = a; y <= b; y++) gains.set(y, 5);
+  const p = smartPeriods(gains, 0, 200);
+  expect(p.length).toBe(3);
+  expect(p[0].from).toBe(1);
+  expect(p[p.length - 1].to).toBe(200);
+  for (let k = 1; k < p.length; k++) expect(p[k].from).toBe(p[k - 1].to + 1);
+  // Each wave inside its own period, each cut in the quiet stretch
+  expect(p[0].to).toBeGreaterThanOrEqual(20);
+  expect(p[0].to).toBeLessThan(60);
+  expect(p[1].from).toBeLessThanOrEqual(60);
+  expect(p[1].to).toBeGreaterThanOrEqual(70);
+  expect(p[2].from).toBeLessThanOrEqual(150);
+
+  // Many waves merge down to at most SMART_MAX; one steady wave splits into a few
+  const many = new Map<number, number>();
+  for (let w = 0; w < 20; w++) for (let y = w * 20 + 1; y <= w * 20 + 3; y++) many.set(y, 3);
+  expect(smartPeriods(many, 0, 400).length).toBeLessThanOrEqual(SMART_MAX);
+  const steady = new Map<number, number>();
+  for (let y = 1; y <= 100; y++) steady.set(y, 2);
+  expect(smartPeriods(steady, 0, 100).length).toBeGreaterThanOrEqual(2);
+});

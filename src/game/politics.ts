@@ -357,6 +357,174 @@ export function provinceIndependence(world: WorldData, provinceId: number): numb
   return idx;
 }
 
+// --- Redrawing borders by province (the map editor's province tool) ---
+
+// A realm to form from provinces: name and color picked in the editor, or
+// derived from the land (its people's naming, a color unlike its neighbors')
+export interface NewRealm {
+  name?: string;
+  color?: string;
+}
+
+export interface TransferResult {
+  nation: number; // the receiving realm's index afterwards (-1: nothing was done)
+  moved: number; // provinces that changed hands
+  removed: string[]; // names of realms left without land, removed
+}
+
+// Provinces `ids` pass to realm `to` (an index), or together form a new realm.
+// Each takes its land, cities and nearby waters; a capital that leaves moves
+// its old realm's seat to its largest remaining city; a realm left without
+// any land is removed. A new realm rules from the seat of its largest
+// province and is a rival of every realm it took land from.
+// `occupiers`: realms whose cells inside these provinces move too (a peace
+// conference: land the victor occupies goes with its province, wherever it goes).
+export function transferProvinces(world: WorldData, ids: number[], to: number | NewRealm, occupiers: number[] = []): TransferResult {
+  const none: TransferResult = { nation: -1, moved: 0, removed: [] };
+  const toNew = typeof to !== "number";
+  if (!toNew && !world.nations[to]) return none;
+  const provs = [...new Set(ids)]
+    .map((id) => world.provinces.find((p) => p.id === id))
+    .filter((p): p is NonNullable<typeof p> => !!p && !!world.nations[p.nationIndex] && (toNew || p.nationIndex !== to));
+  if (!provs.length) return none;
+
+  const W = world.width;
+  const H = world.height;
+  const owners = new Set(provs.map((p) => p.nationIndex));
+  const byId = new Map(provs.map((p) => [p.id, p]));
+  // A cell of province P moves if its realm holds it, or one of the occupiers does
+  const moves = (P: { nationIndex: number }, cellOwner: number | undefined) =>
+    cellOwner !== undefined && (cellOwner === P.nationIndex || (occupiers.includes(cellOwner) && cellOwner >= 0));
+  const cells: number[] = [];
+  const neighbors = new Set<number>(owners);
+  const cultures = new Map<number, number>();
+  const faiths = new Map<number, number>();
+  const tally = (m: Map<number, number>, k: number | undefined) => {
+    if (k !== undefined && k >= 0) m.set(k, (m.get(k) ?? 0) + 1);
+  };
+  const cellProv = new Int32Array(W * H).fill(-1);
+  for (let x = 0; x < W; x++)
+    for (let y = 0; y < H; y++) {
+      const c = world.grid[x][y];
+      const P = c.provinceIndex !== undefined ? byId.get(c.provinceIndex) : undefined;
+      if (!P || !moves(P, c.nationIndex)) continue;
+      const i = y * W + x;
+      cells.push(i);
+      owners.add(c.nationIndex!);
+      cellProv[i] = P.id;
+      tally(cultures, c.cultureIndex);
+      tally(faiths, c.religionIndex);
+      for (const [nx, ny] of [[(x + 1) % W, y], [(x - 1 + W) % W, y], [x, y - 1], [x, y + 1]]) {
+        const n = ny >= 0 && ny < H ? (world.grid[nx][ny].nationIndex ?? -1) : -1;
+        if (n >= 0) neighbors.add(n);
+      }
+    }
+  if (!cells.length) return none;
+  const most = (m: Map<number, number>) => [...m].sort((a, b) => b[1] - a[1])[0]?.[0];
+  const inMoved = (x: number, y: number) => {
+    const c = world.getCell(x, y);
+    const P = c?.provinceIndex !== undefined ? byId.get(c.provinceIndex) : undefined;
+    return !!P && moves(P, c!.nationIndex);
+  };
+  const cities = world.cities.filter((c) => {
+    const P = c.provinceIndex !== undefined ? byId.get(c.provinceIndex) : undefined;
+    return (P && moves(P, c.nationIndex)) || (owners.has(c.nationIndex) && inMoved(c.x, c.y));
+  });
+  // Realms whose capital leaves with these provinces
+  const lostCapital = new Set<number>();
+  for (const o of owners) {
+    const n = world.nations[o];
+    if (inMoved(n.capitalX, n.capitalY) || cities.some((c) => c.nationIndex === o && c.isCapital)) lostCapital.add(o);
+  }
+
+  // The receiving realm
+  let t: number;
+  if (toNew) {
+    const largest = [...provs].sort((a, b) => (b.area ?? 0) - (a.area ?? 0))[0];
+    const inLargest = cities.filter((c) => c.provinceIndex === largest.id);
+    const seat =
+      cities.find((c) => c.id === largest.capitalCityId) ?? [...(inLargest.length ? inLargest : cities)].sort((a, b) => b.population - a.population)[0];
+    const old = world.nations[largest.nationIndex];
+    const culture = most(cultures) ?? old.cultureId ?? 0;
+    const lang = world.languages[culture];
+    const mid = cells[cells.length >> 1];
+    const name = to.name?.trim() || (provs.length === 1 ? (seat?.name ?? largest.name) : (lang?.nationName() ?? seat?.name ?? largest.name));
+    t = appendNation(world, {
+      id: 0,
+      name,
+      color: to.color || colorForNewNation(world, [...neighbors]),
+      capitalX: seat?.x ?? largest.centroidX ?? (mid % W) + 0.5,
+      capitalY: seat?.y ?? largest.centroidY ?? Math.floor(mid / W) + 0.5,
+      cultureId: culture,
+      religionId: most(faiths) ?? old.religionId,
+      government: lang ? lang.government(Math.min(1, cells.length / 4000), false) : "Kingdom",
+    });
+    for (const c of cities) c.isCapital = c === seat;
+  } else {
+    t = to;
+    for (const c of cities) c.isCapital = false;
+  }
+  const T = world.nations[t];
+
+  for (const i of cells) world.grid[i % W][(i - (i % W)) / W].nationIndex = t;
+  for (const c of cities) c.nationIndex = t;
+  for (const P of provs) {
+    P.color = retint(P.color, world.nations[P.nationIndex].color, T.color);
+    P.nationIndex = t;
+  }
+  // A realm annexing land keeps its own capital; one without a capital city takes the largest it gained
+  if (!toNew) relocateCapital(world, t);
+
+  for (const o of lostCapital) {
+    const old = world.nations[o];
+    relocateCapital(world, o);
+    // No cities left to rule from: the seat of its largest province
+    if (!world.cities.some((c) => c.nationIndex === o && c.isCapital)) {
+      const rest = world.provinces.filter((p) => p.nationIndex === o).sort((a, b) => (b.area ?? 0) - (a.area ?? 0))[0];
+      if (rest) {
+        old.capitalX = rest.seatX ?? rest.centroidX ?? old.capitalX;
+        old.capitalY = rest.seatY ?? rest.centroidY ?? old.capitalY;
+      }
+    }
+  }
+  if (toNew) {
+    // A realm carved out of others is no friend of theirs
+    for (const o of owners) setRelation(world, t, o, "Rival");
+    T.flag = defaultFlagFor(world, t);
+    foundHouse(world, T, world.year, Math.random);
+  }
+
+  // Sea claims follow the new coastline
+  refreshTerritorialWaters(world);
+  refreshBorderFlags(world, cells);
+
+  // Realms left with no land at all are gone (highest index first, so the
+  // others keep theirs while removing)
+  const landOf = new Map<number, number>();
+  for (let x = 0; x < W; x++)
+    for (let y = 0; y < H; y++) {
+      const c = world.grid[x][y];
+      if (!c.isWater && c.nationIndex !== undefined && owners.has(c.nationIndex)) landOf.set(c.nationIndex, (landOf.get(c.nationIndex) ?? 0) + 1);
+    }
+  const removed: string[] = [];
+  for (const o of [...owners].sort((a, b) => b - a)) {
+    if (o === t || landOf.get(o)) continue;
+    removed.push(world.nations[o].name);
+    // Its vassals go free with it
+    world.nations.forEach((n, i) => {
+      if (n.overlord === o) releaseVassal(world, i);
+    });
+    removeNation(world, o);
+    if (o < t) t--;
+  }
+
+  if (provinceTypesApply(world)) {
+    refreshProvinceTypes(world);
+    if (toNew) assignProvinceTypes(world, { nation: t });
+  }
+  return { nation: t, moved: provs.length, removed };
+}
+
 // Land for a realm founded in the editor at (x, y): it spreads from there the
 // way a history offensive does. Open country is cheap; river crossings and
 // climbs are dear, so it tends to stop at rivers, ridges and the coast; land

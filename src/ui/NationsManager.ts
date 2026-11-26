@@ -1340,7 +1340,7 @@ export class NationsManager {
 
   // Textures, caches and the list after nations were merged or founded;
   // `removed` is the index of a nation that is gone
-  private politicsChanged(select: number, removed = -1) {
+  public politicsChanged(select: number, removed = -1) {
     const world = this.generator.getWorld();
     if (removed >= 0) {
       this.nationSubTabs.clear();

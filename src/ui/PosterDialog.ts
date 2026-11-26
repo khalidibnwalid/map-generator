@@ -13,10 +13,11 @@ import {
 } from "./AtlasRender";
 import { loadPosterFonts, paintBackground, paintDecorations, posterLayout, posterView, type PosterSpec } from "./PosterDecor";
 import { background } from "./components/Toast";
-import { MAP_STYLES, type PosterStyle } from "./ProvincePoster";
+import { type PosterStyle } from "./ProvincePoster";
 import {
   chooseSplit,
   defaultExpansionChoice,
+  EXPANSION_COLORS_HTML,
   EXPANSION_SPLIT_HTML,
   EXPANSION_STYLE,
   expansionDefaultsFor,
@@ -26,10 +27,20 @@ import {
   paintExpansionPoster,
   syncExpansionControls,
   type ExpansionChoice,
+  type PaletteKind,
 } from "./ExpansionPoster";
 import { installSteppers } from "./components/NumberInput";
 
 type Scope = "world" | "nations";
+type Tab = "map" | "periods" | "decor";
+
+const ic = (body: string) => `<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+const STYLE_CARDS: { value: string; label: string; hint: string; icon: string }[] = [
+  { value: "live", label: "As shown", hint: "The map as you see it", icon: ic(`<path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3z"/><path d="M9 3v15M15 6v15"/>`) },
+  { value: "provinces", label: "Provinces", hint: "Each province in a shade", icon: ic(`<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 10h8l2-3h8M11 10l1 11M13 7l2 7h6"/>`) },
+  { value: "flags", label: "Flags", hint: "Realms filled with flags", icon: ic(`<path d="M5 21V4"/><path d="M5 4h12l-2 4 2 4H5"/>`) },
+  { value: EXPANSION_STYLE.value, label: "Expansion", hint: "A realm's growth in history", icon: ic(`<circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="6.5" stroke-dasharray="2 2.2"/><circle cx="12" cy="12" r="10"/>`) },
+];
 type Format = "png" | "jpeg";
 
 const SIZES = [
@@ -77,6 +88,7 @@ export class PosterDialog {
   private historySeen = "";
   private size = 4096;
   private format: Format = "png";
+  private tab: Tab = "map";
   private decor: Record<DecorKey, boolean> = { title: true, compass: true, scaleBar: true, legend: true, frame: true, flags: false };
   private previewTimer = 0;
   private previewRunning = false;
@@ -97,62 +109,80 @@ export class PosterDialog {
         </div>
         <div class="pd-body">
           <div class="pd-options">
-            <div class="field">
-              <div class="field-label">Scope</div>
-              ${seg("scope", [
-                { value: "world", label: "Whole world" },
-                { value: "nations", label: "Selected nations" },
-              ])}
+            <div class="pd-tabs" role="tablist">
+              <button type="button" class="pd-tab" role="tab" data-tab="map">Map</button>
+              <button type="button" class="pd-tab" role="tab" data-tab="periods" id="pd-tab-periods">Periods &amp; colours</button>
+              <button type="button" class="pd-tab" role="tab" data-tab="decor">Title &amp; frame</button>
             </div>
-            <div class="pd-nations" id="pd-nations">
-              <input type="search" id="pd-filter" placeholder="Filter nations…" />
-              <div class="pd-nation-list" id="pd-nation-list"></div>
-              <div class="pd-nation-tools">
-                <button type="button" class="btn-ghost pd-mini" id="pd-all">All</button>
-                <button type="button" class="btn-ghost pd-mini" id="pd-none">None</button>
-                <span class="pd-count" id="pd-count"></span>
+
+            <div class="pd-pane" data-pane="map">
+              <div class="field">
+                <div class="field-label">Map style</div>
+                <div class="pd-seg pd-styles" data-key="style">${STYLE_CARDS.map(
+                  (c) => `<button type="button" class="pick pd-style" data-value="${c.value}">
+                    <span class="pd-style-icon" aria-hidden="true">${c.icon}</span>
+                    <span class="pd-style-text"><strong>${c.label}</strong><small>${c.hint}</small></span>
+                  </button>`,
+                ).join("")}</div>
+                <small class="pd-hint" id="pd-exp-hint"></small>
               </div>
-              ${switchRow("pd-vassals", "Include vassals", true)}
+              <div class="field" id="pd-expansion">
+                <div class="field-label">Realm</div>
+                <div id="pd-exp-nation"></div>
+                <div class="pd-exp-years">
+                  <span class="pd-exp-num-label">Up to year</span>
+                  <input type="number" id="pd-exp-end" step="1" data-stepper />
+                </div>
+                <small class="pd-hint" id="pd-exp-since"></small>
+                <button type="button" class="btn-ghost pd-mini pd-goto" data-goto="periods">Periods &amp; colours →</button>
+              </div>
+              <div class="field">
+                <div class="field-label">Area</div>
+                ${seg("scope", [
+                  { value: "world", label: "Whole world" },
+                  { value: "nations", label: "Selected nations" },
+                ])}
+              </div>
+              <div class="pd-nations" id="pd-nations">
+                <input type="search" id="pd-filter" placeholder="Filter nations…" />
+                <div class="pd-nation-list" id="pd-nation-list"></div>
+                <div class="pd-nation-tools">
+                  <button type="button" class="btn-ghost pd-mini" id="pd-all">All</button>
+                  <button type="button" class="btn-ghost pd-mini" id="pd-none">None</button>
+                  <span class="pd-count" id="pd-count"></span>
+                </div>
+                ${switchRow("pd-vassals", "Include vassals", true)}
+              </div>
+              <div class="field" id="pd-layers-field">
+                <div class="field-label">Map layers</div>
+                ${seg("layers", [
+                  { value: "live", label: "As shown" },
+                  { value: "cultures", label: "Cultures" },
+                  { value: "races", label: "Races" },
+                  { value: "both", label: "Both" },
+                ])}
+              </div>
             </div>
-            <div class="field">
-              <div class="field-label">Map style</div>
-              ${seg("style", [...MAP_STYLES, EXPANSION_STYLE])}
-              <small class="pd-hint" id="pd-exp-hint"></small>
+
+            <div class="pd-pane" data-pane="periods">
+              <div class="field">${EXPANSION_SPLIT_HTML}</div>
+              <div class="field">${EXPANSION_COLORS_HTML}</div>
             </div>
-            <div class="field" id="pd-expansion">
-              <div class="field-label">Realm</div>
-              <div id="pd-exp-nation"></div>
-              <div class="field-label">Up to year</div>
-              <input type="number" id="pd-exp-end" step="1" data-stepper />
-              ${EXPANSION_SPLIT_HTML}
-            </div>
-            <div class="field" id="pd-layers-field">
-              <div class="field-label">Map layers</div>
-              ${seg("layers", [
-                { value: "live", label: "As shown" },
-                { value: "cultures", label: "Cultures" },
-                { value: "races", label: "Races" },
-                { value: "both", label: "Both" },
-              ])}
-            </div>
-            <div class="field">
-              <div class="field-label">Size <span class="pd-dims" id="pd-dims"></span></div>
-              ${seg("size", SIZES)}
-            </div>
-            <div class="field">
-              <div class="field-label">Format</div>
-              ${seg("format", [
-                { value: "png", label: "PNG" },
-                { value: "jpeg", label: "JPEG" },
-              ])}
-              <small class="pd-hint">JPEG keeps large posters to a few megabytes.</small>
-            </div>
-            <div class="group">
-              <div class="group-title">Decorations</div>
-              ${DECOR.map((d) => switchRow(`pd-${d.key}`, d.label, this.decor[d.key], "hint" in d ? d.hint : "")).join("")}
-              <div class="pd-title-fields" id="pd-title-fields">
-                <input type="text" id="pd-title-text" placeholder="Title" />
-                <input type="text" id="pd-subtitle-text" placeholder="Subtitle" />
+
+            <div class="pd-pane" data-pane="decor">
+              <div class="field">
+                <div class="field-label">Title</div>
+                ${switchRow("pd-title", "Title cartouche", this.decor.title)}
+                <div class="pd-title-fields" id="pd-title-fields">
+                  <input type="text" id="pd-title-text" placeholder="Title" aria-label="Title" />
+                  <input type="text" id="pd-subtitle-text" placeholder="Subtitle" aria-label="Subtitle" />
+                </div>
+              </div>
+              <div class="field">
+                <div class="field-label">On the map</div>
+                ${DECOR.filter((d) => d.key !== "title")
+                  .map((d) => switchRow(`pd-${d.key}`, d.label, this.decor[d.key], "hint" in d ? d.hint : ""))
+                  .join("")}
               </div>
             </div>
           </div>
@@ -167,9 +197,25 @@ export class PosterDialog {
             </div>
           </div>
         </div>
-        <div class="modal-actions">
-          <button class="btn-cancel" id="pd-cancel">Close</button>
-          <button class="btn-primary pd-export" id="pd-export">Export</button>
+        <div class="pd-foot">
+          <div class="pd-output">
+            <div class="pd-out">
+              <span class="pd-out-label">Size</span>
+              ${seg("size", SIZES)}
+            </div>
+            <div class="pd-out" title="JPEG keeps large posters to a few megabytes">
+              <span class="pd-out-label">Format</span>
+              ${seg("format", [
+                { value: "png", label: "PNG" },
+                { value: "jpeg", label: "JPEG" },
+              ])}
+            </div>
+            <span class="pd-dims" id="pd-dims"></span>
+          </div>
+          <div class="pd-actions">
+            <button class="btn-cancel" id="pd-cancel">Close</button>
+            <button class="btn-primary pd-export" id="pd-export">Export</button>
+          </div>
         </div>
       </div>`;
     document.body.appendChild(this.root);
@@ -201,10 +247,18 @@ export class PosterDialog {
           this.style = v as PosterStyle | "expansion";
         }
         else if (key === "split") chooseSplit(this.host.getWorld(), this.host.simulation?.() ?? null, this.expansion, v);
+        else if (key === "palette") this.expansion.palette = v as PaletteKind;
         else if (key === "size") this.size = Number(v);
         else if (key === "format") this.format = v as Format;
         this.sync();
         if (key !== "format") this.schedulePreview();
+      }),
+    );
+    // Option tabs, and links that jump to one
+    this.root.querySelectorAll<HTMLElement>(".pd-tab, .pd-goto").forEach((b) =>
+      b.addEventListener("click", () => {
+        this.tab = (b.dataset.tab ?? b.dataset.goto) as Tab;
+        this.sync();
       }),
     );
     $("pd-filter").addEventListener("input", () => this.renderNationList());
@@ -346,6 +400,15 @@ export class PosterDialog {
     });
     if (!ok && this.style === "expansion") this.style = "live";
     mark("style", this.style);
+    // Periods & colours belong to the expansion map only
+    const periods = this.style === "expansion";
+    $("pd-tab-periods").style.display = periods ? "" : "none";
+    if (!periods && this.tab === "periods") this.tab = "map";
+    this.root.querySelectorAll<HTMLElement>(".pd-tab").forEach((b) => {
+      b.classList.toggle("active", b.dataset.tab === this.tab);
+      b.setAttribute("aria-selected", String(b.dataset.tab === this.tab));
+    });
+    this.root.querySelectorAll<HTMLElement>(".pd-pane").forEach((p) => p.classList.toggle("active", p.dataset.pane === this.tab));
     $("pd-layers-field").style.display = this.style === "live" ? "" : "none";
     mark("size", String(this.size));
     mark("format", this.format);
@@ -357,7 +420,7 @@ export class PosterDialog {
     const spec = this.spec(this.size);
     $("pd-dims").textContent = spec ? (() => {
       const L = posterLayout(spec);
-      return `· ${L.W.toLocaleString()} × ${L.H.toLocaleString()} px`;
+      return `${L.W.toLocaleString()} × ${L.H.toLocaleString()} px`;
     })() : "";
     const t = $<HTMLInputElement>("pd-title-text");
     const s = $<HTMLInputElement>("pd-subtitle-text");

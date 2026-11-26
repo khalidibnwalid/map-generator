@@ -1,4 +1,4 @@
-import type { City, WorldData } from "../WorldData";
+import type { City, Nation, WorldData } from "../WorldData";
 import { mulberry } from "../names";
 import type { NoiseEngine } from "../../core/NoiseEngine";
 import {
@@ -202,6 +202,14 @@ class Heap {
 export class Simulation {
   public year = 0;
   public events: SimEvent[] = [];
+  // Wars that ended in the last year stepped: the two sides (the winner first
+  // when one capitulated), as objects since indices may shift. Read by the
+  // interface's peace conferences; never saved.
+  public peaces: { winner: Nation; loser: Nation; capitulated: boolean; year: number; held: boolean }[] = [];
+  // Asked as each war ends: true leaves the peace to the user (a peace
+  // conference). The war stops, but nothing is ceded or handed back: the
+  // occupied land stays occupied until settlePeace or returnOccupied.
+  public holdPeace: ((winner: Nation, loser: Nation) => boolean) | null = null;
   public history: HistoryRecorder;
   public battles: Battle[] = []; // oldest first
   public offensives: Offensive[] = []; // advances of the latest year
@@ -624,6 +632,7 @@ export class Simulation {
   }
 
   public step(): boolean {
+    this.peaces = [];
     this.beforeOp();
     const changed = this.stepYear();
     this.afterOp("step");
@@ -775,6 +784,13 @@ export class Simulation {
         this.wars.delete(k);
         changed = true;
         const pos = { x: L.capitalX, y: L.capitalY };
+        const toUser = !!this.holdPeace?.(w.nations[winner], L);
+        this.peaces.push({ winner: w.nations[winner], loser: L, capitulated: capitulates, year: this.year, held: toUser });
+        if (toUser) {
+          setRelation(w, winner, loser, "Rival");
+          this.log("peace", `${this.nameOf(winner)} and ${L.name} meet to settle the peace`, pos.x, pos.y);
+          continue;
+        }
         if (capitulates) {
           const remaining = m.land[loser] / Math.max(1, loser === war.a ? war.aLand0 : war.bLand0);
           if (remaining < 0.2 || rand() < 0.25) {
@@ -1107,6 +1123,9 @@ export class Simulation {
     if (!defLand) return null;
     const landing = !front.length;
     if (landing) front = coast;
+    // Landlocked and not touching the attacker: the prongs start from its land
+    // nearest the line (the army marches through), so a drawn line always strikes
+    if (!front.length) for (let i = 0; i < N; i++) if (this.land[i] && this.owner[i] === defender) front.push(i);
     if (!front.length) return null;
 
     this.syncWars();
@@ -1160,7 +1179,7 @@ export class Simulation {
           seed = i;
         }
       }
-      if (seed < 0) break;
+      if (seed < 0) continue;
       // Past the line, on the defender's side of it (or straight at the
       // point when the line has no direction)
       let sign = Math.sign(side(s, 1) - side(s, -1));
@@ -1278,20 +1297,27 @@ export class Simulation {
     const H = this.H;
     const owner = this.owner;
     const edges: number[] = [];
+    // Only wars being fought: one side holds land of the other. A war that is
+    // declared but idle (generation starts with many) draws no front.
+    const fought = new Set<number>();
     if (this.wars.size)
+      for (const [k, n] of this.occupation()) {
+        const a = Math.floor(k / 4096);
+        const b = k % 4096;
+        if (n > 0 && this.wars.has(this.pair(a, b))) fought.add(this.pair(a, b));
+      }
+    const front = (a: number, b: number) => a >= 0 && b >= 0 && a !== b && fought.has(this.pair(a, b));
+    if (fought.size)
       for (let y = 0; y < H; y++)
         for (let x = 0; x < W; x++) {
           const i = y * W + x;
           const o = owner[i];
           if (!this.land[i] || o < 0) continue;
           const r = y * W + ((x + 1) % W);
-          const pr = owner[r];
-          if (this.land[r] && pr >= 0 && pr !== o && this.wars.has(this.pair(o, pr)))
-            edges.push(y * W + ((x + 1) % W), (y + 1) * W + ((x + 1) % W));
+          if (this.land[r] && front(o, owner[r])) edges.push(y * W + ((x + 1) % W), (y + 1) * W + ((x + 1) % W));
           if (y + 1 < H) {
             const d = i + W;
-            const pd = owner[d];
-            if (this.land[d] && pd >= 0 && pd !== o && this.wars.has(this.pair(o, pd))) edges.push((y + 1) * W + x, (y + 1) * W + ((x + 1) % W));
+            if (this.land[d] && front(o, owner[d])) edges.push((y + 1) * W + x, (y + 1) * W + ((x + 1) % W));
           }
         }
     const lines: FrontLine[] = edges.length ? [{ a: -1, b: -1, chains: traceChains(edges, W) }] : [];
@@ -1424,6 +1450,47 @@ export class Simulation {
       out.set(k, (out.get(k) ?? 0) + 1);
     }
     return out;
+  }
+
+  // A held peace (see holdPeace) settled the way history would have: a
+  // capitulation cedes the provinces the winner holds most of, a negotiated
+  // peace swaps the well-held ones both ways; the rest of the occupied land
+  // returns. Returns whether anything was done.
+  public settlePeace(winner: Nation, loser: Nation, capitulated: boolean): boolean {
+    const a = this.world.nations.indexOf(winner);
+    const b = this.world.nations.indexOf(loser);
+    if (a < 0 || b < 0) return false;
+    if (this.needsSync) {
+      this.sync();
+      this.needsSync = false;
+    }
+    if (capitulated) this.cede(a, b, 0.3);
+    else {
+      this.cede(a, b, 0.55);
+      this.cede(b, a, 0.55);
+    }
+    this.conquestCache = null;
+    return true;
+  }
+
+  // Land the two realms still occupy of each other goes back to the owner of its province
+  public returnOccupied(x: Nation, y: Nation): boolean {
+    const a = this.world.nations.indexOf(x);
+    const b = this.world.nations.indexOf(y);
+    if (a < 0 || b < 0) return false;
+    if (this.needsSync) {
+      this.sync();
+      this.needsSync = false;
+    }
+    const N = this.W * this.H;
+    for (let i = 0; i < N; i++) {
+      if (!this.land[i]) continue;
+      const o = this.owner[i];
+      const po = this.provOwner(this.prov[i]);
+      if (o !== po && (o === a || o === b) && (po === a || po === b)) this.setOwner(i, po);
+    }
+    this.conquestCache = null;
+    return true;
   }
 
   // Provinces of `loser` that `winner` holds at least `share` of pass to it

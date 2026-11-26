@@ -7,6 +7,9 @@ export class CanvasManager {
     public offsetY: number = 0;
 
     public panningLocked: boolean = false;
+    // Set for the length of one drag that draws on the map (an attack line):
+    // no pan starts, whatever panningLocked says
+    public holdPan: boolean = false;
     private isDragging: boolean = false;
     private lastX: number = 0;
     private lastY: number = 0;
@@ -74,7 +77,7 @@ export class CanvasManager {
             if (this.touches.size === 2) {
                 this.pinch = pinchState();
                 this.isDragging = false;
-            } else if (this.touches.size === 1 && !this.panningLocked) {
+            } else if (this.touches.size === 1 && !this.panningLocked && !this.holdPan) {
                 this.isDragging = true;
                 this.lastX = e.clientX;
                 this.lastY = e.clientY;
@@ -94,7 +97,7 @@ export class CanvasManager {
                 this.offsetY += now.midY - this.pinch.midY;
                 this.zoomAt(now.dist / this.pinch.dist, now.midX - rect.left, now.midY - rect.top);
                 this.pinch = now;
-            } else if (this.isDragging && this.touches.size === 1) {
+            } else if (this.isDragging && this.touches.size === 1 && !this.holdPan) {
                 this.offsetX += e.clientX - this.lastX;
                 this.offsetY += e.clientY - this.lastY;
                 this.lastX = e.clientX;
@@ -136,6 +139,7 @@ export class CanvasManager {
             // allowing right-click (2) or middle-click (1) to pan even if locked
             // Also allow left-click (0) with Shift key to pan even if locked
             if (this.panningLocked && e.button === 0 && !e.shiftKey) return;
+            if (this.holdPan) return;
 
             this.isDragging = true;
             this.lastX = e.clientX;
@@ -151,7 +155,7 @@ export class CanvasManager {
         });
 
         window.addEventListener('mousemove', (e) => {
-            if (!this.isDragging) return;
+            if (!this.isDragging || this.holdPan) return;
 
             const dx = e.clientX - this.lastX;
             const dy = e.clientY - this.lastY;

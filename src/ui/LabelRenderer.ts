@@ -78,7 +78,10 @@ export class LabelRenderer {
           if (showFlags && fontSize >= 12) {
             const fh = Math.round(fontSize * 0.9);
             const fw = Math.round(fh * 1.5);
-            const flag = nationFlag(world, nation.id, fw * 2, fh * 2);
+            // As many pixels as the context really draws (posters scale it up)
+            const t = ctx.getTransform();
+            const k = Math.max(2, Math.ceil(Math.hypot(t.a, t.b) * 2) / 2);
+            const flag = nationFlag(world, nation.id, Math.round(fw * k), Math.round(fh * k));
             if (flag) {
               const fx = Math.round(sx - fw / 2);
               const fy = Math.round(sy - fontSize * 0.62 - fh - 3);

@@ -351,13 +351,20 @@ export default function renderMainApp() {
           <!-- Nations -->
           <section id="content-nations" class="tab-content">
             <div class="nations-sticky">
-            <div class="edit-mode-controls">
-              <button id="btn-edit-nations" class="btn-ghost" title="Paint borders">${ICONS.edit}<span>Edit borders</span></button>
-              <div class="brush-size-control">
-                <span class="brush-label-overlay">Brush</span>
-                <input type="range" id="brush-size" min="1" max="20" value="2" />
-                <input type="number" id="brush-size-input" class="brush-number-input" min="1" max="100" value="2" />
+            <div class="border-tools">
+              <span class="border-tools-label">Edit borders</span>
+              <div class="border-tools-seg" role="group" aria-label="Border editing tool">
+                <button id="btn-edit-nations" class="border-tool" title="Paint land into the selected realm with a brush">${ICONS.edit}<span>Brush</span></button>
+                <button id="btn-province-tool" class="border-tool" title="Select provinces to form a realm, annex or release them; or paint whole provinces into a realm">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3z"/><path d="M9 3v15M15 6v15"/></svg>
+                  <span>Provinces</span>
+                </button>
               </div>
+            </div>
+            <div class="brush-size-control">
+              <span class="brush-label-overlay">Brush size</span>
+              <input type="range" id="brush-size" min="1" max="20" value="2" />
+              <input type="number" id="brush-size-input" class="brush-number-input" min="1" max="100" value="2" />
             </div>
             <div id="nations-head" class="nations-head"></div>
             </div>
@@ -427,6 +434,18 @@ export default function renderMainApp() {
               <input type="checkbox" id="sim-interactive" />
               <span class="switch"></span>
             </label>
+            <label class="switch-row" title="When a war ends, history pauses and the province editor opens on it">
+              <span class="switch-text">Peace conferences<small>When your realm's war ends, pause and draw the new border by province</small></span>
+              <input type="checkbox" id="sim-peace" />
+              <span class="switch"></span>
+            </label>
+            <div class="war-room-row sim-peace-realm" id="sim-peace-row" style="display:none">
+              <span class="war-room-label">Wars of</span><div id="sim-peace-realm" class="war-room-pick"></div>
+            </div>
+            <button id="sim-province-tool" class="btn-ghost sim-province-tool" title="Select provinces to form a realm, annex or release them; or paint whole provinces into a realm">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3z"/><path d="M9 3v15M15 6v15"/></svg>
+              <span>Redraw borders by province</span>
+            </button>
             <div class="field sim-timeline" id="sim-timeline" title="Drag to replay past borders (view-only; playing continues from the present)">
               <div class="field-label sim-timeline-head"><span>Timeline</span><span id="sim-scrub-year" class="sim-scrub-year"></span></div>
               <input type="range" id="sim-scrub" min="0" max="0" value="0" step="1" disabled />
@@ -552,11 +571,18 @@ export default function renderMainApp() {
       </a>
 
       <div id="sim-bar" class="sim-bar" style="display:none;">
+        <span id="sim-bar-grip" class="sim-bar-grip" title="Drag to move · double-click to put back" aria-label="Move the timeline">
+          <svg viewBox="0 0 10 16" width="8" height="14" fill="currentColor" aria-hidden="true"><circle cx="2.5" cy="3" r="1.4"/><circle cx="7.5" cy="3" r="1.4"/><circle cx="2.5" cy="8" r="1.4"/><circle cx="7.5" cy="8" r="1.4"/><circle cx="2.5" cy="13" r="1.4"/><circle cx="7.5" cy="13" r="1.4"/></svg>
+        </span>
         <button id="sim-bar-play" class="icon-btn" title="Play / pause">${ICONS.play}</button>
+        <button id="sim-bar-step" class="icon-btn" title="Advance one year">${ICONS.step}</button>
+        <button id="sim-bar-jump" class="sim-bar-jump" title="Simulate 10 years at once">+10</button>
         <span class="sim-bar-year">Year <strong id="sim-bar-year">0</strong></span>
         <input type="range" id="sim-bar-scrub" class="sim-bar-scrub" min="0" max="0" value="0" step="1" disabled title="Timeline" />
         <span id="sim-bar-event" class="sim-bar-event"></span>
       </div>
+
+      <div id="province-tool" class="province-tool" style="display:none;" role="dialog" aria-label="Redraw borders by province"></div>
 
       <div id="nation-tooltip" class="nation-tooltip" style="display:none;">
         <div class="tooltip-name"></div>

@@ -33,13 +33,29 @@ export interface ExpansionPeriod {
   to: number;
   cells: number; // land cells held at the end that were first taken in it
   name?: string; // a custom period's name ("The Northern Wars")
+  color?: string; // a custom period's own color (#rrggbb), over the palette
 }
 
-// A custom period: its first and last year (inclusive) and an optional name
+// A custom period: its first and last year (inclusive), an optional name and color
 export interface PeriodBound {
   from: number;
   to: number;
   name?: string;
+  color?: string;
+}
+
+// How the core and the periods are colored, oldest to newest (see periodColors)
+//  realm:    the realm's own hue, dark to light, drifting toward a lighter hue
+//  spectrum: dark violet through red and orange to pale yellow, whatever the realm
+//  distinct: a clearly different hue for each period, still dark to light
+//  custom:   from one chosen color to another
+//  smart:    picked from the number of periods (realm for a few, spectrum for
+//            more, distinct for many)
+export type PaletteKind = "smart" | "realm" | "spectrum" | "distinct" | "custom";
+export interface Palette {
+  kind: PaletteKind;
+  from?: string; // custom: the oldest land (the core)
+  to?: string; // custom: the newest period
 }
 
 export const DEFAULT_YEARS_PER_PERIOD = 10;
@@ -48,7 +64,7 @@ export const DEFAULT_BANDS = 5;
 // How conquests are split into periods: one every N years (decimals allowed),
 // a number of bands holding about equal shares of the conquered land, or
 // custom periods
-export type Split = { kind: "years"; every: number } | { kind: "bands"; count: number } | { kind: "custom"; bounds: PeriodBound[] };
+export type Split = { kind: "smart" } | { kind: "years"; every: number } | { kind: "bands"; count: number } | { kind: "custom"; bounds: PeriodBound[] };
 
 export interface ExpansionVassal {
   uid: number;
@@ -75,7 +91,9 @@ export interface Expansion {
   uid: number;
   name: string;
   color: string;
-  startYear: number; // first recorded year
+  palette: Palette;
+  startYear: number; // the realm's first recorded year: its founding, or the start of the record
+  founded: boolean; // it came into being after the record began (startYear is its founding)
   endYear: number;
   cls: Int8Array; // per cell (y * W + x): CORE, 1..periods, LOST or NONE; water is NONE
   firstHeld: Int32Array; // first year held, -1 never
@@ -97,6 +115,7 @@ export interface ExpansionOptions {
   // land changed since the last recorded year (edits, painting) counts too
   live?: boolean;
   maxBattles?: number; // markers kept (default 14)
+  palette?: Palette; // default: the realm's own hue
 }
 
 // What the classification needs from the simulation
@@ -240,6 +259,98 @@ export function everyYears(startYear: number, endYear: number, asked: number): {
   return { bounds, used: n };
 }
 
+// Smart periods: the realm's conquests come in waves; each wave becomes a
+// period, cut at the quietest years between them. Waves are runs of years
+// with gains no further apart than a few years (about 1/40 of the history);
+// slivers (under 4% of the land won) join their nearest neighbor; then the
+// two closest waves merge until there are at most 7, and the largest wave is
+// split at its middle (by land) while there are fewer than 3 and it is big
+// enough. Boundaries fall halfway through each quiet stretch, on round years
+// for long histories.
+export const SMART_MAX = 7;
+export const SMART_MIN = 3;
+export function smartPeriods(gainYears: Map<number, number>, startYear: number, endYear: number): PeriodBound[] {
+  const years = [...gainYears.keys()].sort((a, b) => a - b);
+  const total = years.reduce((s, y) => s + gainYears.get(y)!, 0);
+  if (!total) return [];
+  const span = Math.max(1, endYear - startYear);
+  const gap = Math.max(2, Math.round(span / 40));
+  type Wave = { from: number; to: number; cells: number };
+  let waves: Wave[] = [];
+  for (const y of years) {
+    const last = waves[waves.length - 1];
+    if (last && y - last.to <= gap) {
+      last.to = y;
+      last.cells += gainYears.get(y)!;
+    } else waves.push({ from: y, to: y, cells: gainYears.get(y)! });
+  }
+  const join = (k: number, into: number) => {
+    const a = waves[Math.min(k, into)];
+    const b = waves[Math.max(k, into)];
+    a.to = b.to;
+    a.cells += b.cells;
+    waves.splice(Math.max(k, into), 1);
+  };
+  // Slivers join the nearer neighbor
+  for (let k = 0; k < waves.length && waves.length > 1; ) {
+    if (waves[k].cells >= total * 0.04) {
+      k++;
+      continue;
+    }
+    const before = k > 0 ? waves[k].from - waves[k - 1].to : Infinity;
+    const after = k + 1 < waves.length ? waves[k + 1].from - waves[k].to : Infinity;
+    join(k, before <= after ? k - 1 : k + 1);
+    k = Math.max(0, k - 1);
+  }
+  // Too many: the pair with the shortest quiet between them merges
+  while (waves.length > SMART_MAX) {
+    let best = 0;
+    for (let k = 1; k + 1 < waves.length; k++) if (waves[k + 1].from - waves[k].to < waves[best + 1].from - waves[best].to) best = k;
+    join(best, best + 1);
+  }
+  // Too few: the largest wave splits where half its land was won
+  while (waves.length < SMART_MIN) {
+    let big = 0;
+    waves.forEach((w, k) => {
+      if (w.cells > waves[big].cells) big = k;
+    });
+    const w = waves[big];
+    const inside = years.filter((y) => y >= w.from && y <= w.to);
+    if (inside.length < 2 || w.cells < total * 0.2) break;
+    let acc = 0;
+    let cut = inside[0];
+    for (const y of inside) {
+      acc += gainYears.get(y)!;
+      cut = y;
+      if (acc >= w.cells / 2) break;
+    }
+    if (cut >= w.to) cut = inside[inside.length - 2];
+    const a: Wave = { from: w.from, to: cut, cells: 0 };
+    const b: Wave = { from: inside.find((y) => y > cut)!, to: w.to, cells: 0 };
+    for (const y of inside) (y <= cut ? a : b).cells += gainYears.get(y)!;
+    waves.splice(big, 1, a, b);
+  }
+  waves = waves.filter((w) => w.cells > 0);
+  // Contiguous periods, cut halfway through each quiet stretch
+  const step = roundStep(span, waves.length);
+  const out: PeriodBound[] = [];
+  let from = startYear + 1;
+  waves.forEach((w, k) => {
+    let to = endYear;
+    if (k + 1 < waves.length) {
+      // The next period starts at a round year inside the quiet stretch, else its middle
+      const next = waves[k + 1].from;
+      const mid = (w.to + 1 + next) / 2;
+      let start = Math.round(mid / step) * step;
+      if (start <= w.to || start > next) start = Math.round(mid);
+      to = Math.max(w.to, Math.min(next - 1, start - 1));
+    }
+    out.push({ from, to: Math.max(from, to) });
+    from = Math.max(from, to) + 1;
+  });
+  return out;
+}
+
 // Custom periods made usable: each row reads start to end, sorted by start,
 // clamped into the recorded years (the first from startYear + 1, the last up
 // to endYear), and each start snapped right after the previous end, so there
@@ -255,7 +366,9 @@ export function normalizeBounds(bounds: PeriodBound[], startYear: number, endYea
       const to = Math.round(Math.max(b.from, b.to));
       if (b.from > b.to) notes.push(`${yearsText({ from, to })}: start and end swapped.`);
       const name = b.name?.trim();
-      return name ? { from, to, name } : { from, to };
+      const out: PeriodBound = name ? { from, to, name } : { from, to };
+      if (b.color && /^#[0-9a-f]{6}$/i.test(b.color)) out.color = b.color.toLowerCase();
+      return out;
     })
     .sort((a, b) => a.from - b.from || a.to - b.to);
   const kept: PeriodBound[] = [];
@@ -335,10 +448,10 @@ export function expansionOf(world: WorldData, sim: ExpansionSource, nation: numb
   const W = world.width;
   const N = W * world.height;
   const land = world.waterType;
-  const startYear = frames[0].year;
+  const recordStart = frames[0].year;
   const lastYear = frames[frames.length - 1].year;
-  const endYear = Math.max(startYear + 1, Math.min(lastYear, Math.round(opts.endYear ?? lastYear)));
-  const E = Math.max(1, Math.min(frames.length - 1, endYear - startYear)); // years are consecutive
+  const endYear = Math.max(recordStart + 1, Math.min(lastYear, Math.round(opts.endYear ?? lastYear)));
+  const E = Math.max(1, Math.min(frames.length - 1, endYear - recordStart)); // years are consecutive
 
   const firstHeld = new Int32Array(N).fill(-1);
   const lostAt = new Int32Array(N).fill(-1);
@@ -409,6 +522,15 @@ export function expansionOf(world: WorldData, sim: ExpansionSource, nation: numb
       if (firstHeld[i] < 0) firstHeld[i] = endYear;
     }
   if (Math.max(peakCells, liveCells) <= 0) return null;
+  // The history is the realm's own: it starts the first year it held land
+  // (its founding, or the start of the record), whose land is its core, and
+  // the periods count from there
+  let startYear = Infinity;
+  for (let i = 0; i < N; i++) if (firstHeld[i] >= 0 && firstHeld[i] < startYear) startYear = firstHeld[i];
+  if (!Number.isFinite(startYear)) return null;
+  const founded = startYear > recordStart;
+  // Founded in the end year itself: all of it is core
+  if (startYear >= endYear) startYear = endYear;
 
   // --- Classes ---
   const cls = new Int8Array(N).fill(NONE);
@@ -434,10 +556,12 @@ export function expansionOf(world: WorldData, sim: ExpansionSource, nation: numb
   const years = sp.kind === "years" ? everyYears(startYear, endYear, sp.every) : null;
   let periods: ExpansionPeriod[] = (
     sp.kind === "custom"
-      ? normalizeBounds(sp.bounds, startYear, endYear).bounds
+      ? normalizeBounds(sp.bounds, startYear, Math.max(startYear + 1, endYear)).bounds
       : sp.kind === "bands"
         ? conquestPeriods(gains, startYear, endYear, bandCount(sp.count))
-        : years!.bounds
+        : sp.kind === "smart"
+          ? smartPeriods(gains, startYear, endYear)
+          : years!.bounds
   ).map((b) => ({ ...b, cells: 0 }));
   if (periods.length) for (const [y, n] of gains) periods[periodIndex(periods, y)].cells += n;
   // Periods of years without any conquest at either end go (those between stay)
@@ -546,7 +670,9 @@ export function expansionOf(world: WorldData, sim: ExpansionSource, nation: numb
     uid,
     name: n.name,
     color: n.color,
+    palette: opts.palette ?? { kind: "realm" },
     startYear,
+    founded,
     endYear: endYearOf,
     cls,
     firstHeld,
@@ -564,30 +690,6 @@ export function expansionOf(world: WorldData, sim: ExpansionSource, nation: numb
 
 // --- Colors ---
 
-function hexToHsl(hex: string): [number, number, number] {
-  const v = parseInt(hex.slice(1, 7), 16);
-  const r = ((v >> 16) & 255) / 255;
-  const g = ((v >> 8) & 255) / 255;
-  const b = (v & 255) / 255;
-  const max = Math.max(r, g, b);
-  const min = Math.min(r, g, b);
-  const l = (max + min) / 2;
-  if (max === min) return [0, 0, l];
-  const d = max - min;
-  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-  const h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
-  return [h * 60, s, l];
-}
-
-function hsl(h: number, s: number, l: number): [number, number, number] {
-  const f = (n: number) => {
-    const k = (n + h / 30) % 12;
-    const a = s * Math.min(l, 1 - l);
-    return Math.round(255 * (l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))));
-  };
-  return [f(0), f(8), f(4)];
-}
-
 const hex = (c: [number, number, number]) => "#" + c.map((v) => v.toString(16).padStart(2, "0")).join("");
 type RGB = [number, number, number];
 
@@ -596,21 +698,10 @@ type RGB = [number, number, number];
 const VASSAL_RGB: RGB = [184, 183, 179]; // light gray, outlined in the realm color
 const OTHER_SWATCH: Record<MapTheme, string> = { Historical: "#d8d0bf", Atlas: "#dedede", Realistic: "#8e8e8e" }; // the terrain grayed (see washOutside)
 
-const PALE_YELLOW: RGB = [246, 226, 120];
-
-// Yellow would not stand out on a yellowish realm: its land held for a time is
-// then hatched in its own color over a light tint of it instead
-function lostClashes(color: string): boolean {
-  const [h, s] = hexToHsl(color);
-  return h >= 40 && h <= 75 && s > 0.2;
-}
-
-// Land held for a time: the fill, and the hatch drawn over it (if any)
-function lostFill(color: string): { fill: RGB; hatch: RGB | null } {
-  if (!lostClashes(color)) return { fill: PALE_YELLOW, hatch: null };
-  const [h, s] = hexToHsl(color);
-  return { fill: hsl(h, Math.min(0.5, s), 0.9), hatch: hsl(h, Math.min(0.85, Math.max(0.45, s)), 0.32) };
-}
+// Land held for a time and lost: a light, neutral ground hatched in rust,
+// the same on every poster, so it never reads as one of the periods
+const LOST_FILL: RGB = [238, 229, 206];
+const LOST_HATCH: RGB = [170, 70, 48];
 
 // --- OKLab (perceptual lightness, so the steps look even in every hue) ---
 const toLin = (c: number) => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
@@ -660,31 +751,97 @@ function oklchRgb(L: number, C: number, h: number): RGB {
   return oklchLinear(L, C, h).map((v) => Math.round(255 * fromLin(Math.max(0, Math.min(1, v))))) as RGB;
 }
 
-// Core and each period in the realm's own hue: an even perceptual ramp from
-// dark and saturated (core, OKLab L 0.38, about HSL 28%) to light and pale
-// (last period, L 0.89, about HSL 83%), chroma falling along it. The ramp is
-// absolute, so a pale or a dark realm color gets the same spread; a gray
-// realm stays gray.
-// With many periods the ramp widens a little and the chroma alternates, so
-// neighbors still differ.
+// The realm's own hue: an even perceptual ramp from dark and saturated (the
+// core, OKLab L 0.30) to light (the last period, L 0.92). The hue drifts on
+// the way (up to 40°, toward yellow, or toward red for yellowish realms), so
+// neighbors differ in hue as well as lightness; a gray realm stays gray.
+// The ramp is absolute, so a pale or a dark realm color gets the same spread.
+// With many periods the chroma also alternates.
 export function expansionShades(color: string, periods: number): RGB[] {
-  const [, C0, h] = oklch(color);
-  const C = C0 < 0.025 ? C0 : Math.max(0.11, Math.min(0.2, C0 * 1.15));
+  const [, C0, h0] = oklch(color);
+  const gray = C0 < 0.025;
+  const C = gray ? C0 : Math.max(0.12, Math.min(0.2, C0 * 1.15));
+  const YELLOW = (105 * Math.PI) / 180;
+  let d = Math.atan2(Math.sin(YELLOW - h0), Math.cos(YELLOW - h0)); // shortest turn toward yellow
+  if (Math.abs(d) < 0.6) d = -Math.sign(d || 1) * 0.7; // already yellowish: toward red
+  const drift = gray ? 0 : Math.sign(d) * Math.min(Math.abs(d), (40 * Math.PI) / 180);
   const n = periods + 1;
   const many = periods > 6;
-  const L0 = many ? 0.34 : 0.38;
-  const L1 = many ? 0.92 : 0.89;
   return Array.from({ length: n }, (_, k) => {
     const t = n === 1 ? 0 : k / (n - 1);
-    return oklchRgb(L0 + (L1 - L0) * t, C * (1 - 0.6 * t) * (many && k % 2 ? 0.75 : 1), h);
+    return oklchRgb(0.3 + 0.62 * t, C * (1 - 0.45 * t) * (many && k % 2 ? 0.72 : 1), h0 + drift * t);
   });
+}
+
+// Dark violet through crimson and orange to pale yellow (like the "inferno"
+// scale): ordered by lightness and by hue at once, the same for every realm
+const SPECTRUM: [number, number, number][] = [
+  [0.3, 0.13, 295],
+  [0.45, 0.18, 335],
+  [0.6, 0.19, 380],
+  [0.75, 0.16, 420],
+  [0.91, 0.13, 460],
+];
+function spectrumAt(t: number): RGB {
+  const f = Math.max(0, Math.min(1, t)) * (SPECTRUM.length - 1);
+  const k = Math.min(SPECTRUM.length - 2, Math.floor(f));
+  const u = f - k;
+  const [L, C, h] = SPECTRUM[k].map((v, j) => v + (SPECTRUM[k + 1][j] - v) * u);
+  return oklchRgb(L, C, (h * Math.PI) / 180);
+}
+
+const rgbOf = (h: string): RGB => {
+  const v = parseInt(h.slice(1, 7), 16);
+  return [(v >> 16) & 255, (v >> 8) & 255, v & 255];
+};
+
+// The core and each period, oldest to newest, for a palette
+export function paletteColors(p: Palette, realmColor: string, periods: number): RGB[] {
+  if (p.kind === "smart") return paletteColors({ kind: smartPalette(periods) }, realmColor, periods);
+  const n = periods + 1;
+  const t = (k: number) => (n === 1 ? 0 : k / (n - 1));
+  switch (p.kind) {
+    case "spectrum":
+      return Array.from({ length: n }, (_, k) => spectrumAt(t(k)));
+    case "distinct": {
+      // Hues a golden angle apart from the realm's, lightness still rising
+      const [, , h0] = oklch(realmColor);
+      return Array.from({ length: n }, (_, k) => oklchRgb(0.36 + 0.52 * t(k), 0.16, h0 + k * 2.39996));
+    }
+    case "custom": {
+      // A straight line through OKLab from one color to the other
+      const a = oklch(p.from ?? realmColor);
+      const b = oklch(p.to ?? "#f6e27a");
+      const A = [a[0], a[1] * Math.cos(a[2]), a[1] * Math.sin(a[2])];
+      const B = [b[0], b[1] * Math.cos(b[2]), b[1] * Math.sin(b[2])];
+      return Array.from({ length: n }, (_, k) => {
+        const [L, x, y] = A.map((v, j) => v + (B[j] - v) * t(k));
+        return oklchRgb(L, Math.hypot(x, y), Math.atan2(y, x));
+      });
+    }
+    default:
+      return expansionShades(realmColor, periods);
+  }
+}
+
+// Smart colors: one hue reads well for a few periods; past that a spectrum
+// keeps neighbors apart, and with many, distinct hues do
+export const smartPalette = (periods: number): PaletteKind => (periods <= 4 ? "realm" : periods <= 8 ? "spectrum" : "distinct");
+
+// The colors a poster uses: its palette, with custom periods' own colors over it
+export function periodColors(exp: Expansion): RGB[] {
+  const c = paletteColors(exp.palette, exp.color, exp.periods.length);
+  exp.periods.forEach((p, k) => {
+    if (p.color) c[k + 1] = rgbOf(p.color);
+  });
+  return c;
 }
 
 // Perceptual lightness of a color (0..1)
 export const lightness = (c: RGB) => oklch(hex(c))[0];
 
 // How strongly the fills cover the terrain (a hint of relief stays)
-const FILL_STRENGTH = 0.88;
+const FILL_STRENGTH = 0.93;
 
 // What a fill looks like on the map, for the legend
 function onMap(c: RGB, theme: MapTheme): string {
@@ -724,7 +881,7 @@ function liveStamp(world: WorldData, nation: number): string {
 
 export function cachedExpansion(world: WorldData, sim: ExpansionSource, nation: number, opts: ExpansionOptions): Expansion | null {
   const frames = sim.history.frames;
-  const key = [nation, world.nations[nation]?.name, frames.length, frames[frames.length - 1]?.year, sim.battles.length, opts.endYear, opts.maxBattles, opts.live, JSON.stringify(opts.split ?? null), liveStamp(world, nation)].join("|");
+  const key = [nation, world.nations[nation]?.name, frames.length, frames[frames.length - 1]?.year, sim.battles.length, opts.endYear, opts.maxBattles, opts.live, JSON.stringify(opts.split ?? null), JSON.stringify(opts.palette ?? null), liveStamp(world, nation)].join("|");
   if (cache && cache.key === key && cache.world === world && cache.frames === frames) return cache.exp;
   const exp = expansionOf(world, sim, nation, opts);
   cache = { key, world, frames, exp };
@@ -803,12 +960,32 @@ export const EXPANSION_STYLE = { value: "expansion", label: "Expansion" } as con
 export interface ExpansionChoice {
   nation: number; // -1: the dialog picks the largest realm
   endYear: number; // 0: the last recorded year
-  auto: "years" | "bands"; // the automatic split (custom periods are kept per realm, below)
+  auto: "smart" | "years" | "bands"; // the automatic split (custom periods are kept per realm, below)
   every: number; // years per period
   bands: number; // number of color bands
+  palette: PaletteKind;
+  from: string; // custom palette: the core's color ("" = the realm's)
+  to: string; // custom palette: the newest period's color
 }
 
-export const defaultExpansionChoice = (): ExpansionChoice => ({ nation: -1, endYear: 0, auto: "years", every: DEFAULT_YEARS_PER_PERIOD, bands: DEFAULT_BANDS });
+export const defaultExpansionChoice = (): ExpansionChoice => ({
+  nation: -1,
+  endYear: 0,
+  auto: "smart",
+  every: DEFAULT_YEARS_PER_PERIOD,
+  bands: DEFAULT_BANDS,
+  palette: "smart",
+  from: "",
+  to: "#f6e27a",
+});
+
+function paletteOf(world: WorldData, c: ExpansionChoice): Palette {
+  if (c.palette !== "custom") return { kind: c.palette };
+  return { kind: "custom", from: c.from || darkOf(world.nations[c.nation]?.color ?? "#8a3324"), to: c.to };
+}
+
+// The realm's color as a custom palette's starting point: its dark end
+const darkOf = (color: string) => hex(expansionShades(color, 1)[0]);
 
 // Custom periods per world and realm (by name) for the session; `active`
 // while the realm is shown with them
@@ -826,12 +1003,13 @@ function customOf(world: WorldData, nation: number): CustomPeriods | undefined {
 }
 
 function autoSplit(c: ExpansionChoice): Split {
+  if (c.auto === "smart") return { kind: "smart" };
   return c.auto === "bands" ? { kind: "bands", count: bandCount(c.bands) } : { kind: "years", every: Math.max(1, c.every || DEFAULT_YEARS_PER_PERIOD) };
 }
 
 function optionsOf(world: WorldData, c: ExpansionChoice): ExpansionOptions {
   const cu = customOf(world, c.nation);
-  return { endYear: c.endYear || undefined, split: cu?.active ? { kind: "custom", bounds: cu.bounds } : autoSplit(c) };
+  return { endYear: c.endYear || undefined, split: cu?.active ? { kind: "custom", bounds: cu.bounds } : autoSplit(c), palette: paletteOf(world, c) };
 }
 
 // The periods an automatic split shows now, as editable rows
@@ -844,7 +1022,7 @@ function autoRows(world: WorldData, sim: ExpansionSource, c: ExpansionChoice, sp
 // realm's own periods (first filled from the split shown)
 export function chooseSplit(world: WorldData, sim: ExpansionSource | null, c: ExpansionChoice, value: string) {
   const name = world.nations[c.nation]?.name;
-  if (value === "years" || value === "bands") {
+  if (value === "smart" || value === "years" || value === "bands") {
     c.auto = value;
     const cu = customOf(world, c.nation);
     if (cu) cu.active = false;
@@ -867,6 +1045,7 @@ export function chooseSplit(world: WorldData, sim: ExpansionSource | null, c: Ex
 export const EXPANSION_SPLIT_HTML = /* html */ `
   <div class="field-label">Split by</div>
   <div class="picker segmented pd-seg" data-key="split">
+    <button type="button" class="pick" data-value="smart" title="One period per wave of conquest, cut at the quiet years between them"><span class="pick-label">Smart</span></button>
     <button type="button" class="pick" data-value="years"><span class="pick-label">Years</span></button>
     <button type="button" class="pick" data-value="bands"><span class="pick-label">Bands</span></button>
     <button type="button" class="pick" data-value="custom"><span class="pick-label">Custom</span></button>
@@ -882,13 +1061,34 @@ export const EXPANSION_SPLIT_HTML = /* html */ `
   <small class="pd-hint pd-exp-note" id="pd-exp-split-note"></small>
   <div id="pd-exp-custom"></div>`;
 
+// The colors: a palette, its two ends when custom, and the ramp it makes
+export const EXPANSION_COLORS_HTML = /* html */ `
+  <div class="field-label">Colours</div>
+  <div class="picker segmented pd-seg" data-key="palette">
+    <button type="button" class="pick" data-value="smart" title="Picked for the number of periods: the realm's hue for a few, a spectrum for more, distinct hues for many"><span class="pick-label">Smart</span></button>
+    <button type="button" class="pick" data-value="realm" title="The realm's own hue, dark to light"><span class="pick-label">Realm</span></button>
+    <button type="button" class="pick" data-value="spectrum" title="Dark violet through red and orange to pale yellow"><span class="pick-label">Spectrum</span></button>
+    <button type="button" class="pick" data-value="distinct" title="A clearly different hue for each period"><span class="pick-label">Distinct</span></button>
+    <button type="button" class="pick" data-value="custom" title="From one color of your choice to another"><span class="pick-label">Custom</span></button>
+  </div>
+  <div class="pd-exp-ends" id="pd-exp-ends">
+    <label class="pd-exp-end-color"><input type="color" id="pd-exp-from" /><span>Oldest</span></label>
+    <span class="pd-exp-arrow" aria-hidden="true">→</span>
+    <label class="pd-exp-end-color"><input type="color" id="pd-exp-to" /><span>Newest</span></label>
+  </div>
+  <div class="pd-exp-ramp" id="pd-exp-ramp" aria-label="Colors from the core to the newest period"></div>
+  <small class="pd-hint" id="pd-exp-ramp-note"></small>`;
+
 const esc = (t: string) => t.replace(/[&<>"]/g, (ch) => `&#${ch.charCodeAt(0)};`);
 
 // The custom periods editor: rows of start, end and name, add and remove,
 // and a reset to the current every-N-years split. Edits apply on change
 // (blur, or releasing a stepper), when gaps and overlaps are fixed.
 function renderCustomEditor(host: HTMLElement, world: WorldData, sim: ExpansionSource, c: ExpansionChoice, cu: CustomPeriods, first: number, end: number, onEdit: () => void) {
-  const shades = expansionShades(world.nations[c.nation]?.color ?? "#888888", cu.bounds.length);
+  const shades = paletteColors(paletteOf(world, c), world.nations[c.nation]?.color ?? "#888888", cu.bounds.length);
+  cu.bounds.forEach((b, k) => {
+    if (b.color) shades[k + 1] = rgbOf(b.color);
+  });
   const lo = first + 1;
   const every = everyYears(first, end, Math.max(1, c.every)).used; // as the Years split uses it
   const box = document.createElement("div");
@@ -897,7 +1097,7 @@ function renderCustomEditor(host: HTMLElement, world: WorldData, sim: ExpansionS
     <div class="pd-exp-rows">${cu.bounds
       .map(
         (b, k) => `<div class="pd-exp-row" data-k="${k}">
-          <span class="pd-exp-swatch" style="background:${hex(shades[k + 1])}"></span>
+          <label class="pd-exp-swatch ${b.color ? "own" : ""}" style="background:${hex(shades[k + 1])}" title="${b.color ? "Its own color (right-click: back to the palette)" : "Pick a color for this period"}"><input type="color" class="pd-exp-color" value="${hex(shades[k + 1])}" /></label>
           <input type="number" class="pd-exp-from" min="${lo}" max="${end}" step="1" value="${b.from}" data-stepper title="First year" />
           <span class="pd-exp-dash">–</span>
           <input type="number" class="pd-exp-to" min="${lo}" max="${end}" step="1" value="${b.to}" data-stepper title="Last year" />
@@ -916,6 +1116,7 @@ function renderCustomEditor(host: HTMLElement, world: WorldData, sim: ExpansionS
       from: Number(row.querySelector<HTMLInputElement>(".pd-exp-from")!.value),
       to: Number(row.querySelector<HTMLInputElement>(".pd-exp-to")!.value),
       name: row.querySelector<HTMLInputElement>(".pd-exp-name")!.value,
+      color: cu.bounds[Number(row.dataset.k)]?.color,
     }));
   const apply = (rows: PeriodBound[], note = "") => {
     const n = normalizeBounds(rows, first, end);
@@ -924,7 +1125,24 @@ function renderCustomEditor(host: HTMLElement, world: WorldData, sim: ExpansionS
     cu.note = [note, ...n.notes].filter(Boolean).slice(0, 2).join(" ");
     onEdit();
   };
-  box.addEventListener("change", () => apply(read()));
+  box.addEventListener("change", (e) => {
+    const t = e.target as HTMLElement;
+    const rows = read();
+    if (t.classList.contains("pd-exp-color")) {
+      const k = Number(t.closest<HTMLElement>(".pd-exp-row")!.dataset.k);
+      rows[k].color = (t as HTMLInputElement).value;
+    }
+    apply(rows);
+  });
+  // Right-click a swatch: the period takes the palette's color again
+  box.addEventListener("contextmenu", (e) => {
+    const sw = (e.target as HTMLElement).closest(".pd-exp-swatch.own");
+    if (!sw) return;
+    e.preventDefault();
+    const rows = read();
+    delete rows[Number(sw.closest<HTMLElement>(".pd-exp-row")!.dataset.k)].color;
+    apply(rows);
+  });
   box.addEventListener("click", (e) => {
     const t = e.target as HTMLElement;
     const rows = read();
@@ -1017,12 +1235,58 @@ export function syncExpansionControls(
       }),
     );
   }
+  // The realm's own history starts at its founding (or the start of the record)
+  const exp = cachedExpansion(world, sim!, choice.nation, optionsOf(world, choice));
+  const first = exp ? exp.startYear : years.first;
+  if (choice.endYear && choice.endYear <= first) choice.endYear = 0;
   const end = q<HTMLInputElement>("#pd-exp-end");
-  end.min = String(years.first + 1);
+  end.min = String(first + 1);
   end.max = String(years.last);
   if (document.activeElement !== end) end.value = String(choice.endYear || years.last);
-  syncSplitControls(root, world, sim!, choice, years.first, choice.endYear || years.last, onEdit);
+  const since = root.querySelector<HTMLElement>("#pd-exp-since");
+  if (since) since.textContent = exp ? (exp.founded ? `Founded in ${exp.startYear}; its history runs from there.` : `On the map since the record began (${exp.startYear}).`) : "";
+  syncSplitControls(root, world, sim!, choice, first, choice.endYear || years.last, onEdit);
+  syncColorControls(root, world, choice, exp, onEdit);
   return true;
+}
+
+// "Colours": the palette, its ends when custom, and a numbered ramp of the
+// colors the poster will use (core first)
+function syncColorControls(root: HTMLElement, world: WorldData, c: ExpansionChoice, exp: Expansion | null, onEdit: () => void) {
+  const q = <E extends HTMLElement>(sel: string) => root.querySelector<E>(sel);
+  root.querySelectorAll<HTMLElement>(`.pd-seg[data-key="palette"] .pick`).forEach((b) => b.classList.toggle("active", b.dataset.value === c.palette));
+  const ends = q("#pd-exp-ends");
+  const from = q<HTMLInputElement>("#pd-exp-from");
+  const to = q<HTMLInputElement>("#pd-exp-to");
+  if (!ends || !from || !to) return;
+  ends.style.display = c.palette === "custom" ? "" : "none";
+  const pal = paletteOf(world, c);
+  if (document.activeElement !== from) from.value = pal.from ?? darkOf(world.nations[c.nation]?.color ?? "#8a3324");
+  if (document.activeElement !== to) to.value = c.to;
+  if (!root.dataset.colorsWired) {
+    root.dataset.colorsWired = "1";
+    from.addEventListener("input", () => {
+      c.from = from.value;
+      onEdit();
+    });
+    to.addEventListener("input", () => {
+      c.to = to.value;
+      onEdit();
+    });
+  }
+  const ramp = q("#pd-exp-ramp");
+  const note = q("#pd-exp-ramp-note");
+  if (!ramp || !exp) return;
+  const colors = periodColors(exp);
+  ramp.innerHTML = colors
+    .map((col, k) => {
+      const p = k ? exp.periods[k - 1] : null;
+      const tip = p ? `${k} · ${p.name ? p.name + " · " : ""}${yearsText(p)}` : exp.founded ? `Founded ${exp.startYear}` : `Realm in ${exp.startYear}`;
+      return `<span class="pd-exp-step" style="background:${hex(col)};color:${lightness(col) < 0.62 ? "#fffaf0" : "#1e160e"}" title="${esc(tip)}">${k || "●"}</span>`;
+    })
+    .join("");
+  const picked = c.palette === "smart" ? ` Smart picked ${({ realm: "the realm's hue", spectrum: "a spectrum", distinct: "distinct hues" } as Record<string, string>)[smartPalette(exp.periods.length)]} for ${exp.periods.length} period${exp.periods.length === 1 ? "" : "s"}.` : "";
+  if (note) note.textContent = colors.length > 1 ? `Oldest (● the land it started with) to newest.${picked} Custom periods can each take their own colour.` : "";
 }
 
 // "Split by" and its inputs: the active mode, the numbers, the notes, and
@@ -1063,7 +1327,7 @@ function syncSplitControls(root: HTMLElement, world: WorldData, sim: ExpansionSo
   note.textContent = "";
   if (mode !== "custom") {
     const n = cachedExpansion(world, sim, c.nation, optionsOf(world, c))?.periods.length ?? 0;
-    if (n) note.textContent = `${n} period${n === 1 ? "" : "s"}`;
+    if (n) note.textContent = `${n} period${n === 1 ? "" : "s"}${mode === "smart" ? ", one per wave of conquest" : ""}`;
   }
   const host = q("#pd-exp-custom");
   host.style.display = mode === "custom" ? "" : "none";
@@ -1071,7 +1335,7 @@ function syncSplitControls(root: HTMLElement, world: WorldData, sim: ExpansionSo
     host.dataset.key = "";
     return;
   }
-  const key = JSON.stringify([world.seed, c.nation, world.nations[c.nation]?.color, cu.bounds, cu.note, end, c.every]);
+  const key = JSON.stringify([world.seed, c.nation, world.nations[c.nation]?.color, cu.bounds, cu.note, end, c.every, c.palette, c.from, c.to]);
   if (host.dataset.key === key) return;
   host.dataset.key = key;
   renderCustomEditor(host, world, sim, c, cu, first, end, onEdit);
@@ -1173,20 +1437,20 @@ function vassalWhen(v: ExpansionVassal): string {
 }
 
 export function expansionLegend(exp: Expansion, theme: MapTheme): LegendSection[] {
-  const shades = expansionShades(exp.color, exp.periods.length);
+  const shades = periodColors(exp);
   const area = (cells: number) => `${compact(cells * CELL_KM2)} km²`;
-  const growth: LegendRow[] = [{ label: `Realm in ${exp.startYear}`, value: area(exp.counts.core), color: onMap(shades[0], theme) }];
+  // Oldest first; periods numbered as on the map
+  const growth: LegendRow[] = [
+    { label: exp.founded ? `Founded ${exp.startYear}` : `Realm in ${exp.startYear}`, value: area(exp.counts.core), color: onMap(shades[0], theme) },
+  ];
   exp.periods.forEach((p, k) =>
     growth.push(
       p.name
-        ? { label: p.name, value: `${yearsText(p)} · ${area(p.cells)}`, color: onMap(shades[k + 1], theme) }
-        : { label: `${k === 0 ? "Conquered " : ""}${yearsText(p)}`, value: area(p.cells), color: onMap(shades[k + 1], theme) },
+        ? { label: `${k + 1} · ${p.name}`, value: `${yearsText(p)} · ${area(p.cells)}`, color: onMap(shades[k + 1], theme) }
+        : { label: `${k + 1} · ${yearsText(p)}`, value: area(p.cells), color: onMap(shades[k + 1], theme) },
     ),
   );
-  if (exp.counts.lost) {
-    const l = lostFill(exp.color);
-    growth.push({ label: "Held for a time, lost", value: area(exp.counts.lost), ...(l.hatch ? { swatch: hatchSwatch(onMap(l.fill, theme), hex(l.hatch)) } : { color: onMap(l.fill, theme) }) });
-  }
+  if (exp.counts.lost) growth.push({ label: "Held for a time, lost", value: area(exp.counts.lost), swatch: hatchSwatch(onMap(LOST_FILL, theme), hex(LOST_HATCH)) });
   const sections: LegendSection[] = [{ title: `Growth of ${exp.name}`, rows: growth, more: 0, dots: false }];
   if (exp.vassals.length) {
     const edge = hex(expansionShades(exp.color, 2)[1]);
@@ -1213,25 +1477,23 @@ export function expansionLegend(exp: Expansion, theme: MapTheme): LegendSection[
 // following the coasts, with fine lines between regions)
 function cellPainter(world: WorldData, exp: Expansion): (x: number, y: number) => [number, number, number, number] | null {
   const W = world.width;
-  const shades = expansionShades(exp.color, exp.periods.length);
-  const lost = lostFill(exp.color).fill;
+  const shades = periodColors(exp);
   // Other land stays bare here and is grayed afterwards
   return (x, y) => {
     const i = y * W + x;
     const c = exp.cls[i];
-    if (c === LOST) return [...lost, 255];
+    if (c === LOST) return [...LOST_FILL, 255];
     if (c >= 0) return [...shades[Math.min(c, shades.length - 1)], 255];
     if (exp.vassalCell[i] >= 0) return [...VASSAL_RGB, 255];
     return null;
   };
 }
 
-// Stripes over the land held for a time, when it is hatched (see lostFill)
+// Rust stripes over the land held for a time and lost
 function stripePainter(world: WorldData, exp: Expansion): ((x: number, y: number) => [number, number, number, number] | null) | undefined {
-  const hatch = lostFill(exp.color).hatch;
-  if (!hatch) return undefined;
+  if (!exp.counts.lost) return undefined;
   const W = world.width;
-  return (x, y) => (exp.cls[y * W + x] === LOST ? [...hatch, 255] : null);
+  return (x, y) => (exp.cls[y * W + x] === LOST ? [...LOST_HATCH, 255] : null);
 }
 
 // Region outlines: the grid edges between land cells i and j where edge(i, j)
@@ -1408,7 +1670,7 @@ function paintOverlay(ctx: CanvasRenderingContext2D, world: WorldData, exp: Expa
   const gx0 = Math.floor(-ox / s) - 2;
   const gx1 = Math.ceil((w - ox) / s) + 2;
   const L = LETTERING[theme];
-  const shades = expansionShades(exp.color, exp.periods.length);
+  const shades = periodColors(exp);
   const deep = hex(shades[0]);
   const pale = hex(expansionShades(exp.color, 2)[1]);
   const px = (x: number) => x * s + ox;
@@ -1439,11 +1701,12 @@ function paintOverlay(ctx: CanvasRenderingContext2D, world: WorldData, exp: Expa
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
 
-  // Thin light lines between the periods (and the land held for a time),
-  // like the internal edges of a hand-colored map
+  // Crisp lines between the periods (and the land held for a time): a light
+  // casing with a dark core, so every boundary reads on light and dark fills
   const band = (i: number) => (exp.cls[i] === LOST ? 100 : exp.cls[i]);
   const periodEdges = outlines(world, (i, j) => band(i) >= 0 && band(j) >= 0 && band(i) < band(j), gx0, gx1);
-  stroke(periodEdges, 1.1, theme === "Realistic" ? "rgba(255,255,255,0.45)" : "rgba(255,252,240,0.7)");
+  stroke(periodEdges, 2.6, theme === "Realistic" ? "rgba(255,255,255,0.4)" : "rgba(255,252,240,0.75)");
+  stroke(periodEdges, 1.1, "rgba(28,20,12,0.62)");
 
   // Vassals: a pale line of the realm's color around their land
   const vassalEdge = outlines(world, (i, j) => exp.vassalCell[i] >= 0 && exp.vassalCell[j] < 0, gx0, gx1);
@@ -1522,6 +1785,32 @@ function paintOverlay(ctx: CanvasRenderingContext2D, world: WorldData, exp: Expa
     const dark = lightness(shades[g.key]) < 0.66;
     const placed = note([{ text, size: 11, italic: true }], px(wrapX(g.x)), py(g.y), dark ? "#fffaf0" : "#2a2018", dark ? "rgba(20,16,12,0.55)" : "rgba(255,250,240,0.75)");
     if (placed) perPeriod.set(g.key, (perPeriod.get(g.key) ?? 0) + 1);
+  }
+  // Periods with no room for their years: their number (as in the legend)
+  // in a small disc of their color, on their largest regions
+  const badges = groupSpots(world, (i) => (exp.cls[i] >= 1 && !perPeriod.has(exp.cls[i]) ? exp.cls[i] : -1), 3);
+  const badged = new Map<number, number>();
+  for (const g of badges) {
+    if ((badged.get(g.key) ?? 0) >= 2 || g.depth * s < 4) continue;
+    const label = String(g.key);
+    const r = label.length > 1 ? 9 : 7.5;
+    const x = px(wrapX(g.x));
+    const y = py(g.y);
+    const box = { x: x - r, y: y - r, w: r * 2, h: r * 2 };
+    if (box.x < 2 || box.y < 2 || box.x + box.w > w - 2 || box.y + box.h > h - 2 || !free(box)) continue;
+    taken.push(box);
+    badged.set(g.key, (badged.get(g.key) ?? 0) + 1);
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = hex(shades[g.key]);
+    ctx.fill();
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = "rgba(28,20,12,0.8)";
+    ctx.stroke();
+    ctx.font = `700 ${r > 8 ? 9.5 : 10}px ${L.font}`;
+    ctx.letterSpacing = "0px";
+    ctx.fillStyle = lightness(shades[g.key]) < 0.62 ? "#fffaf0" : "#1e160e";
+    ctx.fillText(label, x, y + 0.5);
   }
   const lostSpots = groupSpots(world, (i) => (exp.cls[i] === LOST ? 1 : -1), minNote);
   for (const g of lostSpots.slice(0, 8)) {
