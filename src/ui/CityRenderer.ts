@@ -1,16 +1,16 @@
 import type { City, WorldData } from "../game/WorldData";
 import { CELL_METERS } from "../core/FieldNoise";
 import type { MapTheme } from "../core/GPURenderer";
+import { buildCityLayout } from "../game/city/generate";
+import { buildWardDetail } from "../game/city/lots";
 import {
-  buildCityLayout,
-  buildWardDetail,
   type CityLayout,
   type CityStyle,
   type Landmark,
   type Ward,
   type WardDetail,
 } from "../game/city/CityLayout";
-import { type Poly, insetConvex } from "../game/city/geom";
+import { type Poly, insetConvex, insetPoly } from "../game/city/geom";
 import { THEMES, viewRect } from "./themes";
 
 // Level of detail, by pixels per meter (ppm = scale / 5000):
@@ -195,6 +195,13 @@ interface Entry {
   arteries?: { width: number; path: Path2D }[];
   wallPath?: Path2D;
   piers?: Path2D;
+  streets?: { w: number; main: boolean; path: Path2D }[]; // by width
+  // Blocks grouped in tiles; a tile whose blocks are all built draws as a few merged shapes
+  tiles?: { key: string; wards: Ward[]; bbox: [number, number, number, number] }[];
+  tileMerged?: Map<string, { w: Ward; p: WardPaths }[]>;
+  aprons?: Path2D;
+  moles?: Path2D;
+  slips?: Path2D;
 }
 
 export class CityRenderer {
@@ -512,18 +519,37 @@ export class CityRenderer {
     clip.rect(-big, -big, big * 2, big * 2);
     clip.addPath(path(L.waterLoops));
     e.landClip = clip;
+    // Stone waterfronts: the harbor and river quays
     const q = new Path2D();
-    for (const loop of L.waterLoops) {
-      if (loop.length < 2) continue;
-      q.moveTo(loop[0].x, loop[0].y);
-      for (const p of loop) q.lineTo(p.x, p.y);
-      q.closePath();
+    for (const line of L.quays) {
+      if (line.length < 2) continue;
+      q.moveTo(line[0].x, line[0].y);
+      for (const p of line) q.lineTo(p.x, p.y);
     }
     e.quays = q;
+    e.aprons = path(L.aprons);
+    const m = new Path2D();
+    for (const line of L.moles) {
+      m.moveTo(line[0].x, line[0].y);
+      for (const p of line) m.lineTo(p.x, p.y);
+    }
+    e.moles = m;
+    e.slips = path(L.slips);
+    // Streets grouped by width (main roads and quays get a casing)
+    const byW = new Map<string, { w: number; main: boolean; path: Path2D }>();
+    for (const st of L.streets) {
+      const main = st.kind === "artery" || st.kind === "quay";
+      const key = `${Math.round(st.w * 2) / 2}|${main}`;
+      let b = byW.get(key);
+      if (!b) byW.set(key, (b = { w: Math.round(st.w * 2) / 2, main, path: new Path2D() }));
+      b.path.moveTo(st.a.x, st.a.y);
+      b.path.lineTo(st.b.x, st.b.y);
+    }
+    e.streets = [...byW.values()].sort((a, b) => a.w - b.w);
     e.urbanBlobs = path(
       L.wards
         .filter((w) => w.type !== "park" && w.type !== "cemetery")
-        .map((w) => insetConvex(w.poly, 6))
+        .map((w) => insetPoly(w.poly, 6))
         .filter((p): p is Poly => !!p),
     );
     const buckets = new Map<string, { color: number; alpha: number; polys: Poly[] }>();
@@ -558,8 +584,50 @@ export class CityRenderer {
   private syncTheme(e: Entry, theme: MapTheme) {
     if (e.pathsTheme !== theme) {
       e.wardPaths.clear();
+      e.tileMerged?.clear();
       e.pathsTheme = theme;
     }
+  }
+
+  // One tile's blocks merged by how they are drawn: a handful of shapes in
+  // place of a few per block (the drawing only looks at each item's type)
+  private mergeTile(items: { w: Ward; p: WardPaths }[], st: ThemedStyle): { w: Ward; p: WardPaths }[] {
+    const cls = (t: string) =>
+      t === "market" || t === "cathedral" || t === "castle" ? "open" : t === "park" || t === "cemetery" || t === "green" || t === "palace" || t === "suburb" || t === "wealthy" ? t : "normal";
+    const groups = new Map<string, { w: Ward; p: WardPaths }>();
+    const fresh = (): WardPaths => ({
+      blocks: new Path2D(),
+      plazas: new Path2D(),
+      shadow: new Path2D(),
+      roofs: st.roofShades.map(() => [new Path2D(), new Path2D(), new Path2D(), new Path2D()]),
+      wRoofs: st.wRoofShades.map(() => [new Path2D(), new Path2D(), new Path2D(), new Path2D()]),
+      domes: [],
+      minarets: new Path2D(),
+      outline: new Path2D(),
+      trees: new Path2D(),
+      treeShadow: new Path2D(),
+      treeLight: new Path2D(),
+      stalls: new Path2D(),
+      graves: new Path2D(),
+      ponds: new Path2D(),
+      hedges: new Path2D(),
+      paths: new Path2D(),
+      landmarks: [],
+      hasTrees: false,
+    });
+    for (const { w, p } of items) {
+      const k = cls(w.type);
+      let g = groups.get(k);
+      if (!g) groups.set(k, (g = { w, p: fresh() }));
+      const m = g.p;
+      for (const key of ["blocks", "plazas", "shadow", "minarets", "outline", "trees", "treeShadow", "treeLight", "stalls", "graves", "ponds", "hedges", "paths"] as const) m[key].addPath(p[key]);
+      p.roofs.forEach((sh, i) => sh.forEach((pp, j) => m.roofs[i % m.roofs.length][j].addPath(pp)));
+      p.wRoofs.forEach((sh, i) => sh.forEach((pp, j) => m.wRoofs[i % m.wRoofs.length][j].addPath(pp)));
+      m.domes.push(...p.domes);
+      m.landmarks.push(...p.landmarks);
+      m.hasTrees ||= p.hasTrees;
+    }
+    return [...groups.values()];
   }
 
   private wardPaths(e: Entry, ward: Ward, D: WardDetail, st: ThemedStyle): WardPaths {
@@ -661,16 +729,22 @@ export class CityRenderer {
     ctx.fill(e.ground!);
     ctx.restore();
 
-    // Quays along urban waterfronts
-    if (ppm > 0.025) {
-      ctx.save();
-      ctx.beginPath();
-      ctx.arc(0, 0, L.Ru * 0.98, 0, Math.PI * 2);
-      ctx.clip();
+    // Paved quaysides and the stone waterfront
+    if (ppm > 0.012) {
+      ctx.fillStyle = st.plaza;
+      ctx.fill(e.aprons!);
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
       ctx.strokeStyle = st.stoneDark;
-      ctx.lineWidth = Math.max(2.5, 1.2 * px);
+      ctx.lineWidth = Math.max(2.5, 1.4 * px);
       ctx.stroke(e.quays!);
-      ctx.restore();
+      // Breakwaters
+      ctx.strokeStyle = st.stoneDark;
+      ctx.lineWidth = Math.max(14, 3 * px);
+      ctx.stroke(e.moles!);
+      ctx.strokeStyle = st.stone;
+      ctx.lineWidth = Math.max(10, 2 * px);
+      ctx.stroke(e.moles!);
     }
 
     if (ppm > 0.05) {
@@ -683,25 +757,24 @@ export class CityRenderer {
     }
 
     const drawRoads = () => {
-    // Street network between wards stays legible at every zoom
-    if (ppm > 0.012) {
-      ctx.strokeStyle = st.street;
-      ctx.lineJoin = "round";
-      ctx.lineWidth = Math.max(5, 1.1 * px);
-      ctx.stroke(e.wardEdges!);
-    }
-    // Arteries
-    for (const a of e.arteries!) {
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      if (ppm > 0.05 && theme !== "Historical") {
-        ctx.strokeStyle = "rgba(90,70,50,0.35)";
-        ctx.lineWidth = a.width + 2.5;
-        ctx.stroke(a.path);
+    // The street network, each street at its own width; main roads and quays cased.
+    // Far out only the main roads show, so the town doesn't turn into a web.
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (const sp of e.streets!) {
+      if (!sp.main && ppm < 0.02) continue;
+      // A curb line along every street up close, a soft casing on the main ones further out
+      if (ppm > 0.12 || (sp.main && ppm > 0.05)) {
+        ctx.strokeStyle = theme === "Historical" ? "rgba(59,42,28,0.45)" : theme === "Atlas" ? "rgba(150,140,125,0.6)" : "rgba(70,52,34,0.42)";
+        ctx.lineWidth = Math.max(sp.w + (ppm > 0.12 ? 1.6 : 2.5), (sp.main ? 1.2 : 0.7) * px + 1.2 * px);
+        ctx.stroke(sp.path);
       }
+    }
+    for (const sp of e.streets!) {
+      if (!sp.main && ppm < 0.02) continue;
       ctx.strokeStyle = st.street;
-      ctx.lineWidth = Math.max(a.width, 1.2 * px);
-      ctx.stroke(a.path);
+      ctx.lineWidth = Math.max(sp.w, (sp.main ? 1.2 : 0.7) * px);
+      ctx.stroke(sp.path);
     }
 
     // Bridges
@@ -731,21 +804,57 @@ export class CityRenderer {
     } else {
       this.syncTheme(e, theme);
       const visible: { w: Ward; p: WardPaths | null }[] = [];
-      for (const w of L.wards) {
-        const b = w.bbox;
-        if (b[2] < vx0 || b[0] > vx1 || b[3] < vy0 || b[1] > vy1) continue;
-        if (!w.detail) {
-          if (!this.queuedWards.has(w)) {
-            this.queuedWards.add(w);
-            this.detailQueue.push({
-              entry: e,
-              ward: w,
-              priority: Math.hypot(sx + w.c.x * ppm - width / 2, sy + w.c.y * ppm - height / 2),
-            });
-            this.schedule();
+      if (!e.tiles) {
+        // Blocks in 600 m tiles
+        const T = 600;
+        const byKey = new Map<string, Ward[]>();
+        for (const w of L.wards) {
+          const key = `${Math.floor(w.c.x / T)},${Math.floor(w.c.y / T)}`;
+          (byKey.get(key) ?? byKey.set(key, []).get(key)!).push(w);
+        }
+        e.tiles = [...byKey].map(([key, wards]) => {
+          const b: [number, number, number, number] = [Infinity, Infinity, -Infinity, -Infinity];
+          for (const w of wards) {
+            b[0] = Math.min(b[0], w.bbox[0]);
+            b[1] = Math.min(b[1], w.bbox[1]);
+            b[2] = Math.max(b[2], w.bbox[2]);
+            b[3] = Math.max(b[3], w.bbox[3]);
           }
-          visible.push({ w, p: null });
-        } else visible.push({ w, p: this.wardPaths(e, w, w.detail, st) });
+          return { key, wards, bbox: b };
+        });
+        e.tileMerged = new Map();
+      }
+      for (const t of e.tiles) {
+        const b = t.bbox;
+        if (b[2] < vx0 || b[0] > vx1 || b[3] < vy0 || b[1] > vy1) continue;
+        const merged = e.tileMerged!.get(t.key);
+        if (merged) {
+          visible.push(...merged);
+          continue;
+        }
+        let ready = true;
+        const items: { w: Ward; p: WardPaths | null }[] = [];
+        for (const w of t.wards) {
+          if (!w.detail) {
+            ready = false;
+            if (!this.queuedWards.has(w)) {
+              this.queuedWards.add(w);
+              this.detailQueue.push({
+                entry: e,
+                ward: w,
+                priority: Math.hypot(sx + w.c.x * ppm - width / 2, sy + w.c.y * ppm - height / 2),
+              });
+              this.schedule();
+            }
+            items.push({ w, p: null });
+          } else items.push({ w, p: this.wardPaths(e, w, w.detail, st) });
+        }
+        if (ready) {
+          const m = this.mergeTile(items as { w: Ward; p: WardPaths }[], st);
+          e.tileMerged!.set(t.key, m);
+          for (const w of t.wards) e.wardPaths.delete(w); // the merged shapes replace them
+          visible.push(...m);
+        } else visible.push(...items);
       }
       this.drawWards(ctx, visible, st, ppm, px, showBuildings, isInteracting, theme, drawRoads);
     }
@@ -782,6 +891,31 @@ export class CityRenderer {
         ctx.stroke(e.piers!);
       }
     }
+    // Shipyard slipways and harbor cranes
+    if (ppm > 0.02 && L.slips.length) {
+      ctx.fillStyle = theme === "Historical" ? "#c9ad80" : "#8a6a48";
+      ctx.fill(e.slips!);
+      ctx.strokeStyle = "rgba(40,28,18,0.55)";
+      ctx.lineWidth = Math.max(0.6, 0.6 * px);
+      ctx.stroke(e.slips!);
+    }
+    if (ppm > 0.06)
+      for (let i = 0; i < L.cranes.length; i += 3) {
+        const x = L.cranes[i];
+        const y = L.cranes[i + 1];
+        const a = L.cranes[i + 2];
+        ctx.strokeStyle = st.stoneDark;
+        ctx.lineWidth = Math.max(1.6, 0.9 * px);
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + Math.cos(a) * 16, y + Math.sin(a) * 16);
+        ctx.stroke();
+        ctx.fillStyle = st.wall;
+        ctx.beginPath();
+        ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
     if (ppm > 0.05) this.drawBoats(ctx, L, theme);
 
     for (const lm of L.landmarks) this.drawLandmark(ctx, lm, st, ppm, px);
@@ -871,6 +1005,11 @@ export class CityRenderer {
         if (st.outline && ppm > 0.12) {
           ctx.strokeStyle = st.outline;
           ctx.lineWidth = 0.7 * px;
+          ctx.stroke(p.outline);
+        } else if (!st.outline && ppm > 0.3) {
+          // A fine dark edge keeps houses apart in the realistic style
+          ctx.strokeStyle = "rgba(40,26,16,0.45)";
+          ctx.lineWidth = 0.5 * px;
           ctx.stroke(p.outline);
         }
       }

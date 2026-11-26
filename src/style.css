@@ -4730,3 +4730,21 @@ input[type="color"]::-moz-color-swatch {
   width: 100%;
   accent-color: var(--accent);
 }
+
+/* Peace conference: further ways to settle what is picked */
+.pt-more-options summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.pt-more-options summary::before {
+  content: "▸ ";
+}
+
+.pt-more-options[open] summary::before {
+  content: "▾ ";
+}
+
+.pt-more-options[open] {
+  gap: 8px;
+}

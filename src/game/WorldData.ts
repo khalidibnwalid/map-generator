@@ -215,6 +215,17 @@ export interface Road {
   traffic?: number; // trade flow, 0..1 of the busiest link (runtime, see generateTrade)
 }
 
+// A city plan's own settings, edited in the city plan editor; absent
+// fields follow the generator's own choice
+export interface CityPlan {
+  seed?: number; // a new layout (another roll of the same rules)
+  pattern?: "organic" | "grid" | "radial"; // how side streets run
+  walls?: boolean;
+  harbor?: boolean;
+  density?: number; // 0.6 (spacious) .. 1.4 (crowded)
+  zones?: { x: number; y: number; r: number; type: string }[]; // painted districts, local meters
+}
+
 export interface City {
   id: number;
   name: string;
@@ -233,6 +244,7 @@ export interface City {
   wealthTier?: number; // index into WEALTH_TIERS
   resources?: string[]; // notable resource kinds nearby
   formerName?: string; // the name it bore before conquerors renamed it (0.3+ history)
+  plan?: CityPlan; // edits to its street plan (see the city plan editor)
 }
 
 export interface Culture {

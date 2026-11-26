@@ -149,6 +149,7 @@ export class ProvinceTool {
   private splits = new Map<Province, Province[]>(); // province -> its pieces (itself first), this conference
   private pickBy: PickBy = "province";
   private chipsOpen = false; // the whole list of chips, not just the first few
+  private moreOpen = false; // the conference's "More options" is unfolded
   // Areas: provinces shown cut into natural pieces (nothing changes until an action)
   private areaSel = new Map<Province, Set<number>>(); // province -> its selected pieces
   private hoverArea: { p: Province; k: number } | null = null;
@@ -183,6 +184,9 @@ export class ProvinceTool {
         this.colorTouched = true;
       }
     });
+    el.addEventListener("toggle", (e) => {
+      if ((e.target as HTMLElement).classList?.contains("pt-more-options")) this.moreOpen = (e.target as HTMLDetailsElement).open;
+    }, true);
     el.addEventListener("keydown", (e) => {
       const t = e.target as HTMLElement;
       if (e.key === "Enter" && t.classList.contains("pt-name")) this.form();
@@ -221,7 +225,7 @@ export class ProvinceTool {
     this.syncWorld();
     this.conference = c;
     this.mode = "select";
-    this.pickBy = "province"; // the conference panel has no pick choice: one province at a time
+    if (this.pickBy === "region" && this.regionSize >= 0.5) this.pickBy = "province"; // whole regions rarely fit a peace
     if (!this.nextWar()) return;
     if (this.active) this.refresh();
     else this.open();
@@ -942,6 +946,16 @@ export class ProvinceTool {
         return this.form();
       case "annex":
         return this.annex();
+      case "annex-winner": {
+        // To the victor, whatever realm the extra options show
+        const w = this.war;
+        if (!w) return;
+        const keep = this.target;
+        this.target = this.host.world().nations.indexOf(w.winner);
+        this.annex();
+        this.target = keep >= 0 && keep < this.host.world().nations.length ? keep : this.target;
+        return;
+      }
       case "release":
         return this.release();
     }
@@ -980,45 +994,45 @@ export class ProvinceTool {
       .join("")}</div>`;
     const pickBtn = `<button type="button" class="icon-btn boxed pt-pick ${this.picking ? "active" : ""}" data-act="pick" title="Pick the realm on the map">${PICK_ICON}</button>`;
     let body: string;
-    if (this.mode === "select") {
-      const owners = new Map<number, number>();
-      let area = 0;
-      // Whole provinces, then areas (named by their town or where they lie)
-      const items: { name: string; owner: number; rm: string }[] = [];
-      sel.forEach((p, k) => {
+    const c = this.conference;
+    const war = this.war;
+    // What is selected: whole provinces, then areas and patches (named by town or place)
+    const owners = new Map<number, number>();
+    let area = 0;
+    const items: { name: string; owner: number; rm: string }[] = [];
+    sel.forEach((p, k) => {
+      owners.set(p.nationIndex, (owners.get(p.nationIndex) ?? 0) + 1);
+      area += p.area ?? 0;
+      items.push({ name: p.name, owner: p.nationIndex, rm: `data-rm="${k}"` });
+    });
+    const taken = new Set<string>();
+    for (const [p, ks] of this.areaSel) {
+      if (!world.provinces.includes(p)) continue;
+      const { pieces } = this.areasOf(p);
+      for (const k of ks) {
+        const cells = pieces[k];
+        if (!cells) continue;
         owners.set(p.nationIndex, (owners.get(p.nationIndex) ?? 0) + 1);
-        area += p.area ?? 0;
-        items.push({ name: p.name, owner: p.nationIndex, rm: `data-rm="${k}"` });
-      });
-      const taken = new Set<string>();
-      for (const [p, ks] of this.areaSel) {
-        if (!world.provinces.includes(p)) continue;
-        const { pieces } = this.areasOf(p);
-        for (const k of ks) {
-          const cells = pieces[k];
-          if (!cells) continue;
-          owners.set(p.nationIndex, (owners.get(p.nationIndex) ?? 0) + 1);
-          area += cells.length * CELL_KM2;
-          items.push({ name: pieces.length > 1 ? pieceLabel(world, p, cells, taken) : p.name, owner: p.nationIndex, rm: `data-rma="${p.id}:${k}"` });
-        }
+        area += cells.length * CELL_KM2;
+        items.push({ name: pieces.length > 1 ? pieceLabel(world, p, cells, taken) : p.name, owner: p.nationIndex, rm: `data-rma="${p.id}:${k}"` });
       }
-      this.patches.forEach((b, i) => {
-        if (!world.provinces.includes(b.p)) return;
-        owners.set(b.p.nationIndex, (owners.get(b.p.nationIndex) ?? 0) + 1);
-        area += b.cells.length * CELL_KM2;
-        items.push({ name: `Part of ${b.p.name}`, owner: b.p.nationIndex, rm: `data-rmp="${i}"` });
-      });
-      const areas = this.areaCount + this.patches.length;
-      const count = sel.length + areas;
-      // A new realm's suggested color, unlike its neighbors'
-      if (!this.colorTouched && (!this.newColor || !count)) this.newColor = colorForNewNation(world, [...owners.keys()]);
-      const none = count ? "" : "disabled";
-      const chips = items
-        .slice(0, this.chipsOpen ? items.length : MAX_CHIPS)
-        .map((it) => `<span class="pt-chip" title="${esc(it.name)} · ${esc(world.nations[it.owner]?.name ?? "")}">${flag(it.owner)}<span>${esc(it.name)}</span><button type="button" ${it.rm} title="Deselect" aria-label="Deselect ${esc(it.name)}">✕</button></span>`)
-        .join("");
-      const what = [sel.length ? `<strong>${sel.length}</strong> province${sel.length === 1 ? "" : "s"}` : "", areas ? `<strong>${areas}</strong> area${areas === 1 ? "" : "s"}` : ""].filter(Boolean).join(" + ") || "<strong>0</strong> provinces";
-      body = `
+    }
+    this.patches.forEach((b, i) => {
+      if (!world.provinces.includes(b.p)) return;
+      owners.set(b.p.nationIndex, (owners.get(b.p.nationIndex) ?? 0) + 1);
+      area += b.cells.length * CELL_KM2;
+      items.push({ name: `Part of ${b.p.name}`, owner: b.p.nationIndex, rm: `data-rmp="${i}"` });
+    });
+    const areas = this.areaCount + this.patches.length;
+    const count = sel.length + areas;
+    const none = count ? "" : "disabled";
+    const chips = items
+      .slice(0, this.chipsOpen ? items.length : MAX_CHIPS)
+      .map((it) => `<span class="pt-chip" title="${esc(it.name)} · ${esc(world.nations[it.owner]?.name ?? "")}">${flag(it.owner)}<span>${esc(it.name)}</span><button type="button" ${it.rm} title="Deselect" aria-label="Deselect ${esc(it.name)}">✕</button></span>`)
+      .join("");
+    const what = [sel.length ? `<strong>${sel.length}</strong> province${sel.length === 1 ? "" : "s"}` : "", areas ? `<strong>${areas}</strong> area${areas === 1 ? "" : "s"}` : ""].filter(Boolean).join(" + ") || "<strong>0</strong> provinces";
+    const chipList = items.length ? `<div class="pt-chips">${chips}${items.length > MAX_CHIPS ? `<button type="button" class="pt-more" data-act="chips">${this.chipsOpen ? "Show fewer" : `+${items.length - MAX_CHIPS} more`}</button>` : ""}</div>` : "";
+    const pickBy = `
         <div class="pt-pickby">
           <span class="pt-label">Click picks</span>
           <div class="picker segmented pt-mode">${(["area", "province", "realm", "region"] as PickBy[])
@@ -1033,12 +1047,68 @@ export class ProvinceTool {
               : ""
           }
         </div>
-        <p class="pt-hint">${this.picking ? "Click a realm on the map to hand the provinces to." : `${this.pickBy === "region" && this.regionSize < 0.5 ? "Click to take a patch of a province around that spot, ending at rivers and ridges; click inside a patch to drop it." : PICK_HINT[this.pickBy]} Right-drag or Shift+drag moves the map.`}</p>
+        <p class="pt-hint">${this.picking ? "Click a realm on the map to hand the land to." : `${this.pickBy === "region" && this.regionSize < 0.5 ? "Click to take a patch of a province around that spot, ending at rivers and ridges; click inside a patch to drop it." : PICK_HINT[this.pickBy]} Right-drag or Shift+drag moves the map.`}</p>`;
+    if (c && war) {
+      // The peace on the table: what the victor holds is selected; annex it,
+      // make it a vassal, free it, hand it elsewhere, or give it all back by signing
+      const wi = world.nations.indexOf(war.winner);
+      const li = world.nations.indexOf(war.loser);
+      const W = esc(war.winner.name);
+      if (!this.colorTouched && (!this.newColor || !count)) this.newColor = colorForNewNation(world, [wi, li]);
+      const more = c.wars.length > 1 ? `<small>${c.wars.length - 1} more peace${c.wars.length > 2 ? "s" : ""} after this one.</small>` : "";
+      body = `
+        <div class="pt-peace">
+          <div class="pt-peace-title">Peace conference · year ${c.year}</div>
+          <div class="pt-peace-line">${flag(wi)}<span>${war.capitulated ? `${W} defeats ${esc(war.loser.name)}` : `${W} and ${esc(war.loser.name)} make peace`}</span>${flag(li)}</div>
+          <small>The map is as the war left it, occupied land shaded. The provinces ${W} holds most of are selected; pick land to change that.</small>
+          ${more}
+        </div>
+        <button type="button" class="pt-toggle ${this.splitOn ? "on" : ""}" data-act="split" role="switch" aria-checked="${this.splitOn}" title="Cut large provinces into smaller pieces for this peace; pieces left with the same owner join up again">
+          <span class="pt-toggle-text">Split large provinces<small>Smaller pieces to hand out, inside the province borders</small></span>
+          <span class="pt-toggle-knob" aria-hidden="true"></span>
+        </button>
+        ${pickBy}
+        <div class="pt-sel-head">
+          <span>${what} on the table${area ? ` · ${km2(area)}` : ""}</span>
+          <button type="button" class="btn-ghost pd-mini" data-act="clear" ${none}>Clear</button>
+        </div>
+        ${chipList}
+        <div class="pt-section">
+          <div class="pt-label">Their fate</div>
+          <div class="pt-actions">
+            <button type="button" class="btn-primary pt-go" data-act="annex-winner" ${none} title="${W} annexes them">Annex to ${W}</button>
+            <button type="button" class="btn-ghost pt-go" data-act="vassal" ${none} title="They become a new realm bound to ${W}">Vassal of ${W}</button>
+          </div>
+          <div class="pt-row">
+            <input type="color" class="pt-color" value="${this.newColor}" title="The new realm's color" />
+            <input type="text" class="pt-name" placeholder="New realm's name (optional)" maxlength="48" value="${esc(this.newName)}" />
+            <button type="button" class="btn-ghost pt-go" data-act="form" ${none} title="They become a free realm">Free</button>
+          </div>
+        </div>
+        <details class="pt-section pt-more-options" ${this.moreOpen ? "open" : ""}>
+          <summary class="pt-label">More options</summary>
+          <div class="pt-row">
+            <div class="pt-target"></div>${pickBtn}
+            <button type="button" class="btn-primary pt-go" data-act="annex" ${count && world.nations[this.target] ? "" : "disabled"} title="Hand them to the realm picked here">Hand over</button>
+          </div>
+          <button type="button" class="btn-ghost pt-release" data-act="release" ${none} title="Every selected piece becomes a realm of its own">Release each as its own realm</button>
+        </details>
+        <div class="pt-section">
+          <button type="button" class="btn-primary pt-sign" data-act="sign" title="Close the conference: land still occupied returns to its owner">Sign · keep the rest</button>
+          <small class="pt-hint">Signing keeps every border as you left it: land still occupied goes back to its owner.</small>
+          <button type="button" class="btn-ghost pt-release" data-act="occupied" title="Each side keeps exactly the land it holds; provinces are cut along the front">Keep the occupied land</button>
+          <button type="button" class="btn-ghost pt-release" data-act="history" title="Settle it the way history would have">Let history decide</button>
+        </div>`;
+    } else if (this.mode === "select") {
+      // A new realm's suggested color, unlike its neighbors'
+      if (!this.colorTouched && (!this.newColor || !count)) this.newColor = colorForNewNation(world, [...owners.keys()]);
+      body = `
+        ${pickBy}
         <div class="pt-sel-head">
           <span>${what}${area ? ` · ${km2(area)}` : ""}</span>
           <button type="button" class="btn-ghost pd-mini" data-act="clear" ${none}>Clear</button>
         </div>
-        ${items.length ? `<div class="pt-chips">${chips}${items.length > MAX_CHIPS ? `<button type="button" class="pt-more" data-act="chips">${this.chipsOpen ? "Show fewer" : `+${items.length - MAX_CHIPS} more`}</button>` : ""}</div>` : ""}
+        ${chipList}
         ${owners.size ? `<div class="pt-owners">From ${[...owners].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([o, n]) => `${flag(o)} ${esc(world.nations[o].name)} (${n})`).join(" · ")}${owners.size > 6 ? ` and ${owners.size - 6} more` : ""}</div>` : ""}
         <div class="pt-section">
           <div class="pt-label">Form a new realm</div>
@@ -1075,58 +1145,6 @@ export class ProvinceTool {
               </div>`
             : ""
         }`;
-    }
-    const c = this.conference;
-    const war = this.war;
-    if (c && war) {
-      // The peace on the table: what the victor holds is selected; annex it,
-      // make it a vassal, free it, or hand it all back by signing
-      const wi = world.nations.indexOf(war.winner);
-      const li = world.nations.indexOf(war.loser);
-      const W = esc(war.winner.name);
-      const none = sel.length ? "" : "disabled";
-      let area = 0;
-      for (const p of sel) area += p.area ?? 0;
-      if (!this.colorTouched && (!this.newColor || !sel.length)) this.newColor = colorForNewNation(world, [wi, li]);
-      const chips = sel
-        .slice(0, this.chipsOpen ? sel.length : MAX_CHIPS)
-        .map((p, k) => `<span class="pt-chip" title="${esc(p.name)} · ${esc(world.nations[p.nationIndex].name)}">${flag(p.nationIndex)}<span>${esc(p.name)}</span><button type="button" data-rm="${k}" title="Take off the table" aria-label="Deselect ${esc(p.name)}">✕</button></span>`)
-        .join("");
-      const more = c.wars.length > 1 ? `<small>${c.wars.length - 1} more peace${c.wars.length > 2 ? "s" : ""} after this one.</small>` : "";
-      body = `
-        <div class="pt-peace">
-          <div class="pt-peace-title">Peace conference · year ${c.year}</div>
-          <div class="pt-peace-line">${flag(wi)}<span>${war.capitulated ? `${W} defeats ${esc(war.loser.name)}` : `${W} and ${esc(war.loser.name)} make peace`}</span>${flag(li)}</div>
-          <small>The map is as the war left it, occupied land shaded. The provinces ${W} holds most of are selected; click provinces to change that.</small>
-          ${more}
-        </div>
-        <button type="button" class="pt-toggle ${this.splitOn ? "on" : ""}" data-act="split" role="switch" aria-checked="${this.splitOn}" title="Cut large provinces into smaller pieces for this peace; pieces left with the same owner join up again">
-          <span class="pt-toggle-text">Split large provinces<small>Smaller pieces to hand out, inside the province borders</small></span>
-          <span class="pt-toggle-knob" aria-hidden="true"></span>
-        </button>
-        <div class="pt-sel-head">
-          <span><strong>${sel.length}</strong> province${sel.length === 1 ? "" : "s"} on the table${area ? ` · ${km2(area)}` : ""}</span>
-          <button type="button" class="btn-ghost pd-mini" data-act="clear" ${none}>Clear</button>
-        </div>
-        ${sel.length ? `<div class="pt-chips">${chips}${sel.length > MAX_CHIPS ? `<button type="button" class="pt-more" data-act="chips">${this.chipsOpen ? "Show fewer" : `+${sel.length - MAX_CHIPS} more`}</button>` : ""}</div>` : ""}
-        <div class="pt-section">
-          <div class="pt-label">Their fate</div>
-          <div class="pt-actions">
-            <button type="button" class="btn-primary pt-go" data-act="annex" ${none} title="${W} annexes them">Annex to ${W}</button>
-            <button type="button" class="btn-ghost pt-go" data-act="vassal" ${none} title="They become a new realm bound to ${W}">Vassal of ${W}</button>
-          </div>
-          <div class="pt-row">
-            <input type="color" class="pt-color" value="${this.newColor}" title="The new realm's color" />
-            <input type="text" class="pt-name" placeholder="New realm's name (optional)" maxlength="48" value="${esc(this.newName)}" />
-            <button type="button" class="btn-ghost pt-go" data-act="form" ${none} title="They become a free realm">Free</button>
-          </div>
-        </div>
-        <div class="pt-section">
-          <button type="button" class="btn-primary pt-sign" data-act="sign" title="Close the conference: land still occupied returns to its owner">Sign · keep the rest</button>
-          <small class="pt-hint">Signing keeps every border as you left it: land still occupied goes back to its owner.</small>
-          <button type="button" class="btn-ghost pt-release" data-act="occupied" title="Each side keeps exactly the land it holds; provinces are cut along the front">Keep the occupied land</button>
-          <button type="button" class="btn-ghost pt-release" data-act="history" title="Settle it the way history would have">Let history decide</button>
-        </div>`;
     }
     el.innerHTML = `
       <div class="pt-head">

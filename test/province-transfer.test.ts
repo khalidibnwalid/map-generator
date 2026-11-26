@@ -76,7 +76,8 @@ test("a province splits into 3-10 contiguous pieces inside its outline, and merg
   const p = [...w.provinces].sort((a, b) => sizeOf(b.id) - sizeOf(a.id))[0];
   const total = sizeOf(p.id);
   const count = w.provinces.length;
-  const parts = splitProvince(w, p, 6);
+  const { rng } = await import("../src/game/city/geom");
+  const parts = splitProvince(w, p, 6, rng(7));
   expect(parts.length).toBeGreaterThanOrEqual(3);
   expect(parts.length).toBeLessThanOrEqual(10);
   expect(parts[0]).toBe(p);
@@ -85,21 +86,27 @@ test("a province splits into 3-10 contiguous pieces inside its outline, and merg
   for (const q of parts) {
     const cells: number[] = [];
     for (let x = 0; x < W; x++) for (let y = 0; y < w.height; y++) if (!w.grid[x][y].isWater && w.grid[x][y].provinceIndex === q.id) cells.push(y * W + x);
+    // Its largest connected part (land cut off inside the province, islands, may sit apart)
     const set = new Set(cells);
-    const seen = new Set([cells[0]]);
-    const queue = [cells[0]];
-    for (let h = 0; h < queue.length; h++) {
-      const c = queue[h];
-      const x = c % W;
-      const y = Math.floor(c / W);
-      for (const nb of [y * W + ((x + 1) % W), y * W + ((x - 1 + W) % W), c - W, c + W])
-        if (set.has(nb) && !seen.has(nb)) {
-          seen.add(nb);
-          queue.push(nb);
-        }
+    const seen = new Set<number>();
+    let largest = 0;
+    for (const start of cells) {
+      if (seen.has(start)) continue;
+      seen.add(start);
+      const queue = [start];
+      for (let h = 0; h < queue.length; h++) {
+        const c = queue[h];
+        const x = c % W;
+        const y = Math.floor(c / W);
+        for (const nb of [y * W + ((x + 1) % W), y * W + ((x - 1 + W) % W), c - W, c + W])
+          if (set.has(nb) && !seen.has(nb)) {
+            seen.add(nb);
+            queue.push(nb);
+          }
+      }
+      largest = Math.max(largest, queue.length);
     }
-    // Land cut off inside the province (islands) may sit apart; the bulk is one piece
-    expect(seen.size).toBeGreaterThan(cells.length * 0.8);
+    expect(largest).toBeGreaterThan(cells.length * 0.8);
   }
   mergeProvinces(w, p, parts.slice(1));
   expect(w.provinces.length).toBe(count);
