@@ -45,12 +45,78 @@ export interface Conference {
 }
 
 type Mode = "select" | "paint";
+type PickBy = "province" | "realm" | "region"; // what a click selects
 const NEW = -2; // paint target: a new realm, formed by the first stroke
 
 const esc = (t: string) => t.replace(/[&<>"]/g, (ch) => `&#${ch.charCodeAt(0)};`);
 const km2 = (cells: number) => `${Math.round(cells).toLocaleString()} km²`;
 const PICK_ICON = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 3l5 15 2.5-6.5L19 9z"/><path d="m13 13 6 6"/></svg>`;
 const MAX_CHIPS = 10;
+const PICK_HINT: Record<PickBy, string> = {
+  province: "Click provinces to select them, or drag across many.",
+  realm: "Click a realm to select all its provinces.",
+  region: "Click to select a natural region: the provinces up to the nearest rivers, ridges and coasts.",
+};
+
+// Provinces of the natural region around `start`: it spreads to neighbors
+// across open borders and stops where a border largely follows a river or a
+// mountain ridge (about 1,500 m and up), or the sea. Partly natural borders
+// cost more to cross, and the region reaches only a few provinces out, so it
+// stays a region (a valley, a plain) rather than a continent. Realm borders
+// are no obstacle.
+const RIDGE = 0.67;
+export function naturalRegion(world: WorldData, start: Province): Province[] {
+  const W = world.width;
+  const H = world.height;
+  const shared = new Map<number, number>(); // pair key -> border cells
+  const natural = new Map<number, number>();
+  const P = world.provinces.length;
+  const key = (a: number, b: number) => (a < b ? a * P + b : b * P + a);
+  for (let x = 0; x < W; x++)
+    for (let y = 0; y < H; y++) {
+      const c = world.grid[x][y];
+      const a = c.provinceIndex;
+      if (c.isWater || a === undefined || a < 0) continue;
+      for (const [nx, ny] of [[(x + 1) % W, y], [x, y + 1]]) {
+        if (ny >= H) continue;
+        const d = world.grid[nx][ny];
+        const b = d.provinceIndex;
+        if (d.isWater || b === undefined || b < 0 || b === a) continue;
+        const k = key(a, b);
+        shared.set(k, (shared.get(k) ?? 0) + 1);
+        // A river cell on either side, or next to it, makes the edge a river edge
+        const river = c.hasRiver || d.hasRiver || world.grid[x][Math.max(0, y - 1)].hasRiver || world.grid[nx][Math.min(H - 1, ny + 1)].hasRiver;
+        if (river || Math.max(c.elevation, d.elevation) >= RIDGE) natural.set(k, (natural.get(k) ?? 0) + 1);
+      }
+    }
+  // Open borders, with what it costs to cross them
+  const next = new Map<number, { to: number; cost: number }[]>();
+  for (const [k, n] of shared) {
+    const frac = (natural.get(k) ?? 0) / n;
+    if (frac >= 0.2 || n < 2) continue; // a natural border (or a mere corner)
+    const a = Math.floor(k / P);
+    const b = k % P;
+    const cost = 1 + frac * 12;
+    (next.get(a) ?? next.set(a, []).get(a)!).push({ to: b, cost });
+    (next.get(b) ?? next.set(b, []).get(b)!).push({ to: a, cost });
+  }
+  // Cheapest spread from the start, within a budget
+  const BUDGET = 3.5;
+  const best = new Map<number, number>([[start.id, 0]]);
+  const open = [start.id];
+  while (open.length) {
+    open.sort((a, b) => best.get(a)! - best.get(b)!);
+    const a = open.shift()!;
+    const ca = best.get(a)!;
+    for (const { to, cost } of next.get(a) ?? []) {
+      const c = ca + cost;
+      if (c > BUDGET || c >= (best.get(to) ?? Infinity)) continue;
+      best.set(to, c);
+      open.push(to);
+    }
+  }
+  return [...best.keys()].map((i) => world.provinces[i]).filter((p): p is Province => !!p && !!world.nations[p.nationIndex]);
+}
 
 export class ProvinceTool {
   public active = false;
@@ -69,6 +135,8 @@ export class ProvinceTool {
   private maskKey = 0; // bumped when land changes hands
   private world: WorldData | null = null;
   private conference: Conference | null = null;
+  private pickBy: PickBy = "province";
+  private renaming: HTMLInputElement | null = null; // inline name editor on the map
 
   constructor(host: ProvinceToolHost, el: HTMLElement) {
     this.host = host;
@@ -276,6 +344,19 @@ export class ProvinceTool {
       toast("Pick the realm to paint into first");
       return true;
     }
+    // A whole realm or natural region at once (no stroke)
+    if (this.mode === "select" && this.pickBy !== "province") {
+      if (p) {
+        const group = this.pickBy === "realm" ? this.host.world().provinces.filter((q) => q.nationIndex === p.nationIndex) : naturalRegion(this.host.world(), p);
+        const add = !this.selected.has(p);
+        for (const q of group) {
+          if (add) this.selected.add(q);
+          else this.selected.delete(q);
+        }
+        this.refresh();
+      }
+      return true;
+    }
     this.stroke = { adding: this.mode === "paint" || !p || !this.selected.has(p) };
     this.pending.clear();
     if (p) this.strokeOver(p);
@@ -314,14 +395,50 @@ export class ProvinceTool {
     return true;
   }
 
-  // Double-click: every province of the realm there joins the selection
+  // Double-click a province: rename it right there on the map
   public dblClick(e: MouseEvent): boolean {
     if (!this.active || this.mode !== "select") return false;
     const p = this.provinceAt(e.clientX, e.clientY);
-    if (!p) return true;
-    for (const q of this.host.world().provinces) if (q.nationIndex === p.nationIndex) this.selected.add(q);
-    this.refresh();
+    if (p) this.rename(p, e.clientX, e.clientY);
     return true;
+  }
+
+  private rename(p: Province, clientX: number, clientY: number) {
+    this.renaming?.remove();
+    const host = this.el.parentElement ?? document.body;
+    const box = host.getBoundingClientRect();
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "pt-rename";
+    input.value = p.name;
+    input.maxLength = 48;
+    input.setAttribute("aria-label", "Province name");
+    input.style.left = `${clientX - box.left}px`;
+    input.style.top = `${clientY - box.top}px`;
+    host.appendChild(input);
+    this.renaming = input;
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = (keep: boolean) => {
+      if (done) return;
+      done = true;
+      const name = input.value.trim();
+      input.remove();
+      if (this.renaming === input) this.renaming = null;
+      if (keep && name && name !== p.name && this.host.world().provinces.includes(p)) {
+        p.name = name;
+        toast(`Province renamed ${name}`);
+        this.host.changed(p.nationIndex);
+      }
+      this.refresh();
+    };
+    input.addEventListener("keydown", (ev) => {
+      ev.stopPropagation(); // Esc and shortcuts stay with the field
+      if (ev.key === "Enter") finish(true);
+      else if (ev.key === "Escape") finish(false);
+    });
+    input.addEventListener("blur", () => finish(true));
   }
 
   private strokeOver(p: Province) {
@@ -412,6 +529,12 @@ export class ProvinceTool {
     const t = e.target as HTMLElement;
     const act = t.closest<HTMLElement>("[data-act]")?.dataset.act;
     const mode = t.closest<HTMLElement>("[data-mode]")?.dataset.mode as Mode | undefined;
+    const by = t.closest<HTMLElement>("[data-pick]")?.dataset.pick as PickBy | undefined;
+    if (by) {
+      this.pickBy = by;
+      this.refresh();
+      return;
+    }
     const rm = t.closest<HTMLElement>("[data-rm]");
     if (mode && mode !== this.mode) {
       this.mode = mode;
@@ -500,13 +623,19 @@ export class ProvinceTool {
         .map((p, k) => `<span class="pt-chip" title="${esc(p.name)} · ${esc(world.nations[p.nationIndex].name)}">${flag(p.nationIndex)}<span>${esc(p.name)}</span><button type="button" data-rm="${k}" title="Deselect" aria-label="Deselect ${esc(p.name)}">✕</button></span>`)
         .join("");
       body = `
-        <p class="pt-hint">${this.picking ? "Click a realm on the map to hand the provinces to." : "Click provinces to select them, or drag across many. Double-click takes a whole realm. Right-drag or Shift+drag moves the map."}</p>
+        <div class="pt-pickby">
+          <span class="pt-label">Click picks</span>
+          <div class="picker segmented pt-mode">${(["province", "realm", "region"] as PickBy[])
+            .map((b) => `<button type="button" class="pick ${b === this.pickBy ? "active" : ""}" data-pick="${b}" title="${PICK_HINT[b]}"><span class="pick-label">${b[0].toUpperCase() + b.slice(1)}</span></button>`)
+            .join("")}</div>
+        </div>
+        <p class="pt-hint">${this.picking ? "Click a realm on the map to hand the provinces to." : `${PICK_HINT[this.pickBy]} Double-click a province to rename it. Right-drag or Shift+drag moves the map.`}</p>
         <div class="pt-sel-head">
           <span><strong>${sel.length}</strong> province${sel.length === 1 ? "" : "s"}${area ? ` · ${km2(area)}` : ""}</span>
           <button type="button" class="btn-ghost pd-mini" data-act="clear" ${none}>Clear</button>
         </div>
         ${sel.length ? `<div class="pt-chips">${chips}${sel.length > MAX_CHIPS ? `<span class="pt-more">+${sel.length - MAX_CHIPS} more</span>` : ""}</div>` : ""}
-        ${owners.size ? `<div class="pt-owners">From ${[...owners].map(([o, n]) => `${flag(o)} ${esc(world.nations[o].name)} (${n})`).join(" · ")}</div>` : ""}
+        ${owners.size ? `<div class="pt-owners">From ${[...owners].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([o, n]) => `${flag(o)} ${esc(world.nations[o].name)} (${n})`).join(" · ")}${owners.size > 6 ? ` and ${owners.size - 6} more` : ""}</div>` : ""}
         <div class="pt-section">
           <div class="pt-label">Form a new realm</div>
           <div class="pt-row">

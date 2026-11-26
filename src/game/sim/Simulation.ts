@@ -17,18 +17,37 @@ import { HistoryRecorder, type HistoryFrame, type SavedHistory } from "./History
 import { captureWorld, packSnapshot, restoreWorld, unpackSnapshot, type PackedSnapshot } from "../EditHistory";
 import { crownRulers, foundHouse, installCadet, reignYear, rulerStyle, succeed, usurp } from "./Rulers";
 import { conquestMask } from "./conquest";
+import { lifeApplies, WorldLife, type LifeCheckpoint, type WorldMark } from "./worldLife";
 import { frontSamples, landNear, type LinePoint, type LineSample } from "./frontLine";
 
 export interface SavedSim {
   history: SavedHistory;
   battles: Battle[];
   events: SimEvent[];
+  marks?: WorldMark[]; // plagues, famines and migrations still on the map (0.3+)
 }
 
 export interface SimEvent {
   year: number;
   text: string;
-  kind: "war" | "peace" | "conquest" | "civil" | "vassal" | "independence" | "fall" | "annex" | "battle" | "ruler" | EconEventKind;
+  kind:
+    | "war"
+    | "peace"
+    | "conquest"
+    | "civil"
+    | "vassal"
+    | "independence"
+    | "fall"
+    | "annex"
+    | "battle"
+    | "ruler"
+    | "plague"
+    | "famine"
+    | "migration"
+    | "wonder"
+    | "learning"
+    | "rename"
+    | EconEventKind;
   x: number;
   y: number;
 }
@@ -90,6 +109,7 @@ interface Checkpoint {
   gainedAt: Int32Array; // run-length [value, count]
   gainedBy: Int32Array;
   econ: EconCheckpoint;
+  life: LifeCheckpoint;
 }
 
 // A timeline set aside by branching, to switch back to
@@ -219,6 +239,7 @@ export class Simulation {
   // Rows touched since the UI last read them, and whether provinces changed
   public dirty = { y0: Infinity, y1: -1, provinces: false };
   public econ = new EconomySim(); // settlement growth, ruin, founding and trade (economySim.ts)
+  public life = new WorldLife(); // plague, famine, migrations, wonders and learning (worldLife.ts, 0.3+)
   private po: Int16Array = new Int16Array(0); // province -> owning nation
   private calmUntil = new Map<string, number>(); // nation name -> year a new civil war may start
   private world: WorldData;
@@ -288,6 +309,7 @@ export class Simulation {
       gainedAt: rleNum(this.gainedAt),
       gainedBy: rleNum(this.gainedBy),
       econ: this.econ.checkpoint(w),
+      life: this.life.checkpoint(),
     };
     this.checkpoints.push(cp);
     // Thin out old checkpoints rather than grow without bound
@@ -324,6 +346,7 @@ export class Simulation {
     unrleInto(cp.gainedAt, this.gainedAt);
     unrleInto(cp.gainedBy, this.gainedBy);
     this.econ.rollback(cp.econ);
+    this.life.rollback(cp.life);
     this.history.truncate(cp.frames);
     this.ops.length = cp.ops;
     this.checkpoints = this.checkpoints.filter((c) => c.frames <= cp.frames && c.ops <= cp.ops);
@@ -420,7 +443,7 @@ export class Simulation {
   }
 
   public save(): SavedSim {
-    return { history: this.history.serialize(this.world.nations), battles: this.battles, events: this.events };
+    return { history: this.history.serialize(this.world.nations), battles: this.battles, events: this.events, marks: this.life.marks.length ? this.life.marks : undefined };
   }
 
   // Picks up a saved chronicle; the world must be the one it was saved with
@@ -428,6 +451,7 @@ export class Simulation {
     this.history.restore(saved.history, this.world.nations);
     this.battles = saved.battles;
     this.events = saved.events;
+    this.life.restoreMarks(saved.marks);
     this.needsSync = true;
   }
 
@@ -591,6 +615,17 @@ export class Simulation {
           (0.7 + cohesion[i] * 0.4) *
           (1 + Math.min(0.6, wealth[i] / 4000))) /
         (1 + 0.3 * Math.max(0, wars[i] - 1));
+    }
+    // 0.3+: plague and famine weaken, knowledge and wonders strengthen
+    if (lifeApplies(w)) {
+      const wonders = new Int32Array(n);
+      for (const p of w.pois) {
+        if (p.kind !== "wonder") continue;
+        const y = Math.max(0, Math.min(this.H - 1, Math.floor(p.y)));
+        const o = this.owner[y * this.W + ((((Math.floor(p.x) % this.W) + this.W) % this.W))];
+        if (o >= 0 && o < n) wonders[o]++;
+      }
+      for (let i = 0; i < n; i++) strength[i] *= this.life.strengthFactor(w, i, wonders[i], this.year);
     }
     // Vassals lend their overlord a share of their strength
     w.nations.forEach((nt, i) => {
@@ -909,6 +944,28 @@ export class Simulation {
     }
 
     if (this.econ.step(w, this.year, rand, (k, t, x, y) => this.log(k, t, x, y))) this.needsSync = true;
+    // 0.3+: plague, famine, migrations, wonders, learning and renamed towns
+    if (lifeApplies(w)) {
+      const atWar = new Uint8Array(w.nations.length);
+      for (const war of this.wars.values()) {
+        if (war.a < atWar.length) atWar[war.a] = 1;
+        if (war.b < atWar.length) atWar[war.b] = 1;
+      }
+      const lived = this.life.step({
+        world: w,
+        year: this.year,
+        rand,
+        log: (k, t, x, y) => this.log(k, t, x, y),
+        land: this.land,
+        owner: this.owner,
+        culture: this.culture,
+        border: w.nations.length === n ? border : new Int32Array(0),
+        atWar: (i) => atWar[i] === 1,
+        heldSince: (c) => this.econ.heldSince(c),
+        strike: (c, pop) => this.econ.strike(c, pop, w.nations[c.nationIndex], (k, t, x, y) => this.log(k, t, x, y)),
+      });
+      if (lived) changed = true;
+    }
     return this.finish(changed);
   }
 

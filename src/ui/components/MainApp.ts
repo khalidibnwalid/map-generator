@@ -308,6 +308,7 @@ export default function renderMainApp() {
               <div class="group-title">Political</div>
               ${toggle("layer-nations", "Nations", true)}
               ${toggle("layer-borders", "Borders", true)}
+              ${toggle("layer-handdrawn", "Hand-drawn borders", false, "inked by hand, wobbly and uneven")}
               ${toggle("layer-provinces", "Provinces", true)}
               ${toggle("layer-flags", "Flags", true, "above nation names")}
               ${toggle("layer-flagmap", "Nations as flags", false, "fill each realm with its flag")}
@@ -339,6 +340,12 @@ export default function renderMainApp() {
               </div>
               ${toggle("layer-night", "Night", false, "moonlight & city lights")}
               ${toggle("layer-weather", "Clouds", false, "drifting weather systems")}
+              <div class="climate-field">
+                <div class="climate-head"><span>Climate</span><span id="climate-label" class="season-month">Today</span></div>
+                <input type="range" id="climate" min="-1" max="1" step="0.05" value="0" aria-label="Climate" title="Colder: glaciers creep down and the ice caps grow; warmer: snowlines rise and the caps shrink" />
+                <div class="climate-ends"><span>Ice age</span><span>Warm</span></div>
+              </div>
+              ${toggle("climate-drift", "Climate drifts with history", false, "cold and warm spells over the centuries")}
             </div>
             <div class="group">
               <div class="group-title">Data overlays</div>
@@ -500,6 +507,7 @@ export default function renderMainApp() {
                 { value: "war", label: "Wars" },
                 { value: "realm", label: "Realms" },
                 { value: "ruler", label: "Rulers" },
+                { value: "world", label: "World" },
               ],
               "all",
             )}

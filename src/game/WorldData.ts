@@ -157,6 +157,7 @@ export interface Nation {
   dynasty?: string; // ruling house (see sim/Rulers.ts)
   ruler?: Ruler;
   regnal?: Record<string, number>; // how many rulers of this realm bore each name
+  knowledge?: number; // learning gathered by its libraries and universities, shared with neighbors (0.3+ history)
   coalitions?: number[]; // ids of the coalitions it belongs to (see coalitions.ts)
 }
 
@@ -231,6 +232,7 @@ export interface City {
   baseWealth?: number; // the part from resources, harbor and river; trade is added on top
   wealthTier?: number; // index into WEALTH_TIERS
   resources?: string[]; // notable resource kinds nearby
+  formerName?: string; // the name it bore before conquerors renamed it (0.3+ history)
 }
 
 export interface Culture {

@@ -129,6 +129,10 @@ export class PosterDialog {
               <div class="field" id="pd-expansion">
                 <div class="field-label">Realm</div>
                 <div id="pd-exp-nation"></div>
+                ${seg("view", [
+                  { value: "growth", label: "Growth" },
+                  { value: "decline", label: "Decline" },
+                ])}
                 <div class="pd-exp-years">
                   <span class="pd-exp-num-label">Up to year</span>
                   <input type="number" id="pd-exp-end" step="1" data-stepper />
@@ -248,6 +252,7 @@ export class PosterDialog {
         }
         else if (key === "split") chooseSplit(this.host.getWorld(), this.host.simulation?.() ?? null, this.expansion, v);
         else if (key === "palette") this.expansion.palette = v as PaletteKind;
+        else if (key === "view") this.expansion.view = v as "growth" | "decline";
         else if (key === "size") this.size = Number(v);
         else if (key === "format") this.format = v as Format;
         this.sync();
@@ -383,6 +388,7 @@ export class PosterDialog {
         .querySelectorAll<HTMLElement>(`.pd-seg[data-key="${key}"] .pick`)
         .forEach((b) => b.classList.toggle("active", b.dataset.value === value));
     mark("scope", this.scope);
+    mark("view", this.expansion.view);
     mark("layers", this.layers);
     const sim = this.host.simulation?.() ?? null;
     // The realm comes from the dialog's selection, else the Nations tab's; picking one selects it here too

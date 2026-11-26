@@ -6,10 +6,12 @@
 // 0.2  coalitions, merging realms and independence, more flag emblems, mosques for zawiyas,
 //      and realms/provinces no longer follow from the seed alone (each world
 //      rolls its own politics seed, which links and files carry)
+// 0.3  history brings plague, famine and migrations, wonders, libraries and
+//      universities that spread knowledge, and (rarely) conquerors renaming towns
 
-export const APP_VERSION = "0.2";
+export const APP_VERSION = "0.3";
 export const LEGACY_VERSION = "0.1";
-export const KNOWN_VERSIONS = ["0.1", "0.2"] as const;
+export const KNOWN_VERSIONS = ["0.1", "0.2", "0.3"] as const;
 
 // "0.1" -> [0, 1]; unknown parts read as 0
 const parts = (v: string) => v.split(".").map((p) => Number.parseInt(p, 10) || 0);

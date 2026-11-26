@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { MapGenerator, type Preset } from "../src/game/MapGenerator";
 import { fingerprint } from "./fingerprint";
+import { APP_VERSION } from "../src/game/version";
 
 // The app's core promise: the same seed always gives the same world, and a
 // .world file (seed + edits) reopens to exactly what was saved. These golden
@@ -50,7 +51,7 @@ describe("seeded generation", () => {
     await g.generate();
     const first = g.politicsSeed;
     await g.generate();
-    expect(g.version).toBe("0.2");
+    expect(g.version).toBe(APP_VERSION);
     expect(g.politicsSeed).not.toBe(first);
   });
 });

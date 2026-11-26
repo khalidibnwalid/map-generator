@@ -43,7 +43,7 @@ import { FlagMapRenderer } from "./FlagMapRenderer";
 import { drawProvinceLabels, hatchAutonomous, provinceColors, shadowOutside, styledLayers } from "./ProvincePoster";
 import { ImportDialog, paintGuide } from "./ImportDialog";
 import { FactSheet } from "./FactSheet";
-import { copiesInView, drawAttackLine, drawBattles, drawFronts } from "./WarRenderer";
+import { copiesInView, drawAttackLine, drawBattles, drawFronts, drawWorldMarks } from "./WarRenderer";
 import { frontSamples, lineLength, lineTarget, simplifyLine, type LinePoint } from "../game/sim/frontLine";
 import { exportHistoryGif } from "./GifExport";
 import { installSimBarDrag } from "./SimBar";
@@ -78,6 +78,12 @@ const EVENT_GROUP: Record<SimEvent["kind"], string> = {
   ruin: "realm",
   founding: "realm",
   ruler: "ruler",
+  plague: "world",
+  famine: "world",
+  migration: "world",
+  wonder: "world",
+  learning: "world",
+  rename: "world",
 };
 
 export type ViewLayer =
@@ -88,6 +94,17 @@ export type ViewLayer =
   | "Moisture"
   | "Nations"
   | "Borders";
+
+// Cold and warm spells over the centuries: slow swings of a few hundred
+// years with shorter ones over them, the same for a given world
+function climateSpell(year: number, seed: number): number {
+  const p = (seed % 997) / 997;
+  return 0.45 * Math.sin(((year / 260 + p) * Math.PI * 2)) + 0.2 * Math.sin(((year / 83 + p * 3.1) * Math.PI * 2));
+}
+
+function climateWord(c: number): string {
+  return c <= -0.75 ? "Ice age" : c <= -0.35 ? "Cold" : c <= -0.1 ? "Cool" : c < 0.1 ? "Today" : c < 0.35 ? "Mild" : c < 0.75 ? "Warm" : "Hot";
+}
 
 function hexRgb(hex: string): [number, number, number] {
   const v = parseInt(hex.slice(1), 16);
@@ -128,6 +145,7 @@ export class Interface {
     labels: true,
     flags: true,
     flagmap: false, // nations filled with their flags
+    handdrawn: false, // borders inked by hand
     cities: true,
     season: false,
     night: false,
@@ -149,6 +167,15 @@ export class Interface {
   private peaceConferences = false; // a war's end pauses history and opens the province tool on it
   private resumeAfterPeace = false; // history was playing when a conference opened
   private peaceRealm: Nation | null = null; // only this realm's wars open a conference
+  private climateBase = 0; // the Climate slider, -1 ice age .. +1 warm
+  private climateDrift = false; // cold and warm spells follow the years of history
+
+  // The climate drawn now: the slider, plus the spell of the shown year when drifting
+  private climateNow(): number {
+    if (!this.climateDrift) return this.climateBase;
+    const year = this.replay?.year ?? this.sim?.year ?? this.generator.getWorld().year ?? 0;
+    return Math.max(-1, Math.min(1, this.climateBase + climateSpell(year, this.generator.getWorld().seed)));
+  }
   private sim: Simulation | null = null;
   private simTimer = 0;
   private simSpeed = 2;
@@ -1130,6 +1157,7 @@ export class Interface {
       "labels",
       "flags",
       "flagmap",
+      "handdrawn",
       "season",
       "night",
       "weather",
@@ -1146,6 +1174,21 @@ export class Interface {
           this.canvasManager.scheduleRender();
         });
       }
+    });
+
+    // --- Climate: glaciers, snowlines and ice caps (and optionally a drift through history) ---
+    const climate = document.getElementById("climate") as HTMLInputElement | null;
+    const climateLabel = document.getElementById("climate-label");
+    const syncClimate = () => {
+      const base = Number(climate?.value) || 0;
+      this.climateBase = base;
+      if (climateLabel) climateLabel.textContent = climateWord(this.climateNow());
+      this.canvasManager.scheduleRender();
+    };
+    climate?.addEventListener("input", syncClimate);
+    document.getElementById("climate-drift")?.addEventListener("change", (e) => {
+      this.climateDrift = (e.target as HTMLInputElement).checked;
+      syncClimate();
     });
 
     // --- Seasons: month slider (moving it turns seasons on) ---
@@ -1629,8 +1672,14 @@ export class Interface {
       ec.clearDirty();
       this.canvasManager.scheduleRender();
     }
+    // A migration carried its people's culture over new land
+    if (this.sim.life.culturesChanged) {
+      this.sim.life.culturesChanged = false;
+      this.thematicFocus = -2;
+      if (this.activeTab === "cultures") this.culturesManager.renderList();
+    }
     // Offensive arrows and battle markers change every year
-    if (changed || this.activeLayers.wars) this.canvasManager.scheduleRender();
+    if (changed || this.activeLayers.wars || this.sim.life.marks.length) this.canvasManager.scheduleRender();
   }
 
   // --- Command a battle ---
@@ -1964,6 +2013,10 @@ export class Interface {
       barPlay.innerHTML = playing
         ? `<svg viewBox="0 0 24 24" width="18" height="18"><path d="M7 4h3.5v16H7zM13.5 4H17v16h-3.5z" fill="currentColor"/></svg>`
         : `<svg viewBox="0 0 24 24" width="18" height="18"><path d="M7 4.5v15l12-7.5z" fill="currentColor"/></svg>`;
+    }
+    if (this.climateDrift) {
+      const cl = document.getElementById("climate-label");
+      if (cl) cl.textContent = climateWord(this.climateNow());
     }
     const bar = document.getElementById("sim-bar");
     // Shown once history has started, and on the History tab to start it
@@ -2493,6 +2546,8 @@ export class Interface {
       if (!replay) drawFronts(ctx, sim.warFronts(), sim.offensives, world.width, width, scale, offsetX, offsetY);
       else drawBattles(ctx, sim.battles, replay.year, world.width, width, height, scale, offsetX, offsetY);
     }
+    // Plague, famine and migrations of the last years (0.3+ history)
+    if (sim && !replay && sim.life.marks.length) drawWorldMarks(ctx, sim.life.marks, sim.year, world.width, width, scale, offsetX, offsetY, THEMES[this.theme].font);
     // An attack line being drawn (dashed), or just launched (solid, fading)
     const wl = this.warLine;
     const army = this.warAttacker ? world.nations.indexOf(this.warAttacker) : -1;
@@ -2670,6 +2725,7 @@ export class Interface {
     // With no realm under the mouse, an index no realm has still shows the bloc
     const hoverIndex = lifted < 0 && pick?.members.length ? 1e6 : lifted;
     this.gpuRenderer.season = this.seasonMonth / 12;
+    this.gpuRenderer.climate = this.climateNow();
     this.gpuRenderer.time = (performance.now() - this.weatherStart) / 1000;
     this.refreshConquest(world);
     this.gpuRenderer.render(

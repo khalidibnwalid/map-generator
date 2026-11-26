@@ -46,7 +46,7 @@ export class PoiRenderer {
           ctx.rotate(p.angle);
           this.footprint(ctx, p, 1 / ppm, theme);
         }
-        const isMajor = p.kind === "castle" || p.kind === "fort" || p.kind === "port" || p.kind === "volcano";
+        const isMajor = p.kind === "castle" || p.kind === "fort" || p.kind === "port" || p.kind === "volcano" || p.kind === "wonder" || p.kind === "university";
         const iconA = (p.kind === "volcano" ? 1 - Math.max(0, Math.min(1, (ppm - 0.002) / 0.002)) : iconBase) * (isMajor ? major : minor);
         if (iconA > 0.02) {
           ctx.globalAlpha = iconA * 0.9;
@@ -157,6 +157,39 @@ export class PoiRenderer {
         shape.lineTo(0.8, -2.8);
         shape.lineTo(2, -4);
         shape.lineTo(7, 5);
+        shape.closePath();
+        break;
+      case "wonder":
+        // A stepped monument under a star
+        shape.rect(-7, 2.5, 14, 2.5);
+        shape.rect(-5, 0, 10, 2.5);
+        shape.rect(-3, -2.5, 6, 2.5);
+        shape.moveTo(0, -9.5);
+        for (let k = 1; k <= 10; k++) {
+          const a = -Math.PI / 2 + (k * Math.PI) / 5;
+          const r = k % 2 ? 1.4 : 3.4;
+          shape.lineTo(Math.cos(a) * r, -6.1 + Math.sin(a) * r);
+        }
+        shape.closePath();
+        break;
+      case "university":
+        // Pediment over columns
+        shape.moveTo(-6.5, -2);
+        shape.lineTo(0, -6.5);
+        shape.lineTo(6.5, -2);
+        shape.closePath();
+        for (const x of [-5.5, -2.5, 0.5, 3.5]) shape.rect(x, -1, 2, 4.5);
+        shape.rect(-6.5, 3.8, 13, 1.6);
+        break;
+      case "library":
+        // An open book
+        shape.moveTo(0, -2.5);
+        shape.quadraticCurveTo(-3.5, -5, -7, -3.5);
+        shape.lineTo(-7, 3.5);
+        shape.quadraticCurveTo(-3.5, 2, 0, 4.5);
+        shape.quadraticCurveTo(3.5, 2, 7, 3.5);
+        shape.lineTo(7, -3.5);
+        shape.quadraticCurveTo(3.5, -5, 0, -2.5);
         shape.closePath();
         break;
       case "port": {
@@ -346,6 +379,27 @@ export class PoiRenderer {
         }
         break;
       }
+      case "wonder":
+        // A great walled precinct with a monument at its heart
+        ctx.fillStyle = "rgba(226,214,180,0.9)";
+        ctx.fillRect(-60, -60, 120, 120);
+        rect(0, 0, 70, 70, stone);
+        rect(0, 0, 44, 44, stone);
+        rect(0, 0, 20, 20, "#d8b25a");
+        break;
+      case "university":
+        // Halls around a green quadrangle
+        ctx.fillStyle = "#9fb486";
+        ctx.fillRect(-20, -20, 40, 40);
+        rect(0, -26, 52, 10, roof);
+        rect(0, 26, 52, 10, roof);
+        rect(-26, 0, 10, 42, roof);
+        rect(26, 0, 10, 42, roof);
+        break;
+      case "library":
+        rect(0, 0, 34, 22, stone);
+        rect(0, 0, 18, 10, roof);
+        break;
       case "monastery":
         ctx.fillStyle = "rgba(220,210,180,0.85)";
         ctx.fillRect(-26, -22, 52, 44);

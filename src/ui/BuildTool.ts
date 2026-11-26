@@ -19,7 +19,7 @@ const SETTLEMENTS: { kind: SettlementTool; label: string; size: number }[] = [
   { kind: "city", label: "City", size: 2 },
 ];
 
-const LANDMARKS: PoiKind[] = ["castle", "fort", "watchtower", "ruins", "inn", "bridge", "dam", "mine", "monastery", "port", "volcano"];
+const LANDMARKS: PoiKind[] = ["castle", "fort", "watchtower", "ruins", "inn", "bridge", "dam", "mine", "monastery", "port", "volcano", "wonder", "university", "library"];
 
 // Simple pictograms for the palette
 const GLYPH: Record<string, string> = {
@@ -38,6 +38,12 @@ const GLYPH: Record<string, string> = {
   monastery: `<path d="M6 20v-7a6 6 0 0 1 12 0v7zM12 3v3" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="3" r="1.2" fill="currentColor"/>`,
   port: `<path d="M12 4v15M7 13c0 4 2.5 6 5 6s5-2 5-6M9 7h6" fill="none" stroke="currentColor" stroke-width="2"/>`,
   volcano: `<path d="M3 20l6-10h6l6 10zM10 6l1 3M14 6l-1 3M12 3v4" fill="none" stroke="currentColor" stroke-width="1.8"/>`,
+  // Stepped monument under a star
+  wonder: `<path d="M4 20h16v-3H4zM6.5 17h11v-3h-11zM9 14h6v-3H9z" fill="currentColor"/><path d="M12 2.5l1.1 2.3 2.5.3-1.8 1.7.5 2.5L12 8l-2.3 1.3.5-2.5-1.8-1.7 2.5-.3z" fill="currentColor"/>`,
+  // Pediment over columns
+  university: `<path d="M3 9l9-5 9 5z" fill="currentColor"/><path d="M5.5 10.5v7M10 10.5v7M14 10.5v7M18.5 10.5v7" stroke="currentColor" stroke-width="2"/><path d="M3 20h18" stroke="currentColor" stroke-width="2"/>`,
+  // An open book
+  library: `<path d="M12 7c-2.5-2-5.5-2.2-8-1.2v12c2.5-1 5.5-.8 8 1.2 2.5-2 5.5-2.2 8-1.2v-12c-2.5-1-5.5-.8-8 1.2zM12 7v12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>`,
 };
 const glyph = (k: string) => `<svg viewBox="0 0 24 24" width="18" height="18">${GLYPH[k] ?? ""}</svg>`;
 
@@ -120,6 +126,19 @@ export class BuildTool {
       const kind = t as PoiKind;
       const lang = world.languages[cultureNear(world, x, y) ?? 0];
       const word = lang ? lang.word() : "Old";
+      // Seats of learning and wonders take the name of the town they stand by
+      let near = "";
+      let nd = 6;
+      for (const c of world.cities) {
+        let dx = Math.abs(c.x - x);
+        if (dx > world.width / 2) dx = world.width - dx;
+        const d = Math.hypot(dx, c.y - y);
+        if (d < nd) {
+          nd = d;
+          near = c.name;
+        }
+      }
+      const place = near || word;
       const names: Partial<Record<PoiKind, string>> = {
         fort: `${word} Gate`,
         inn: `${word} Inn`,
@@ -128,6 +147,9 @@ export class BuildTool {
         monastery: `Mosque of ${word}`,
         volcano: `Mount ${word}`,
         port: `Port of ${word}`,
+        wonder: `${["Grand Temple", "Colossus", "Hanging Gardens", "Observatory", "Golden Dome"][Math.floor(Math.random() * 5)]} of ${place}`,
+        university: `University of ${place}`,
+        library: `Library of ${place}`,
       };
       const poi: Poi = {
         kind,
@@ -136,6 +158,8 @@ export class BuildTool {
         angle: 0,
         name: names[kind] ?? `${word} ${POI_LABELS[kind]}`,
         nationIndex: cell.nationIndex ?? -1,
+        // Built in the current year of history (the tooltip says when)
+        ...((kind === "wonder" || kind === "university" || kind === "library") && world.year > 0 ? { year: world.year } : {}),
       };
       world.pois.push(poi);
       world.poisEdited = true;

@@ -358,3 +358,41 @@ test("smart periods follow the waves of conquest and cut in the quiet years", ()
   for (let y = 1; y <= 100; y++) steady.set(y, 2);
   expect(smartPeriods(steady, 0, 100).length).toBeGreaterThanOrEqual(2);
 });
+
+test("decline: the land still held is the core, every lost cell sits in the period it was lost", async () => {
+  const g = new MapGenerator(400, 225, 8080);
+  g.currentPreset = "Earthlike";
+  g.pin("0.1");
+  const world = await g.generate();
+  const sim = new Simulation(world, g.getNoise());
+  for (let i = 0; i < 120; i++) sim.step();
+  // The realm that lost the most land it once held
+  let best = -1;
+  let most = -1;
+  for (let i = 0; i < world.nations.length; i++) {
+    const e = expansionOf(world, sim, i);
+    if (e && e.counts.lost > most) {
+      most = e.counts.lost;
+      best = i;
+    }
+  }
+  const d = expansionOf(world, sim, best, { view: "decline", split: { kind: "smart" } })!;
+  expect(d.view).toBe("decline");
+  let core = 0;
+  for (let i = 0; i < d.cls.length; i++) {
+    const c = d.cls[i];
+    if (c === CORE) core++;
+    expect(c).not.toBe(LOST);
+    if (c >= 1) {
+      const p = d.periods[c - 1];
+      const y = d.lostAt[i] >= 0 ? d.lostAt[i] : d.endYear;
+      // In its period, or the nearest one when it fell in a gap
+      if (y >= d.periods[0].from && y <= d.periods[d.periods.length - 1].to) {
+        expect(y).toBeGreaterThanOrEqual(p.from);
+        expect(y).toBeLessThanOrEqual(p.to);
+      }
+    }
+  }
+  expect(core).toBe(d.counts.core);
+  expect(d.counts.core + d.periods.reduce((s, p) => s + p.cells, 0)).toBe(d.counts.everHeld);
+}, 300_000);

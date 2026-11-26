@@ -92,6 +92,7 @@ export interface Expansion {
   name: string;
   color: string;
   palette: Palette;
+  view: "growth" | "decline"; // in decline, CORE is the land still held and the periods are losses
   startYear: number; // the realm's first recorded year: its founding, or the start of the record
   founded: boolean; // it came into being after the record began (startYear is its founding)
   endYear: number;
@@ -116,6 +117,9 @@ export interface ExpansionOptions {
   live?: boolean;
   maxBattles?: number; // markers kept (default 14)
   palette?: Palette; // default: the realm's own hue
+  // growth: land by the period it was won; decline: land by the period it
+  // was lost, around what the realm still holds
+  view?: "growth" | "decline";
 }
 
 // What the classification needs from the simulation
@@ -534,11 +538,23 @@ export function expansionOf(world: WorldData, sim: ExpansionSource, nation: numb
 
   // --- Classes ---
   const cls = new Int8Array(N).fill(NONE);
-  const gains = new Map<number, number>();
+  const gains = new Map<number, number>(); // decline: losses
   const counts = { core: 0, lost: 0, everHeld: 0, atEnd: 0 };
+  const decline = opts.view === "decline";
+  // The year land held for a time was lost for good (lost since the last
+  // recorded year: the end)
+  const lossYear = (i: number) => (lostAt[i] >= 0 ? lostAt[i] : endYear);
   for (let i = 0; i < N; i++) {
     if (firstHeld[i] < 0) continue;
     counts.everHeld++;
+    if (decline) {
+      if (heldAtEnd(i)) {
+        cls[i] = CORE;
+        counts.core++;
+        counts.atEnd++;
+      } else gains.set(lossYear(i), (gains.get(lossYear(i)) ?? 0) + 1);
+      continue;
+    }
     if (!heldAtEnd(i)) {
       cls[i] = LOST;
       counts.lost++;
@@ -573,8 +589,9 @@ export function expansionOf(world: WorldData, sim: ExpansionSource, nation: numb
     periods = periods.slice(a, b);
   }
   for (let i = 0; i < N; i++) {
-    if (cls[i] !== NONE || firstHeld[i] < 0 || !heldAtEnd(i)) continue;
-    cls[i] = periodIndex(periods, firstHeld[i]) + 1;
+    if (cls[i] !== NONE || firstHeld[i] < 0) continue;
+    if (decline) cls[i] = periodIndex(periods, lossYear(i)) + 1;
+    else if (heldAtEnd(i)) cls[i] = periodIndex(periods, firstHeld[i]) + 1;
   }
 
   // --- Greatest extent and the vassals' land (a second, cheap replay) ---
@@ -671,6 +688,7 @@ export function expansionOf(world: WorldData, sim: ExpansionSource, nation: numb
     name: n.name,
     color: n.color,
     palette: opts.palette ?? { kind: "realm" },
+    view: decline ? "decline" : "growth",
     startYear,
     founded,
     endYear: endYearOf,
@@ -881,7 +899,7 @@ function liveStamp(world: WorldData, nation: number): string {
 
 export function cachedExpansion(world: WorldData, sim: ExpansionSource, nation: number, opts: ExpansionOptions): Expansion | null {
   const frames = sim.history.frames;
-  const key = [nation, world.nations[nation]?.name, frames.length, frames[frames.length - 1]?.year, sim.battles.length, opts.endYear, opts.maxBattles, opts.live, JSON.stringify(opts.split ?? null), JSON.stringify(opts.palette ?? null), liveStamp(world, nation)].join("|");
+  const key = [nation, world.nations[nation]?.name, frames.length, frames[frames.length - 1]?.year, sim.battles.length, opts.endYear, opts.maxBattles, opts.live, opts.view, JSON.stringify(opts.split ?? null), JSON.stringify(opts.palette ?? null), liveStamp(world, nation)].join("|");
   if (cache && cache.key === key && cache.world === world && cache.frames === frames) return cache.exp;
   const exp = expansionOf(world, sim, nation, opts);
   cache = { key, world, frames, exp };
@@ -889,6 +907,11 @@ export function cachedExpansion(world: WorldData, sim: ExpansionSource, nation: 
 }
 
 export function expansionDefaults(exp: Expansion): { title: string; subtitle: string } {
+  if (exp.view === "decline")
+    return {
+      title: `The Decline of ${exp.name}`,
+      subtitle: `From ${compact(exp.peak.cells * CELL_KM2)} km² at its height in ${exp.peak.year} to ${compact(exp.counts.core * CELL_KM2)} km² in ${exp.endYear}`,
+    };
   return {
     title: `The Expansion of ${exp.name}`,
     subtitle: `Years ${exp.startYear}–${exp.endYear} · at its height ${compact(exp.peak.cells * CELL_KM2)} km² in ${exp.peak.year}`,
@@ -964,6 +987,7 @@ export interface ExpansionChoice {
   every: number; // years per period
   bands: number; // number of color bands
   palette: PaletteKind;
+  view: "growth" | "decline";
   from: string; // custom palette: the core's color ("" = the realm's)
   to: string; // custom palette: the newest period's color
 }
@@ -975,6 +999,7 @@ export const defaultExpansionChoice = (): ExpansionChoice => ({
   every: DEFAULT_YEARS_PER_PERIOD,
   bands: DEFAULT_BANDS,
   palette: "smart",
+  view: "growth",
   from: "",
   to: "#f6e27a",
 });
@@ -1009,7 +1034,7 @@ function autoSplit(c: ExpansionChoice): Split {
 
 function optionsOf(world: WorldData, c: ExpansionChoice): ExpansionOptions {
   const cu = customOf(world, c.nation);
-  return { endYear: c.endYear || undefined, split: cu?.active ? { kind: "custom", bounds: cu.bounds } : autoSplit(c), palette: paletteOf(world, c) };
+  return { endYear: c.endYear || undefined, split: cu?.active ? { kind: "custom", bounds: cu.bounds } : autoSplit(c), palette: paletteOf(world, c), view: c.view };
 }
 
 // The periods an automatic split shows now, as editable rows
@@ -1281,12 +1306,19 @@ function syncColorControls(root: HTMLElement, world: WorldData, c: ExpansionChoi
   ramp.innerHTML = colors
     .map((col, k) => {
       const p = k ? exp.periods[k - 1] : null;
-      const tip = p ? `${k} · ${p.name ? p.name + " · " : ""}${yearsText(p)}` : exp.founded ? `Founded ${exp.startYear}` : `Realm in ${exp.startYear}`;
+      const tip = p
+        ? `${k} · ${p.name ? p.name + " · " : ""}${exp.view === "decline" ? "lost " : ""}${yearsText(p)}`
+        : exp.view === "decline"
+          ? `Still held in ${exp.endYear}`
+          : exp.founded
+            ? `Founded ${exp.startYear}`
+            : `Realm in ${exp.startYear}`;
       return `<span class="pd-exp-step" style="background:${hex(col)};color:${lightness(col) < 0.62 ? "#fffaf0" : "#1e160e"}" title="${esc(tip)}">${k || "●"}</span>`;
     })
     .join("");
   const picked = c.palette === "smart" ? ` Smart picked ${({ realm: "the realm's hue", spectrum: "a spectrum", distinct: "distinct hues" } as Record<string, string>)[smartPalette(exp.periods.length)]} for ${exp.periods.length} period${exp.periods.length === 1 ? "" : "s"}.` : "";
-  if (note) note.textContent = colors.length > 1 ? `Oldest (● the land it started with) to newest.${picked} Custom periods can each take their own colour.` : "";
+  const core = exp.view === "decline" ? "● the land it still holds, then its losses" : "● the land it started with";
+  if (note) note.textContent = colors.length > 1 ? `Oldest (${core}) to newest.${picked} Custom periods can each take their own colour.` : "";
 }
 
 // "Split by" and its inputs: the active mode, the numbers, the notes, and
@@ -1327,7 +1359,7 @@ function syncSplitControls(root: HTMLElement, world: WorldData, sim: ExpansionSo
   note.textContent = "";
   if (mode !== "custom") {
     const n = cachedExpansion(world, sim, c.nation, optionsOf(world, c))?.periods.length ?? 0;
-    if (n) note.textContent = `${n} period${n === 1 ? "" : "s"}${mode === "smart" ? ", one per wave of conquest" : ""}`;
+    if (n) note.textContent = `${n} period${n === 1 ? "" : "s"}${mode === "smart" ? `, one per wave of ${c.view === "decline" ? "losses" : "conquest"}` : ""}`;
   }
   const host = q("#pd-exp-custom");
   host.style.display = mode === "custom" ? "" : "none";
@@ -1440,18 +1472,23 @@ export function expansionLegend(exp: Expansion, theme: MapTheme): LegendSection[
   const shades = periodColors(exp);
   const area = (cells: number) => `${compact(cells * CELL_KM2)} km²`;
   // Oldest first; periods numbered as on the map
+  const decline = exp.view === "decline";
   const growth: LegendRow[] = [
-    { label: exp.founded ? `Founded ${exp.startYear}` : `Realm in ${exp.startYear}`, value: area(exp.counts.core), color: onMap(shades[0], theme) },
+    {
+      label: decline ? `Still held in ${exp.endYear}` : exp.founded ? `Founded ${exp.startYear}` : `Realm in ${exp.startYear}`,
+      value: area(exp.counts.core),
+      color: onMap(shades[0], theme),
+    },
   ];
   exp.periods.forEach((p, k) =>
     growth.push(
       p.name
         ? { label: `${k + 1} · ${p.name}`, value: `${yearsText(p)} · ${area(p.cells)}`, color: onMap(shades[k + 1], theme) }
-        : { label: `${k + 1} · ${yearsText(p)}`, value: area(p.cells), color: onMap(shades[k + 1], theme) },
+        : { label: `${k + 1} · ${decline ? "Lost " : ""}${yearsText(p)}`, value: area(p.cells), color: onMap(shades[k + 1], theme) },
     ),
   );
   if (exp.counts.lost) growth.push({ label: "Held for a time, lost", value: area(exp.counts.lost), swatch: hatchSwatch(onMap(LOST_FILL, theme), hex(LOST_HATCH)) });
-  const sections: LegendSection[] = [{ title: `Growth of ${exp.name}`, rows: growth, more: 0, dots: false }];
+  const sections: LegendSection[] = [{ title: `${decline ? "Decline" : "Growth"} of ${exp.name}`, rows: growth, more: 0, dots: false }];
   if (exp.vassals.length) {
     const edge = hex(expansionShades(exp.color, 2)[1]);
     sections.push({

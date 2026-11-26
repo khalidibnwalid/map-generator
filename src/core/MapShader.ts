@@ -44,6 +44,8 @@ uniform bool u_showPopulation;
 uniform bool u_showMoisture;
 uniform bool u_showNations;
 uniform bool u_showBorders;
+uniform bool u_handDrawn;       // borders inked by hand: wobbly, uneven, sketched twice
+uniform float u_climate;        // -1 ice age .. 0 as generated .. +1 warm: ice, snowlines and glaciers follow
 uniform bool u_showProvinces;
 uniform int u_theme;            // 0 realistic, 1 historical, 2 atlas
 uniform int u_thematic;         // 0 none, 1 cultures, 2 religions, 3 diplomacy
@@ -1004,11 +1006,20 @@ void main() {
           // Peak snow shrinks a little in summer when seasons are on (ss = 0 otherwise)
           // Satellite: snow holds on flatter and north-facing ground
           float hold = u_sat ? (gN.z - 0.85) * 0.12 - gN.y * 0.04 : 0.0;
-          float snowBlend = smoothstep(0.85, 0.9, elevation + hold + (detail - 0.5) * 0.2 - max(0.0, -ss.x) * ss.w * 0.03);
+          float snowBlend = smoothstep(0.85, 0.9, elevation + hold + (detail - 0.5) * 0.2 - max(0.0, -ss.x) * ss.w * 0.03 - u_climate * 0.05);
           color = mix(color, vec3(0.9, 0.9, 0.95), snowBlend);
         }
       } else {
         color = mix(color, color * (0.9 + 0.2 * detail), 0.4);
+      }
+      // A colder climate: glaciers creep down from the peaks and spread over
+      // the coldest land, streaked with crevasses (none at today's climate)
+      if (u_climate < -0.01) {
+        float cold = -u_climate;
+        float reach = elevation - (0.86 - 0.2 * cold) + (0.32 - qt) * 0.7 * cold + (detail - 0.5) * 0.06;
+        float g = smoothstep(0.0, 0.04, reach) * cold;
+        vec3 glacier = vec3(0.85, 0.91, 0.96) * (0.93 + 0.07 * fbm(vec2(wxwy.x * 3.0, wxwy.y * 0.7)));
+        color = mix(color, glacier * mix(1.0, shade, 0.6), clamp(g * 1.6, 0.0, 0.9));
       }
 
       // Meter-scale ground texture when zoomed in
@@ -1104,7 +1115,7 @@ void main() {
   if (u_seasonOn && !u_showElevation) {
     // This month's temperature: winter cools high latitudes most, and the
     // snow line sits lower on mountains
-    float tEff = qt - 0.2 * ss.x * ss.w - max(0.0, elevation - 0.65) * 0.4 + (detail - 0.5) * 0.06;
+    float tEff = qt - 0.2 * ss.x * ss.w - max(0.0, elevation - 0.65) * 0.4 + (detail - 0.5) * 0.06 + u_climate * 0.06;
     float snow = smoothstep(0.32, 0.25, tEff) * max(landMask, isletMask);
     if (snow > 0.0) {
       if (u_theme == 1) color = mix(color, vec3(0.97, 0.96, 0.93), snow * 0.45);
@@ -1123,8 +1134,9 @@ void main() {
     if (u_sat) wob += (fbm(wxwy * 0.09 + 9.0) - 0.5) * 0.10 + (fbm(wxwy * 0.4) - 0.5) * 0.03;
     // Seasons: pack ice spreads toward the equator in winter, retreats in summer
     float iceShift = ss.x * ss.w;
-    float seaEdge = 0.875 + wob - 0.05 * iceShift;
-    float landEdge = 0.80 + wob - max(0.0, elevation - 0.6) * 0.5 - 0.025 * iceShift;
+    // Climate: colder pushes the caps toward the equator, warmer shrinks them
+    float seaEdge = 0.875 + wob - 0.05 * iceShift + u_climate * 0.07;
+    float landEdge = 0.80 + wob - max(0.0, elevation - 0.6) * 0.5 - 0.025 * iceShift + u_climate * 0.09;
     float px2lat = 2.0 / (u_worldSize.y * u_scale) * 1.5; // ~1.5 px soft edge
     if (!isLand) {
       float pack = smoothstep(seaEdge - 0.004 - px2lat, seaEdge + 0.004 + px2lat, lat);
@@ -1364,9 +1376,22 @@ void main() {
     vec4 n01 = fetchW(u_nationIdxTex, ixy + ivec2(0, 1));
     vec4 n11 = fetchW(u_nationIdxTex, ixy + ivec2(1, 1));
     float thickness = 1.2 * field_per_pixel * zoomVisibility;
-    natBorderStrength = getBorderStrength(n00, n10, n01, n11, noisy_fxy, thickness, aa);
+    vec2 bfxy = noisy_fxy;
+    float sketch = 0.0;
+    if (u_handDrawn) {
+      // The pen wanders off the true line and presses harder or lighter as it goes
+      vec2 wander = vec2(fbm(wxwy * 0.7 + 1.7), fbm(wxwy * 0.7 + 5.1)) - 0.5;
+      bfxy = clamp(fxy + warp_f * 1.8 + warp_d * 2.5 + wander * 0.16, 0.0, 1.0);
+      thickness *= 0.55 + 1.15 * fbm(wxwy * 0.3 + 7.3);
+      // A second, lighter stroke a little off the first, as in a sketch
+      vec2 off = (vec2(fbm(wxwy * 0.45 + 2.2), fbm(wxwy * 0.45 + 8.8)) - 0.5) * 0.22;
+      sketch = getBorderStrength(n00, n10, n01, n11, clamp(bfxy + off, 0.0, 1.0), thickness * 0.45, aa) * 0.5;
+    }
+    natBorderStrength = getBorderStrength(n00, n10, n01, n11, bfxy, thickness, aa);
+    if (u_handDrawn) natBorderStrength = max(natBorderStrength, sketch);
     if (natBorderStrength > 0.01) {
       vec3 bc = u_theme == 1 ? vec3(0.55, 0.12, 0.10) : (u_theme == 2 ? vec3(0.25) : vec3(1.0));
+      if (u_handDrawn) bc = u_theme == 0 && !u_sat ? vec3(0.12, 0.08, 0.05) : vec3(0.2, 0.13, 0.08); // iron-gall ink
       if (u_flagMap && u_thematic == 0) bc = vec3(0.08); // dark lines read on any flag
       float landPart = natBorderStrength * 0.8 * landMask;
       // Maritime limits only for the hovered nation, thin and dashed
@@ -1377,7 +1402,8 @@ void main() {
         float dash = step(0.45, fract((sc.x + sc.y) / (9.0 * u_pixelRatio)));
         seaPart = getBorderStrength(n00, n10, n01, n11, noisy_fxy, thickness * 0.45, aa) * 0.45 * dash * own * (1.0 - landMask);
       }
-      if (u_theme == 1) landPart *= step(0.3, fract((wxwy.x - wxwy.y) * (vScale / 7.0)));
+      if (u_handDrawn) landPart *= 0.8 + 0.2 * smoothstep(0.3, 0.6, fbm(wxwy * 3.1)); // the ink runs thin in places
+      else if (u_theme == 1) landPart *= step(0.3, fract((wxwy.x - wxwy.y) * (vScale / 7.0)));
       color = mix(color, bc, landPart + seaPart);
     }
   }

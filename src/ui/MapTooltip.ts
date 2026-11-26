@@ -112,6 +112,7 @@ function describeCity(world: WorldData, city: City): TooltipContent {
   const owner = world.nations[city.nationIndex];
   const kind = city.isCapital ? "♦ Capital" : city.size === 2 ? "● City" : city.size === 1 ? "● Town" : "· Village";
   lines.push(`${kind}${owner ? ` of ${owner.name}` : ""}`);
+  if (city.formerName) lines.push(`Formerly ${city.formerName}`);
   lines.push(`Population ${city.population.toLocaleString()}`);
   lines.push(`Area ~${(Math.PI * (city.radiusM / 1000) ** 2).toFixed(1)} km²${city.isPort ? " · Port" : ""}`);
   lines.push("Wealth: " + WEALTH_TIERS[city.wealthTier ?? 2]);
@@ -159,7 +160,8 @@ export function describePoint(world: WorldData, fx: number, fy: number, o: Point
     const poi = nearestPoi(world, fx, fy, 9 / o.scale);
     if (poi) {
       const owner = world.nations[poi.nationIndex];
-      return { title: poi.name, text: `${POI_LABELS[poi.kind]}${owner ? ` · ${owner.name}` : ""}` };
+      const built = poi.year !== undefined ? `\n${poi.kind === "wonder" ? "Raised" : "Founded"} in year ${poi.year}` : "";
+      return { title: poi.name, text: `${POI_LABELS[poi.kind]}${owner ? ` · ${owner.name}` : ""}${built}` };
     }
   }
   // A nearby settlement takes priority over the land around it
@@ -194,6 +196,9 @@ export function describePoint(world: WorldData, fx: number, fy: number, o: Point
       lines.push(`${rulerStyle(nation)}${nation.dynasty ? ` · House of ${nation.dynasty}` : ""}`);
       lines.push(`Age ${world.year - r.born} · ${reign < 1 ? "newly crowned" : `${reign} year${reign === 1 ? "" : "s"} on the throne`}`);
     }
+    // Learning gathered by its libraries and universities, and shared by neighbors (0.3+ history)
+    const k = nation.knowledge ?? 0;
+    if (k >= 0.5) lines.push(`Knowledge ${k < 10 ? k.toFixed(1) : Math.round(k)} · armies +${Math.round(Math.min(35, (k / 250) * 100))}%`);
     const prov = world.provinces[cell.provinceIndex ?? -1];
     // "Autonomous region: Vel Harrow (2,350 km²)"; ordinary ones read "Province: ..."
     if (prov) lines.push(`${provinceTypeInfo(prov).label}: ${prov.name}${prov.area ? ` (${prov.area.toLocaleString()} km²)` : ""}`);

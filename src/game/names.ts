@@ -232,6 +232,15 @@ export class Language {
     return this.cap(w + this.pick(this.family.townSuffixes)).replace(/(.)\1\1/g, "$1$1");
   }
 
+  // A town name drawn from the caller's random stream (history renaming a
+  // conquered town), leaving the language's own stream untouched
+  public townNameWith(rand: () => number): string {
+    const pick = <T,>(a: T[]) => a[Math.floor(rand() * a.length)];
+    let w = pick(this.onsets);
+    if (rand() < 0.5) w += pick(this.family.middles);
+    return this.cap(this.cap(w) + pick(this.family.townSuffixes)).replace(/(.)\1\1/g, "$1$1");
+  }
+
   public nationName(): string {
     return this.cap(this.word() + this.pick(this.family.nationSuffixes));
   }

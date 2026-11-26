@@ -17,7 +17,10 @@ export type PoiKind =
   | "mine"
   | "monastery" // 0.1 worlds only
   | "port"
-  | "volcano";
+  | "volcano"
+  | "wonder" // built by a realm during history (0.3+)
+  | "university"
+  | "library";
 
 export interface Poi {
   kind: PoiKind;
@@ -26,6 +29,7 @@ export interface Poi {
   angle: number; // orientation (road / river direction)
   name: string;
   nationIndex: number;
+  year?: number; // built in this year of history
 }
 
 export const POI_LABELS: Record<PoiKind, string> = {
@@ -40,6 +44,9 @@ export const POI_LABELS: Record<PoiKind, string> = {
   monastery: "Mosque",
   port: "Port",
   volcano: "Volcano",
+  wonder: "Wonder",
+  university: "University",
+  library: "Library",
 };
 
 // Small features scattered across the world: castles on hills, ruins, inns

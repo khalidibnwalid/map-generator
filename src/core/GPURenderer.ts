@@ -41,6 +41,7 @@ export interface RenderLayers {
   fillMin?: number; // least opacity of the realm fill (posters that are about the realms)
   provinceFill?: boolean; // realm fill colors are per province (see paintNationColors)
   conquest?: boolean; // recently conquered land in a lighter shade (see updateConquestTexture)
+  handdrawn?: boolean; // borders inked by hand
 }
 
 type Rect = { x: number; y: number; w: number; h: number };
@@ -61,6 +62,7 @@ export class GPURenderer {
   private thematicStripeTexture: WebGLTexture | null = null;
   public thematicStripes = false;
   public thematicStrength = 0.55; // how strongly a thematic fill covers the map
+  public climate = 0; // -1 ice age .. +1 warm (see u_climate)
   // The overlay layer (slot 2): drawn as dots with colored outlines, or as
   // stripes while it only highlights a hovered culture or race
   public thematic2: ThematicMode = "none";
@@ -661,6 +663,8 @@ export class GPURenderer {
     gl.uniform1i(this.u("u_showMoisture"), layers.moisture ? 1 : 0);
     gl.uniform1i(this.u("u_showNations"), layers.nations ? 1 : 0);
     gl.uniform1i(this.u("u_showBorders"), layers.borders ? 1 : 0);
+    gl.uniform1i(this.u("u_handDrawn"), layers.handdrawn ? 1 : 0);
+    gl.uniform1f(this.u("u_climate"), this.climate);
     gl.uniform1i(this.u("u_showProvinces"), layers.provinces ? 1 : 0);
     gl.uniform1i(this.u("u_theme"), THEME_INDEX[theme]);
     gl.uniform1i(this.u("u_thematic"), this.thematicTexture ? THEMATIC_INDEX[thematic] : 0);

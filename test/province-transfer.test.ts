@@ -51,3 +51,15 @@ test("provinces form a new realm, or pass to another, with their land and cities
   expect(w.nations.length).toBe(before);
   expect(w.nations[back.nation].name).toBe(ownerName);
 }, 120_000);
+
+test("a natural region stops at rivers, ridges and the sea", async () => {
+  const { naturalRegion } = await import("../src/ui/ProvinceTool");
+  const w = await world();
+  const start = w.provinces.find((p) => w.nations[p.nationIndex])!;
+  const region = naturalRegion(w, start);
+  expect(region).toContain(start);
+  // A region never reaches every province of a world with rivers and mountains
+  expect(region.length).toBeLessThan(w.provinces.length);
+  // A region is a few provinces, not a continent
+  expect(region.length).toBeLessThan(40);
+}, 120_000);

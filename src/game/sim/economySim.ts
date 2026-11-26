@@ -141,6 +141,21 @@ export class EconomySim {
     return ruins.length > 0 || founded;
   }
 
+  // Year the settlement last changed hands (-99: never since history began)
+  public heldSince(c: City): number {
+    return this.state.get(c)?.since ?? -99;
+  }
+
+  // Plague or famine: the settlement drops to `pop` at once
+  public strike(c: City, pop: number, owner: Nation | undefined, log: Log) {
+    let st = this.state.get(c);
+    if (!st) {
+      st = { owner, since: -99, pop0: c.population, promoteAt: Math.max(c.size === 0 ? TOWN_AT : CITY_AT, c.population * 1.25), drawnR: c.radiusM, milestone: MILESTONES.filter((m) => c.population >= m).length };
+      this.state.set(c, st);
+    }
+    this.setPopulation(c, st, Math.max(50, Math.round(pop)), log);
+  }
+
   private setPopulation(c: City, st: CityState, pop: number, log: Log) {
     const before = c.population;
     c.population = pop;

@@ -1,4 +1,5 @@
 import type { Battle, FrontLine, Offensive } from "../game/sim/Simulation";
+import type { WorldMark } from "../game/sim/worldLife";
 
 // Wars overlay: dashed frontiers of active wars, this year's offensive
 // arrows and crossed-swords markers for recent battles that fade with age.
@@ -235,4 +236,144 @@ export function drawAttackLine(
     }
   }
   ctx.restore();
+}
+
+// Plague, famine and migrations on the map (0.3+ history): a calamity is a
+// dashed ring over the land it struck with its sign, fading over the years;
+// a migration is its route in its people's color, an arrow at its head
+// (dashed while under way).
+const MARK_FADE = 12;
+const PLAGUE = "#5f7d2e";
+const FAMINE = "#b07a1e";
+export function drawWorldMarks(
+  ctx: CanvasRenderingContext2D,
+  marks: WorldMark[],
+  year: number,
+  worldW: number,
+  width: number,
+  scale: number,
+  offX: number,
+  offY: number,
+  font: string,
+) {
+  ctx.save();
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  for (const m of marks) {
+    const age = Math.max(0, year - m.year);
+    const alpha = m.active ? 1 : Math.max(0, 1 - age / MARK_FADE);
+    if (alpha <= 0.02) continue;
+    ctx.globalAlpha = alpha;
+    if (m.kind === "migration" && m.path && m.path.length > 1) {
+      let minX = Infinity;
+      let maxX = -Infinity;
+      for (const p of m.path) {
+        minX = Math.min(minX, p.x);
+        maxX = Math.max(maxX, p.x);
+      }
+      const color = m.color ?? "#c9a24a";
+      const lw = Math.max(2.5, Math.min(6, scale * 0.8));
+      for (const k of copiesInView(minX, maxX, worldW, scale, offX, width)) {
+        const ox = offX + k * worldW * scale;
+        const pts = m.path.map((p) => [p.x * scale + ox, p.y * scale + offY]);
+        const path = new Path2D();
+        path.moveTo(pts[0][0], pts[0][1]);
+        for (let i = 1; i < pts.length - 1; i++) {
+          const mx = (pts[i][0] + pts[i + 1][0]) / 2;
+          const my = (pts[i][1] + pts[i + 1][1]) / 2;
+          path.quadraticCurveTo(pts[i][0], pts[i][1], mx, my);
+        }
+        const [hx, hy] = pts[pts.length - 1];
+        path.lineTo(hx, hy);
+        ctx.setLineDash([]);
+        ctx.strokeStyle = INK;
+        ctx.lineWidth = lw + 3;
+        ctx.stroke(path);
+        ctx.setLineDash(m.active ? [lw * 2.2, lw * 1.4] : []);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lw;
+        ctx.stroke(path);
+        ctx.setLineDash([]);
+        // Arrowhead along the last stretch
+        const [px, py] = pts[Math.max(0, pts.length - 3)];
+        const a = Math.atan2(hy - py, hx - px);
+        const head = Math.max(10, lw * 3);
+        ctx.beginPath();
+        ctx.moveTo(hx + Math.cos(a) * head * 0.6, hy + Math.sin(a) * head * 0.6);
+        ctx.lineTo(hx + Math.cos(a + 2.5) * head, hy + Math.sin(a + 2.5) * head);
+        ctx.lineTo(hx + Math.cos(a - 2.5) * head, hy + Math.sin(a - 2.5) * head);
+        ctx.closePath();
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = INK;
+        ctx.stroke();
+        label(ctx, m.name, hx, hy - head - 4, font);
+      }
+      continue;
+    }
+    const color = m.kind === "plague" ? PLAGUE : FAMINE;
+    for (const k of copiesInView(m.x - m.r, m.x + m.r, worldW, scale, offX, width)) {
+      const sx = (m.x + k * worldW) * scale + offX;
+      const sy = m.y * scale + offY;
+      const r = Math.max(16, m.r * scale);
+      ctx.beginPath();
+      ctx.arc(sx, sy, r, 0, Math.PI * 2);
+      ctx.fillStyle = m.kind === "plague" ? "rgba(95,125,46,0.13)" : "rgba(176,122,30,0.13)";
+      ctx.fill();
+      ctx.setLineDash([6, 5]);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = color;
+      ctx.stroke();
+      ctx.setLineDash([]);
+      sign(ctx, m.kind, sx, sy, color);
+      if (scale > 1.6) label(ctx, `${m.name} · ${m.year}`, sx, sy - 19, font);
+    }
+  }
+  ctx.restore();
+}
+
+// The sign of a calamity in a disc: pox marks for plague, an ear of grain for famine
+function sign(ctx: CanvasRenderingContext2D, kind: "plague" | "famine" | "migration", x: number, y: number, color: string) {
+  ctx.beginPath();
+  ctx.arc(x, y, 10, 0, Math.PI * 2);
+  ctx.fillStyle = "#f6ecd2";
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = color;
+  ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.strokeStyle = color;
+  if (kind === "plague") {
+    for (const [dx, dy, r] of [[-3.2, -2.5, 2.2], [3, -1.8, 1.8], [0, 3.2, 2.4], [-3.5, 3.5, 1.1], [3.8, 3.8, 1.2]]) {
+      ctx.beginPath();
+      ctx.arc(x + dx, y + dy, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else {
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    ctx.moveTo(x, y + 7);
+    ctx.lineTo(x, y - 6);
+    ctx.stroke();
+    for (let k = 0; k < 3; k++) {
+      const gy = y - 4 + k * 3.4;
+      for (const s of [-1, 1]) {
+        ctx.beginPath();
+        ctx.ellipse(x + s * 2.4, gy, 2.1, 1.1, s * -0.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+}
+
+function label(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, font: string) {
+  ctx.font = `italic 600 12px ${font}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.lineWidth = 3.5;
+  ctx.strokeStyle = "rgba(246, 236, 214, 0.9)";
+  ctx.strokeText(text, x, y);
+  ctx.fillStyle = "#2a1d12";
+  ctx.fillText(text, x, y);
 }
